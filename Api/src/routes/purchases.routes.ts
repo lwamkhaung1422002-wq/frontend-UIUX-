@@ -44,6 +44,12 @@ const paymentInput = z.object({
   notes: z.string().trim().optional(),
   paidAt: z.coerce.date().optional(),
 });
+const returnInput = z.object({
+  purchaseReceiptId: z.string().min(1),
+  quantity: z.coerce.number().int().positive(),
+  reason: z.string().trim().min(1),
+  returnedAt: z.coerce.date().optional(),
+});
 
 function badRequest(message: string) {
   const error = new Error(message);
@@ -60,6 +66,7 @@ const purchaseInclude = {
   items: { include: { product: true, variant: true } },
   receipts: true,
   payments: true,
+  returns: true,
 } as const;
 
 purchasesRouter.get("/:shopId/suppliers", async (request, response, next) => {
@@ -229,6 +236,39 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/payments", async (request, 
       } });
       const paidAmount = purchase.paidAmount + input.amount;
       return tx.purchase.update({ where: { id: purchase.id }, data: { paidAmount, paymentStatus: paidAmount === purchase.total ? "paid" : "partial" }, include: purchaseInclude });
+    });
+    response.status(201).json({ purchase: updated });
+  } catch (error) { next(error); }
+});
+
+purchasesRouter.post("/:shopId/purchases/:purchaseId/returns", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request);
+    const { shopId } = params.parse(request.params);
+    const input = returnInput.parse(request.body);
+    await assertUserOwnsShop(auth.id, shopId);
+    const purchase = await prisma.purchase.findFirst({ where: { id: request.params.purchaseId, shopId } });
+    if (!purchase) throw notFound("Purchase not found.");
+    const receipt = await prisma.purchaseReceipt.findFirst({
+      where: { id: input.purchaseReceiptId, purchaseId: purchase.id },
+      include: { purchaseItem: true, inventoryBatch: true },
+    });
+    if (!receipt) throw notFound("Purchase receipt not found.");
+    const alreadyReturned = await prisma.purchaseReturn.aggregate({ where: { inventoryBatchId: receipt.inventoryBatchId }, _sum: { quantity: true } });
+    if (input.quantity > receipt.quantity - Number(alreadyReturned._sum.quantity || 0)) throw badRequest("Return quantity exceeds the received quantity.");
+    if (receipt.inventoryBatch.quantity - input.quantity < receipt.inventoryBatch.reservedQuantity) throw badRequest("Returned stock is reserved by customer orders.");
+    const amount = input.quantity * receipt.purchaseItem.unitCost;
+    if (purchase.total - amount < purchase.paidAmount) throw badRequest("Refund or void supplier payments before returning these items.");
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.inventoryBatch.update({ where: { id: receipt.inventoryBatchId }, data: { quantity: { decrement: input.quantity } } });
+      await tx.purchaseItem.update({ where: { id: receipt.purchaseItemId }, data: { receivedQuantity: { decrement: input.quantity } } });
+      await tx.purchaseReturn.create({ data: {
+        purchaseId: purchase.id, purchaseItemId: receipt.purchaseItemId, inventoryBatchId: receipt.inventoryBatchId,
+        quantity: input.quantity, amount, reason: input.reason,
+        ...(input.returnedAt ? { returnedAt: input.returnedAt } : {}),
+      } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "purchase.return", entity: "Purchase", entityId: purchase.id, metadata: { quantity: input.quantity, amount, reason: input.reason } });
+      return tx.purchase.update({ where: { id: purchase.id }, data: { total: { decrement: amount }, status: "partially_returned" }, include: purchaseInclude });
     });
     response.status(201).json({ purchase: updated });
   } catch (error) { next(error); }

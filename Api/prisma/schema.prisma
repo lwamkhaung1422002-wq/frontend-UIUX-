@@ -56,6 +56,12 @@ model ShopSetting {
   option1Values      String   @default("[\"Standard\"]")
   option2Values      String   @default("[\"General\"]")
   paymentMethods     String   @default("[{\"id\":\"cod\",\"name\":\"COD\",\"type\":\"cod\",\"active\":true,\"sortOrder\":0},{\"id\":\"cash\",\"name\":\"Cash\",\"type\":\"normal\",\"active\":true,\"sortOrder\":1},{\"id\":\"kbz-pay\",\"name\":\"KBZ Pay\",\"type\":\"normal\",\"active\":true,\"sortOrder\":2}]")
+  lowStockDefault    Int      @default(5)
+  currencyCode       String   @default("MMK")
+  dateFormat         String   @default("yyyy-MM-dd")
+  receiptFooter      String   @default("Thank you for shopping with us.")
+  notifyLowStock     Boolean  @default(true)
+  notifyPayments     Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   shop               Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
@@ -160,6 +166,7 @@ model InventoryBatch {
   adjustments      StockAdjustment[]
   allocations      OrderItemAllocation[]
   purchaseReceipts PurchaseReceipt[]
+  purchaseReturns  PurchaseReturn[]
 
   @@index([shopId])
   @@index([productId])
@@ -206,6 +213,7 @@ model Purchase {
   items          PurchaseItem[]
   receipts       PurchaseReceipt[]
   payments       PurchasePayment[]
+  returns        PurchaseReturn[]
 
   @@unique([shopId, purchaseNumber])
   @@index([shopId])
@@ -227,6 +235,7 @@ model PurchaseItem {
   product          Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant          ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: SetNull)
   receipts         PurchaseReceipt[]
+  returns          PurchaseReturn[]
 
   @@index([purchaseId])
   @@index([productId])
@@ -259,6 +268,24 @@ model PurchasePayment {
   purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
 
   @@index([purchaseId])
+}
+
+model PurchaseReturn {
+  id               String         @id @default(cuid())
+  purchaseId       String
+  purchaseItemId   String
+  inventoryBatchId String
+  quantity         Int
+  amount           Int
+  reason           String
+  returnedAt       DateTime       @default(now())
+  createdAt        DateTime       @default(now())
+  purchase         Purchase       @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  purchaseItem     PurchaseItem   @relation(fields: [purchaseItemId], references: [id], onDelete: Restrict)
+  inventoryBatch   InventoryBatch @relation(fields: [inventoryBatchId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId])
+  @@index([purchaseItemId])
 }
 
 model StockAdjustment {

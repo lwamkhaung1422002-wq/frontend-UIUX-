@@ -33,6 +33,12 @@ const catalogSettingsSchema = z.object({
     )
     .max(50)
     .optional(),
+  lowStockDefault: z.coerce.number().int().min(0).max(100000).optional(),
+  currencyCode: z.enum(["MMK", "USD", "THB"]).optional(),
+  dateFormat: z.enum(["yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy"]).optional(),
+  receiptFooter: z.string().trim().max(300).optional(),
+  notifyLowStock: z.boolean().optional(),
+  notifyPayments: z.boolean().optional(),
 });
 
 const defaultPaymentMethods = [
@@ -146,6 +152,12 @@ shopSettingsRouter.patch("/:shopId/settings", async (request, response, next) =>
         ...(input.option1Values !== undefined ? { option1Values: JSON.stringify(uniqueValues(input.option1Values)) } : {}),
         ...(input.option2Values !== undefined ? { option2Values: JSON.stringify(uniqueValues(input.option2Values)) } : {}),
         ...(input.paymentMethods !== undefined ? { paymentMethods: JSON.stringify(normalizePaymentMethods(input.paymentMethods)) } : {}),
+        ...(input.lowStockDefault !== undefined ? { lowStockDefault: input.lowStockDefault } : {}),
+        ...(input.currencyCode !== undefined ? { currencyCode: input.currencyCode } : {}),
+        ...(input.dateFormat !== undefined ? { dateFormat: input.dateFormat } : {}),
+        ...(input.receiptFooter !== undefined ? { receiptFooter: input.receiptFooter } : {}),
+        ...(input.notifyLowStock !== undefined ? { notifyLowStock: input.notifyLowStock } : {}),
+        ...(input.notifyPayments !== undefined ? { notifyPayments: input.notifyPayments } : {}),
       },
     });
 
