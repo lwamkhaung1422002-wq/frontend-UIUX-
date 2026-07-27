@@ -19,6 +19,8 @@ const OrderPage = lazy(routeLoaders.order)
 const AppSettingsPage = lazy(routeLoaders.settings)
 const ProductsPage = lazy(routeLoaders.products)
 const CustomersPage = lazy(routeLoaders.customers)
+const SuppliersPage = lazy(routeLoaders.suppliers)
+const PurchasesPage = lazy(routeLoaders.purchases)
 const LoginPage = lazy(() => import('./pages/LoginPage.jsx'))
 
 const pages = {
@@ -31,6 +33,8 @@ const pages = {
   settings: AppSettingsPage,
   products: ProductsPage,
   customers: CustomersPage,
+  suppliers: SuppliersPage,
+  purchases: PurchasesPage,
 }
 
 const theme = createTheme({

@@ -43,6 +43,8 @@ import NotificationsNoneRoundedIcon from '@mui/icons-material/NotificationsNoneR
 import StoreRoundedIcon from '@mui/icons-material/StoreRounded'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import PeopleAltRoundedIcon from '@mui/icons-material/PeopleAltRounded'
+import LocalShippingRoundedIcon from '@mui/icons-material/LocalShippingRounded'
+import ShoppingCartCheckoutRoundedIcon from '@mui/icons-material/ShoppingCartCheckoutRounded'
 import { preloadRoute } from '../routes.js'
 
 const drawerWidth = 248
@@ -55,6 +57,8 @@ const navItems = [
   { key: 'stock', label: 'Inventory', icon: <Inventory2RoundedIcon /> },
   { key: 'finance', label: 'Finance', icon: <AccountBalanceWalletRoundedIcon /> },
   { key: 'customers', label: 'Customers', icon: <PeopleAltRoundedIcon /> },
+  { key: 'purchases', label: 'Purchases', icon: <ShoppingCartCheckoutRoundedIcon /> },
+  { key: 'suppliers', label: 'Suppliers', icon: <LocalShippingRoundedIcon /> },
   { key: 'balance', label: 'Reports', icon: <TrendingUpRoundedIcon /> },
   { key: 'settings', label: 'Settings', icon: <SettingsRoundedIcon /> },
 ]

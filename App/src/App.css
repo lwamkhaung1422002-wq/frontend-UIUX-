@@ -560,6 +560,30 @@
   padding-top: 12px !important;
 }
 
+.purchase-line,
+.purchase-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e2e8e5;
+}
+
+.purchase-line span {
+  display: grid;
+}
+
+.purchase-line small {
+  color: #66736d;
+}
+
+.purchase-summary {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  border-bottom: 0;
+}
+
 .negative {
   color: #dc2626;
   font-weight: 700;

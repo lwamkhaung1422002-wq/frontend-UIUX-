@@ -102,6 +102,20 @@ export const api = {
   customers: (shopId) => apiRequest(`/shops/${shopId}/customers`),
   createCustomer: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/customers`, { method: 'POST', body: payload }),
+  suppliers: (shopId) => apiRequest(`/shops/${shopId}/suppliers`),
+  createSupplier: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/suppliers`, { method: 'POST', body: payload }),
+  updateSupplier: (shopId, supplierId, payload) =>
+    apiRequest(`/shops/${shopId}/suppliers/${supplierId}`, { method: 'PATCH', body: payload }),
+  purchases: (shopId) => apiRequest(`/shops/${shopId}/purchases`),
+  createPurchase: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/purchases`, { method: 'POST', body: payload }),
+  sendPurchase: (shopId, purchaseId) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/send`, { method: 'POST', body: {} }),
+  receivePurchase: (shopId, purchaseId, payload) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/receive`, { method: 'POST', body: payload }),
+  payPurchase: (shopId, purchaseId, payload) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/payments`, { method: 'POST', body: payload }),
   orders: (shopId) => apiRequest(`/shops/${shopId}/orders`),
   createOrder: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/orders`, { method: 'POST', body: payload }),

@@ -26,6 +26,8 @@ export const emptyData = {
   products: [],
   categories: [],
   customers: [],
+  suppliers: [],
+  purchases: [],
   dashboard: null,
 }
 
@@ -215,6 +217,8 @@ async function loadUserData(uid) {
     dashboardResult,
     customersResult,
     settingsResult,
+    suppliersResult,
+    purchasesResult,
   ] = await Promise.all([
     api.categories(shopId),
     api.products(shopId),
@@ -226,6 +230,8 @@ async function loadUserData(uid) {
     api.dashboard(shopId).catch(() => ({ summary: null })),
     api.customers(shopId).catch(() => ({ customers: [] })),
     api.shopSettings(shopId).catch(() => ({ settings: normalizeCatalogSettings() })),
+    api.suppliers(shopId).catch(() => ({ suppliers: [] })),
+    api.purchases(shopId).catch(() => ({ purchases: [] })),
   ])
 
   const payments = (paymentsResult.payments || []).map(mapPayment)
@@ -270,6 +276,8 @@ async function loadUserData(uid) {
     categories: categoriesResult.categories || [],
     customers: customersResult.customers || [],
     dashboard: dashboardResult.summary || dashboardResult,
+    suppliers: suppliersResult.suppliers || [],
+    purchases: purchasesResult.purchases || [],
   }
 }
 
@@ -400,6 +408,17 @@ export async function createProductDocument(uid, product) {
 export async function createCustomerDocument(uid, customer) {
   return api.createCustomer(shopIdFrom(uid), customer)
 }
+
+export const createSupplierDocument = (uid, supplier) =>
+  api.createSupplier(shopIdFrom(uid), supplier)
+export const createPurchaseDocument = (uid, purchase) =>
+  api.createPurchase(shopIdFrom(uid), purchase)
+export const sendPurchaseDocument = (uid, purchaseId) =>
+  api.sendPurchase(shopIdFrom(uid), purchaseId)
+export const receivePurchaseDocument = (uid, purchaseId, receipt) =>
+  api.receivePurchase(shopIdFrom(uid), purchaseId, receipt)
+export const payPurchaseDocument = (uid, purchaseId, payment) =>
+  api.payPurchase(shopIdFrom(uid), purchaseId, payment)
 
 export async function updateProductDocument(uid, productId, product) {
   return api.updateProduct(shopIdFrom(uid), productId, {

@@ -8,6 +8,8 @@ export const routeLoaders = {
   settings: () => import('./pages/AppSettingsPage.jsx'),
   products: () => import('./pages/ProductsPage.jsx'),
   customers: () => import('./pages/CustomersPage.jsx'),
+  suppliers: () => import('./pages/SuppliersPage.jsx'),
+  purchases: () => import('./pages/PurchasesPage.jsx'),
 }
 
 const preloadCache = new Map()
