@@ -258,7 +258,7 @@ export default function AppLayout({
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,.55)' }}>Signed in as</Typography>
             <Typography variant="body2" noWrap sx={{ color: '#fff', mb: 1 }}>{userEmail || 'Preview user'}</Typography>
             <Button color="inherit" size="small" startIcon={<LogoutRoundedIcon />} onClick={preview ? onGetStarted : onLogout}>
-              {preview ? 'Get started' : 'Log out'}
+              {preview ? 'Create account' : 'Log out'}
             </Button>
           </Box>
         </Drawer>

@@ -24,7 +24,7 @@ async function createSimpleProduct(page, productName) {
 }
 
 async function assertSimpleProductFlow(page, productName) {
-  await page.getByText('Stock', { exact: true }).click()
+  await page.getByText('Inventory', { exact: true }).click()
   await page.getByRole('button', { name: /add stock/i }).click()
 
   const stockDialog = page.getByRole('dialog', { name: /add stock/i })
@@ -41,7 +41,7 @@ async function assertSimpleProductFlow(page, productName) {
   await page.getByRole('button', { name: /save stock/i }).click()
   await expect(page.getByText(productName).first()).toBeVisible({ timeout: 10000 })
 
-  await page.getByText('Order', { exact: true }).click()
+  await page.getByText('Point of Sale', { exact: true }).click()
   await expect(page.getByText(productName).first()).toBeVisible({ timeout: 10000 })
   const orderSnapshot = await page.locator('.section-card').filter({ hasText: 'Add products' }).ariaSnapshot()
   const orderWithoutProduct = orderSnapshot.replaceAll(productName, '')
@@ -54,7 +54,7 @@ async function assertSimpleProductFlow(page, productName) {
   await page.getByRole('textbox', { name: /phone/i }).fill('091234567')
   await page.getByRole('button', { name: /create order/i }).click()
   await expect(page.getByText(/Orders/i).first()).toBeVisible({ timeout: 15000 })
-  await page.getByText('Stock', { exact: true }).click()
+  await page.getByText('Inventory', { exact: true }).click()
   await expect(page.getByText(productName).first()).toBeVisible({ timeout: 10000 })
   await expect(page.getByText('4').first()).toBeVisible({ timeout: 10000 })
 }
@@ -90,7 +90,7 @@ async function createNestedProduct(page, productName) {
 }
 
 async function assertNestedProductFlow(page, productName) {
-  await page.getByText('Stock', { exact: true }).click()
+  await page.getByText('Inventory', { exact: true }).click()
   await page.getByRole('button', { name: /add stock/i }).click()
   const stockDialog = page.getByRole('dialog', { name: /add stock/i })
   await stockDialog.getByRole('combobox').first().click()
@@ -110,7 +110,7 @@ async function assertNestedProductFlow(page, productName) {
   await page.getByRole('button', { name: /save stock/i }).click()
   await expect(page.getByText(productName).first()).toBeVisible({ timeout: 10000 })
 
-  await page.getByText('Order', { exact: true }).click()
+  await page.getByText('Point of Sale', { exact: true }).click()
   await page.locator('.section-card').filter({ hasText: 'Add products' }).getByRole('combobox').first().click()
   await page.getByRole('option', { name: productName }).click()
   const addProducts = page.locator('.section-card').filter({ hasText: 'Add products' })
