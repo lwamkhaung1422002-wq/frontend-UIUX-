@@ -105,6 +105,15 @@ export default function BalancePage({ refresh, requireAuth }) {
   )
   const net = financialSummary.netProfit
   const typeProfit = getTypeProfit(state.records, state.expenses)
+  const inventoryValue = (data.stocks || []).reduce(
+    (sum, stock) => sum + Math.max(0, Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0)) * Number(stock.unitCost || 0),
+    0,
+  )
+  const receivables = (data.orders || []).reduce((sum, order) => sum + Math.max(0, Number(order.balanceDue || 0)), 0)
+  const supplierPayables = (data.purchases || []).reduce(
+    (sum, purchase) => sum + Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)),
+    0,
+  )
 
   const handleExportBalancePDF = async () => {
     const { exportBalancePDF } = await import('../utils/reports.js')
@@ -182,8 +191,8 @@ export default function BalancePage({ refresh, requireAuth }) {
   return (
     <Box className="page-stack">
       <PageHeader
-        title="Profit / Expense / Balance"
-        subtitle="Track income, expenses, balance by payment method, and profit by product type."
+        title="Reports"
+        subtitle="Revenue, profit, inventory value, receivables, payables and product performance."
       />
 
       <div className="metric-grid">
@@ -192,6 +201,9 @@ export default function BalancePage({ refresh, requireAuth }) {
         <MetricCard title="Gross Profit" value={formatKs(financialSummary.grossProfit)} tone="primary" />
         <MetricCard title="Operating Expense" value={formatKs(expenseTotal)} tone="error" />
         <MetricCard title="Net Profit" value={formatKs(net)} tone={net >= 0 ? 'success' : 'error'} />
+        <MetricCard title="Inventory Value" value={formatKs(inventoryValue)} />
+        <MetricCard title="Receivables" value={formatKs(receivables)} tone={receivables ? 'warning' : 'success'} />
+        <MetricCard title="Supplier Payables" value={formatKs(supplierPayables)} tone={supplierPayables ? 'warning' : 'success'} />
       </div>
 
       <SectionCard

@@ -13,6 +13,12 @@ export const defaultCatalogSettings = {
     { id: 'cash', name: 'Cash', type: 'normal', active: true, sortOrder: 1 },
     { id: 'kbz-pay', name: 'KBZ Pay', type: 'normal', active: true, sortOrder: 2 },
   ],
+  lowStockDefault: 5,
+  currencyCode: 'MMK',
+  dateFormat: 'yyyy-MM-dd',
+  receiptFooter: 'Thank you for shopping with us.',
+  notifyLowStock: true,
+  notifyPayments: true,
 }
 
 export const MAX_OPTION_LEVELS = 3

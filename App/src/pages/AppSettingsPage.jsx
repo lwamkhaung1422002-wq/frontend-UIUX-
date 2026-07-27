@@ -10,6 +10,8 @@ import {
   Paper,
   Select,
   Stack,
+  Switch,
+  FormControlLabel,
   TextField,
   Typography,
 } from '@mui/material'
@@ -27,6 +29,7 @@ import {
   createProductDocument,
   deleteProductDocument,
   savePaymentMethods,
+  saveCatalogSettings,
   updateProductDocument,
 } from '../services/shopApiService.js'
 import {
@@ -70,6 +73,14 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
   const [methodDraft, setMethodDraft] = useState(paymentDraft)
   const [paymentMethods, setPaymentMethods] = useState(() => settings.paymentMethods)
   const [saving, setSaving] = useState(false)
+  const [preferenceDraft, setPreferenceDraft] = useState(() => ({
+    lowStockDefault: settings.lowStockDefault,
+    currencyCode: settings.currencyCode,
+    dateFormat: settings.dateFormat,
+    receiptFooter: settings.receiptFooter,
+    notifyLowStock: settings.notifyLowStock,
+    notifyPayments: settings.notifyPayments,
+  }))
 
   const tree = normalizeOptionTree(productDraft.optionTree)
 
@@ -327,6 +338,20 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
       setSaving(false)
     }
   }
+  const savePreferences = async () => {
+    if (requireAuth?.('save store preferences')) return
+    setSaving(true)
+    try {
+      await saveCatalogSettings(user.uid, {
+        ...preferenceDraft,
+        lowStockDefault: Number(preferenceDraft.lowStockDefault || 0),
+      })
+      notify('Store preferences saved.')
+      await refresh()
+    } catch (error) {
+      notify(error.message || 'Store preferences could not be saved.', 'error')
+    } finally { setSaving(false) }
+  }
 
   return (
     <Box className="page-stack">
@@ -507,6 +532,20 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
         <Button sx={{ mt: 2 }} variant="contained" startIcon={<SaveRoundedIcon />} onClick={saveMethods} disabled={saving}>
           Save payment methods
         </Button>
+      </SectionCard>
+
+      <SectionCard title="Store preferences" subtitle="Inventory thresholds, receipts, formatting and notification preferences.">
+        <Box className="form-grid">
+          <TextField className="span-4" type="number" label="Default low-stock threshold" value={preferenceDraft.lowStockDefault} onChange={(event) => setPreferenceDraft((current) => ({ ...current, lowStockDefault: event.target.value }))} />
+          <FormControl className="span-4"><InputLabel>Currency</InputLabel><Select label="Currency" value={preferenceDraft.currencyCode} onChange={(event) => setPreferenceDraft((current) => ({ ...current, currencyCode: event.target.value }))}><MenuItem value="MMK">MMK</MenuItem><MenuItem value="USD">USD</MenuItem><MenuItem value="THB">THB</MenuItem></Select></FormControl>
+          <FormControl className="span-4"><InputLabel>Date format</InputLabel><Select label="Date format" value={preferenceDraft.dateFormat} onChange={(event) => setPreferenceDraft((current) => ({ ...current, dateFormat: event.target.value }))}><MenuItem value="yyyy-MM-dd">YYYY-MM-DD</MenuItem><MenuItem value="dd/MM/yyyy">DD/MM/YYYY</MenuItem><MenuItem value="MM/dd/yyyy">MM/DD/YYYY</MenuItem></Select></FormControl>
+          <TextField className="span-12" label="Receipt footer" value={preferenceDraft.receiptFooter} onChange={(event) => setPreferenceDraft((current) => ({ ...current, receiptFooter: event.target.value }))} multiline minRows={2} />
+          <Box className="span-12">
+            <FormControlLabel control={<Switch checked={preferenceDraft.notifyLowStock} onChange={(event) => setPreferenceDraft((current) => ({ ...current, notifyLowStock: event.target.checked }))} />} label="Low-stock notifications" />
+            <FormControlLabel control={<Switch checked={preferenceDraft.notifyPayments} onChange={(event) => setPreferenceDraft((current) => ({ ...current, notifyPayments: event.target.checked }))} />} label="Payment notifications" />
+          </Box>
+        </Box>
+        <Button sx={{ mt: 2 }} variant="contained" startIcon={<SaveRoundedIcon />} disabled={saving} onClick={savePreferences}>Save preferences</Button>
       </SectionCard>
     </Box>
   )

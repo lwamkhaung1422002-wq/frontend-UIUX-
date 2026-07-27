@@ -25,6 +25,8 @@ import AddShoppingCartRoundedIcon from '@mui/icons-material/AddShoppingCartRound
 import AddBusinessRoundedIcon from '@mui/icons-material/AddBusinessRounded'
 import PaidRoundedIcon from '@mui/icons-material/PaidRounded'
 import PostAddRoundedIcon from '@mui/icons-material/PostAddRounded'
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
+import RadioButtonUncheckedRoundedIcon from '@mui/icons-material/RadioButtonUncheckedRounded'
 import MetricCard from '../components/MetricCard.jsx'
 import PageHeader from '../components/PageHeader.jsx'
 import SectionCard from '../components/SectionCard.jsx'
@@ -40,6 +42,7 @@ import {
 import { calculateFinancialSummary } from '../domain/finance.js'
 import { normalizeOrders } from '../domain/orders.js'
 import useSessionState from '../hooks/useSessionState.js'
+import { activePaymentMethods } from '../utils/catalog.js'
 
 function buildSalesSummary(orders, from, to) {
   const list = normalizeOrders(orders).filter(
@@ -151,6 +154,17 @@ export default function HomePage({ navigate }) {
   const totalBalance = Object.values(methodBalance).reduce((sum, value) => sum + value, 0)
   const cashReceived = totalBalance
   const outstanding = Math.max(0, totalSaleValue - cashReceived)
+  const supplierPayable = (data.purchases || []).reduce(
+    (sum, purchase) => sum + Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)),
+    0,
+  )
+  const onboardingSteps = [
+    { label: 'Add products', done: Boolean(data.products.length), page: 'products' },
+    { label: 'Add opening stock', done: Boolean(data.stocks.length), page: 'stock' },
+    { label: 'Configure payment methods', done: activePaymentMethods(data.catalogSettings).length > 0, page: 'settings' },
+    { label: 'Create first sale', done: Boolean(data.orders.length), page: 'order' },
+  ]
+  const onboardingDone = onboardingSteps.filter((step) => step.done).length
 
   return (
     <Box className="page-stack home-dashboard">
@@ -216,6 +230,25 @@ export default function HomePage({ navigate }) {
         </Box>
       </SectionCard>
 
+      {onboardingDone < onboardingSteps.length ? (
+        <SectionCard title={`Store setup · ${onboardingDone}/${onboardingSteps.length}`} subtitle="Finish these steps to make every GreenMart workflow ready.">
+          <Box className="onboarding-grid">
+            {onboardingSteps.map((step) => (
+              <Button
+                key={step.label}
+                variant="text"
+                color={step.done ? 'success' : 'inherit'}
+                startIcon={step.done ? <CheckCircleRoundedIcon /> : <RadioButtonUncheckedRoundedIcon />}
+                onClick={() => !step.done && navigate(step.page)}
+                disabled={step.done}
+              >
+                {step.label}
+              </Button>
+            ))}
+          </Box>
+        </SectionCard>
+      ) : null}
+
       <Box className="home-main-grid">
         <SectionCard
           title="Stock alerts"
@@ -263,6 +296,7 @@ export default function HomePage({ navigate }) {
               value={formatKs(financialSummary.netProfit)}
               tone={financialSummary.netProfit >= 0 ? 'success.main' : 'error.main'}
             />
+            <SummaryRow label="Supplier Payable" value={formatKs(supplierPayable)} tone={supplierPayable ? 'warning.main' : 'text.primary'} />
           </Stack>
           <Collapse in={details.finance}>
             <Box className="balance-method-grid" sx={{ mt: 2 }}>

@@ -7,7 +7,7 @@ import PageHeader from '../components/PageHeader.jsx'
 import SectionCard from '../components/SectionCard.jsx'
 import StatusChip from '../components/StatusChip.jsx'
 import EmptyState from '../components/EmptyState.jsx'
-import { createPurchaseDocument, payPurchaseDocument, receivePurchaseDocument, sendPurchaseDocument } from '../services/shopApiService.js'
+import { createPurchaseDocument, payPurchaseDocument, receivePurchaseDocument, returnPurchaseDocument, sendPurchaseDocument } from '../services/shopApiService.js'
 import { formatKs } from '../utils/storage.js'
 
 export default function PurchasesPage({ refresh, requireAuth, navigate }) {
@@ -50,6 +50,10 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
         {purchase.status === 'draft' ? <Button disabled={busy} onClick={() => act(() => sendPurchaseDocument(user.uid, purchase.id))}>Send order</Button> : null}
         {['ordered', 'partially_received'].includes(purchase.status) ? <Button variant="outlined" disabled={busy} onClick={() => act(() => receivePurchaseDocument(user.uid, purchase.id, { items: purchase.items.filter((item) => item.receivedQuantity < item.quantity).map((item) => ({ purchaseItemId: item.id, quantity: item.quantity - item.receivedQuantity })) }))}>Receive remaining</Button> : null}
         {purchase.paidAmount < purchase.total ? <Button variant="outlined" disabled={busy} onClick={() => act(() => payPurchaseDocument(user.uid, purchase.id, { amount: purchase.total - purchase.paidAmount, method: 'Cash' }))}>Pay balance</Button> : null}
+        {purchase.receipts?.length && purchase.paidAmount === 0 ? <Button color="error" variant="outlined" disabled={busy} onClick={() => {
+          const receipt = purchase.receipts[0]
+          return act(() => returnPurchaseDocument(user.uid, purchase.id, { purchaseReceiptId: receipt.id, quantity: receipt.quantity, reason: 'Returned to supplier' }))
+        }}>Return first receipt</Button> : null}
       </Box>
     </SectionCard>)}
     {!purchases.length ? <EmptyState title="No purchases yet" message="Create a purchase order to start replenishing inventory." /> : null}

@@ -421,6 +421,8 @@ export const receivePurchaseDocument = (uid, purchaseId, receipt) =>
   api.receivePurchase(shopIdFrom(uid), purchaseId, receipt)
 export const payPurchaseDocument = (uid, purchaseId, payment) =>
   api.payPurchase(shopIdFrom(uid), purchaseId, payment)
+export const returnPurchaseDocument = (uid, purchaseId, payload) =>
+  api.returnPurchase(shopIdFrom(uid), purchaseId, payload)
 
 export async function updateProductDocument(uid, productId, product) {
   return api.updateProduct(shopIdFrom(uid), productId, {

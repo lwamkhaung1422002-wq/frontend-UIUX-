@@ -116,6 +116,8 @@ export const api = {
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/receive`, { method: 'POST', body: payload }),
   payPurchase: (shopId, purchaseId, payload) =>
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/payments`, { method: 'POST', body: payload }),
+  returnPurchase: (shopId, purchaseId, payload) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/returns`, { method: 'POST', body: payload }),
   orders: (shopId) => apiRequest(`/shops/${shopId}/orders`),
   createOrder: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/orders`, { method: 'POST', body: payload }),

@@ -32,6 +32,7 @@ import MetricCard from '../components/MetricCard.jsx'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import EmptyState from '../components/EmptyState.jsx'
 import DataToolbar from '../components/DataToolbar.jsx'
+import SectionCard from '../components/SectionCard.jsx'
 import { useAuth } from '../contexts/AuthContext.jsx'
 import { useData } from '../contexts/DataContext.jsx'
 import { useFeedback } from '../contexts/FeedbackContext.jsx'
@@ -365,6 +366,27 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
     const { exportStockPDF } = await import('../utils/reports.js')
     exportStockPDF(rows, totals)
   }
+  const lowStockThreshold = Number(data.catalogSettings?.lowStockDefault ?? 5)
+  const reorderRows = rows
+    .filter((row) => row.available <= lowStockThreshold)
+    .sort((a, b) => a.available - b.available)
+    .map((row) => ({ ...row, suggested: Math.max(1, 10 - row.available, Number(row.sold || 0)) }))
+  const inventoryTimeline = [
+    ...(data.adjustments || []).map((item) => ({
+      id: `adjustment-${item.id}`,
+      date: item.date,
+      title: item.action === 'ADD' ? 'Stock added' : 'Stock removed',
+      detail: `${item.type} · ${item.quantity} · ${item.reason}`,
+      tone: item.action === 'ADD' ? 'success' : 'warning',
+    })),
+    ...(data.purchases || []).flatMap((purchase) => (purchase.receipts || []).map((receipt) => ({
+      id: `receipt-${receipt.id}`,
+      date: String(receipt.receivedAt || '').slice(0, 10),
+      title: `Purchase received · ${purchase.purchaseNumber}`,
+      detail: `${receipt.quantity} item(s) added to inventory`,
+      tone: 'success',
+    }))),
+  ].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 12)
 
   return (
     <Box className="page-stack">
@@ -405,6 +427,31 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
         <MetricCard title="Available Stock Value" value={formatKs(totals.totalAvailableValue)} tone="success" />
         <MetricCard title="Total Delivery Cost" value={formatKs(totals.totalDeliveryCost)} tone="warning" />
       </div>
+
+      <Box className="home-main-grid">
+        <SectionCard title="Reorder recommendations" subtitle="Suggested quantities use current availability and recent sold quantity.">
+          <Stack spacing={1}>
+            {reorderRows.slice(0, 8).map((row) => (
+              <Box key={`reorder-${row.id}`} className="purchase-line">
+                <span><b>{row.productName}</b><small>{row.variantName} · {row.available} available</small></span>
+                <Chip label={`Order ${row.suggested}`} color={row.available <= 0 ? 'error' : 'warning'} size="small" />
+              </Box>
+            ))}
+            {!reorderRows.length ? <Typography color="text.secondary">All products are above the threshold of {lowStockThreshold}.</Typography> : null}
+          </Stack>
+        </SectionCard>
+        <SectionCard title="Inventory timeline" subtitle="Receipts and manual stock adjustments.">
+          <Stack spacing={1}>
+            {inventoryTimeline.map((event) => (
+              <Box key={event.id} className="timeline-row">
+                <span className={`timeline-dot timeline-dot--${event.tone}`} />
+                <span><b>{event.title}</b><small>{event.detail} · {event.date}</small></span>
+              </Box>
+            ))}
+            {!inventoryTimeline.length ? <Typography color="text.secondary">No inventory activity yet.</Typography> : null}
+          </Stack>
+        </SectionCard>
+      </Box>
 
       <Box className="mobile-data-list">
         {rows.map((row) => (

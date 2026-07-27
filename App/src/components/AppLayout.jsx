@@ -83,7 +83,8 @@ export default function AppLayout({
   const [commandOpen, setCommandOpen] = useState(false)
   const [notificationsAnchor, setNotificationsAnchor] = useState(null)
   const notifications = useMemo(() => {
-    const lowStock = (data?.stocks || []).filter((stock) => Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0) <= 3)
+    const threshold = Number(data?.catalogSettings?.lowStockDefault ?? 5)
+    const lowStock = (data?.stocks || []).filter((stock) => Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0) <= threshold)
     const unpaid = (data?.orders || []).filter((order) => Number(order.balanceDue || 0) > 0)
     const pendingCod = unpaid.filter((order) => /cod/i.test(String(order.paymentMethod || order.source || '')))
     return [

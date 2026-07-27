@@ -51,7 +51,7 @@ import {
   fulfillPreorderAtomic,
   setOrderFulfillmentStatus,
 } from '../services/shopApiService.js'
-import { formatKs } from '../utils/storage.js'
+import { formatKs, getToday } from '../utils/storage.js'
 import {
   deductionLabel,
   getOrderQuantity,
@@ -61,6 +61,14 @@ import useSessionState from '../hooks/useSessionState.js'
 
 const filters = ['all', 'reserved', 'completed', 'paid', 'unpaid', 'refunded', 'preorder', 'cancelled']
 const filterLabel = (value) => value[0].toUpperCase() + value.slice(1)
+const savedViews = [
+  { id: 'today-unpaid', label: "Today's unpaid" },
+  { id: 'cod-pending', label: 'COD pending' },
+  { id: 'partial', label: 'Partially paid' },
+  { id: 'cancelled', label: 'Cancelled' },
+  { id: 'refunded', label: 'Refunded' },
+  { id: 'this-month', label: 'This month' },
+]
 
 function matchesPaymentFilter(order, value) {
   if (value === 'unpaid') {
@@ -102,17 +110,20 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
     filter: 'all',
     from: '',
     to: '',
+    savedView: '',
   })
-  const { filter, from, to } = view
-  const setFilter = (value) => setView((current) => ({ ...current, filter: value }))
+  const { filter, from, to, savedView = '' } = view
+  const setFilter = (value) => setView((current) => ({ ...current, filter: value, savedView: '' }))
   const setFrom = (value) => setView((current) => ({ ...current, from: value }))
   const setTo = (value) => setView((current) => ({ ...current, to: value }))
+  const applySavedView = (value) => setView((current) => ({ ...current, savedView: value, filter: 'all', from: '', to: '' }))
   const [cancelTarget, setCancelTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [detailsOrder, setDetailsOrder] = useState(null)
   const [workingId, setWorkingId] = useState('')
 
   const orders = useMemo(() => normalizeOrders(data.orders), [data.orders])
+  const codOrderIds = useMemo(() => new Set((data.payments || []).filter((payment) => payment.billNumber || /cod/i.test(String(payment.method || ''))).flatMap((payment) => [payment.orderId, ...(payment.orderIds || [])].filter(Boolean).map(String))), [data.payments])
   const filterCounts = useMemo(
     () =>
       Object.fromEntries(
@@ -141,10 +152,16 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
         }
         if (from && order.date < from) return false
         if (to && order.date > to) return false
+        if (savedView === 'today-unpaid' && !(order.date === getToday() && Number(order.balanceDue || 0) > 0)) return false
+        if (savedView === 'cod-pending' && !(codOrderIds.has(String(order.id)) && Number(order.balanceDue || 0) > 0)) return false
+        if (savedView === 'partial' && !(Number(order.paidAmount || 0) > 0 && Number(order.balanceDue || 0) > 0)) return false
+        if (savedView === 'cancelled' && order.fulfillmentStatus !== 'cancelled') return false
+        if (savedView === 'refunded' && order.paymentStatus !== 'refunded') return false
+        if (savedView === 'this-month' && !String(order.date).startsWith(getToday().slice(0, 7))) return false
         return true
       })
       .sort((a, b) => String(b.date).localeCompare(String(a.date)))
-  }, [filter, from, orders, to])
+  }, [codOrderIds, filter, from, orders, savedView, to])
 
   const totals = filteredOrders.reduce(
     (summary, order) => ({
@@ -244,6 +261,10 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
       />
 
       <SectionCard>
+        <Typography fontWeight={900}>Saved views</Typography>
+        <Stack direction="row" gap={0.75} sx={{ mt: 1, mb: 2, flexWrap: 'wrap' }}>
+          {savedViews.map((item) => <Chip key={item.id} label={item.label} color={savedView === item.id ? 'primary' : 'default'} variant={savedView === item.id ? 'filled' : 'outlined'} onClick={() => applySavedView(savedView === item.id ? '' : item.id)} />)}
+        </Stack>
         <Box className="sales-date-toolbar">
           <Box>
             <Typography fontWeight={900}>Date filter</Typography>
