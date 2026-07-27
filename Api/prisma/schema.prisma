@@ -36,27 +36,29 @@ model Shop {
   payments    Payment[]
   expenses    Expense[]
   auditLogs   AuditLog[]
+  suppliers   Supplier[]
+  purchases   Purchase[]
   setting     ShopSetting?
 
   @@index([ownerId])
 }
 
 model ShopSetting {
-  id                  String   @id @default(cuid())
-  shopId              String   @unique
-  productLabel        String   @default("Product")
-  option1Label        String   @default("Option 1")
-  option2Label        String   @default("Option 2")
-  option2Enabled      Boolean  @default(true)
-  productListLabel    String   @default("Products")
-  option1ValuesLabel  String   @default("Option 1 Values")
-  option2ValuesLabel  String   @default("Option 2 Values")
-  option1Values       String   @default("[\"Standard\"]")
-  option2Values       String   @default("[\"General\"]")
-  paymentMethods      String   @default("[{\"id\":\"cod\",\"name\":\"COD\",\"type\":\"cod\",\"active\":true,\"sortOrder\":0},{\"id\":\"cash\",\"name\":\"Cash\",\"type\":\"normal\",\"active\":true,\"sortOrder\":1},{\"id\":\"kbz-pay\",\"name\":\"KBZ Pay\",\"type\":\"normal\",\"active\":true,\"sortOrder\":2}]")
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  shop                Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  id                 String   @id @default(cuid())
+  shopId             String   @unique
+  productLabel       String   @default("Product")
+  option1Label       String   @default("Option 1")
+  option2Label       String   @default("Option 2")
+  option2Enabled     Boolean  @default(true)
+  productListLabel   String   @default("Products")
+  option1ValuesLabel String   @default("Option 1 Values")
+  option2ValuesLabel String   @default("Option 2 Values")
+  option1Values      String   @default("[\"Standard\"]")
+  option2Values      String   @default("[\"General\"]")
+  paymentMethods     String   @default("[{\"id\":\"cod\",\"name\":\"COD\",\"type\":\"cod\",\"active\":true,\"sortOrder\":0},{\"id\":\"cash\",\"name\":\"Cash\",\"type\":\"normal\",\"active\":true,\"sortOrder\":1},{\"id\":\"kbz-pay\",\"name\":\"KBZ Pay\",\"type\":\"normal\",\"active\":true,\"sortOrder\":2}]")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  shop               Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
 model Customer {
@@ -90,23 +92,24 @@ model Category {
 }
 
 model Product {
-  id          String           @id @default(cuid())
-  name        String
-  description String?
-  sku         String?
-  price       Int
-  cost        Int?
-  optionTree  Json             @default("{}")
-  isActive    Boolean          @default(true)
-  shopId      String
-  categoryId  String?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  shop        Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  category    Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  variants    ProductVariant[]
-  inventory   InventoryBatch[]
-  orderItems  OrderItem[]
+  id            String           @id @default(cuid())
+  name          String
+  description   String?
+  sku           String?
+  price         Int
+  cost          Int?
+  optionTree    Json             @default("{}")
+  isActive      Boolean          @default(true)
+  shopId        String
+  categoryId    String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  shop          Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  category      Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants      ProductVariant[]
+  inventory     InventoryBatch[]
+  orderItems    OrderItem[]
+  purchaseItems PurchaseItem[]
 
   @@unique([shopId, sku])
   @@index([shopId])
@@ -114,24 +117,25 @@ model Product {
 }
 
 model ProductVariant {
-  id         String           @id @default(cuid())
-  name       String
-  sku        String?
-  price      Int?
-  cost       Int?
-  option1    String?
-  option2    String?
-  option3    String?
-  optionPath Json             @default("[]")
+  id               String           @id @default(cuid())
+  name             String
+  sku              String?
+  price            Int?
+  cost             Int?
+  option1          String?
+  option2          String?
+  option3          String?
+  optionPath       Json             @default("[]")
   variantSignature String?
-  isActive   Boolean          @default(true)
-  archivedAt DateTime?
-  productId  String
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
-  product    Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
-  inventory  InventoryBatch[]
-  orderItems OrderItem[]
+  isActive         Boolean          @default(true)
+  archivedAt       DateTime?
+  productId        String
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  product          Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventory        InventoryBatch[]
+  orderItems       OrderItem[]
+  purchaseItems    PurchaseItem[]
 
   @@unique([productId, sku])
   @@unique([productId, variantSignature])
@@ -155,10 +159,106 @@ model InventoryBatch {
   variant          ProductVariant?       @relation(fields: [variantId], references: [id], onDelete: SetNull)
   adjustments      StockAdjustment[]
   allocations      OrderItemAllocation[]
+  purchaseReceipts PurchaseReceipt[]
 
   @@index([shopId])
   @@index([productId])
   @@index([variantId])
+}
+
+model Supplier {
+  id            String     @id @default(cuid())
+  shopId        String
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  notes         String?
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  shop          Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  purchases     Purchase[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+model Purchase {
+  id             String            @id @default(cuid())
+  shopId         String
+  supplierId     String
+  purchaseNumber String
+  status         String            @default("draft")
+  paymentStatus  String            @default("unpaid")
+  orderedAt      DateTime          @default(now())
+  expectedAt     DateTime?
+  receivedAt     DateTime?
+  deliveryCost   Int               @default(0)
+  total          Int               @default(0)
+  paidAmount     Int               @default(0)
+  notes          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  shop           Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  supplier       Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items          PurchaseItem[]
+  receipts       PurchaseReceipt[]
+  payments       PurchasePayment[]
+
+  @@unique([shopId, purchaseNumber])
+  @@index([shopId])
+  @@index([supplierId])
+  @@index([status])
+}
+
+model PurchaseItem {
+  id               String            @id @default(cuid())
+  purchaseId       String
+  productId        String
+  variantId        String?
+  productName      String
+  quantity         Int
+  receivedQuantity Int               @default(0)
+  unitCost         Int
+  lineTotal        Int
+  purchase         Purchase          @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product          Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant          ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  receipts         PurchaseReceipt[]
+
+  @@index([purchaseId])
+  @@index([productId])
+}
+
+model PurchaseReceipt {
+  id               String         @id @default(cuid())
+  purchaseId       String
+  purchaseItemId   String
+  inventoryBatchId String
+  quantity         Int
+  receivedAt       DateTime       @default(now())
+  purchase         Purchase       @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  purchaseItem     PurchaseItem   @relation(fields: [purchaseItemId], references: [id], onDelete: Cascade)
+  inventoryBatch   InventoryBatch @relation(fields: [inventoryBatchId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId])
+  @@index([purchaseItemId])
+}
+
+model PurchasePayment {
+  id         String   @id @default(cuid())
+  purchaseId String
+  amount     Int
+  method     String
+  reference  String?
+  notes      String?
+  paidAt     DateTime @default(now())
+  createdAt  DateTime @default(now())
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseId])
 }
 
 model StockAdjustment {

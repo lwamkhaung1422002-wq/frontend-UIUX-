@@ -15,6 +15,7 @@ import { inventoryRouter } from "./routes/inventory.routes.js";
 import { ordersRouter } from "./routes/orders.routes.js";
 import { paymentsRouter } from "./routes/payments.routes.js";
 import { productsRouter } from "./routes/products.routes.js";
+import { purchasesRouter } from "./routes/purchases.routes.js";
 import { shopSettingsRouter } from "./routes/shop-settings.routes.js";
 import { shopsRouter } from "./routes/shops.routes.js";
 
@@ -79,6 +80,7 @@ app.use("/shops", shopSettingsRouter);
 app.use("/shops", customersRouter);
 app.use("/shops", categoriesRouter);
 app.use("/shops", productsRouter);
+app.use("/shops", purchasesRouter);
 app.use("/shops", inventoryRouter);
 app.use("/shops", ordersRouter);
 app.use("/shops", paymentsRouter);
