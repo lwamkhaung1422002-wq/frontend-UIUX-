@@ -21,6 +21,7 @@ import {
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
+import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
 import PageHeader from '../components/PageHeader.jsx'
 import SectionCard from '../components/SectionCard.jsx'
 import { useAuth } from '../contexts/AuthContext.jsx'
@@ -105,6 +106,8 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
     date: getToday(),
     note: '',
   })
+  const heldCartKey = `greenmart:held-cart:${user.uid}`
+  const [hasHeldCart, setHasHeldCart] = useState(() => Boolean(localStorage.getItem(heldCartKey)))
   const selectedPaymentMethod = paymentMethods.some((method) => method.name === payment.method)
     ? payment.method
     : defaultMethod
@@ -132,6 +135,56 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
     const handle = window.setTimeout(() => setLineDraft(initialLine(data)), 0)
     return () => window.clearTimeout(handle)
   }, [data, lineDraft.productId])
+
+  useEffect(() => {
+    const warnUnsaved = (event) => {
+      if (!items.length || saving) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnUnsaved)
+    return () => window.removeEventListener('beforeunload', warnUnsaved)
+  }, [items.length, saving])
+
+  const holdCart = () => {
+    if (!items.length) {
+      notify('Add at least one item before holding the sale.', 'warning')
+      return
+    }
+    localStorage.setItem(heldCartKey, JSON.stringify({
+      version: 1, savedAt: new Date().toISOString(), orderType, customer, date, source, remark,
+      preorder, orderDiscount, items, paymentMode, payment,
+    }))
+    setHasHeldCart(true)
+    setItems([])
+    setCustomer({ name: '', phone: '', city: '', address: '' })
+    setRemark('')
+    notify('Sale held. You can resume it after a refresh.')
+  }
+
+  const resumeCart = () => {
+    try {
+      const held = JSON.parse(localStorage.getItem(heldCartKey) || 'null')
+      if (!held?.items?.length) throw new Error('Held sale is empty.')
+      setOrderType(held.orderType || 'online')
+      setCustomer(held.customer || { name: '', phone: '', city: '', address: '' })
+      setDate(held.date || getToday())
+      setSource(held.source || SOURCE_OPTIONS[0])
+      setRemark(held.remark || '')
+      setPreorder(Boolean(held.preorder))
+      setOrderDiscount(Number(held.orderDiscount || 0))
+      setItems(held.items)
+      setPaymentMode(held.paymentMode || 'unpaid')
+      setPayment((current) => ({ ...current, ...(held.payment || {}) }))
+      localStorage.removeItem(heldCartKey)
+      setHasHeldCart(false)
+      notify('Held sale resumed.')
+    } catch (error) {
+      localStorage.removeItem(heldCartKey)
+      setHasHeldCart(false)
+      notify(error.message || 'Held sale could not be restored.', 'error')
+    }
+  }
 
   const updateLineProduct = (productId) => {
     const product = data.products.find((entry) => String(entry.id) === String(productId))
@@ -296,6 +349,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
           : null,
       )
       notify(orderType === 'in-store' ? 'In-store sale completed.' : 'Online order created.')
+      localStorage.removeItem(heldCartKey)
       await refresh?.()
       navigate('sales')
     } catch (error) {
@@ -307,7 +361,15 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
 
   return (
     <Box className="page-stack">
-      <PageHeader title="Create sale" subtitle="Create online orders or immediate in-store sales." onBack={() => navigate('home')} />
+      <PageHeader
+        title="Point of Sale"
+        subtitle="Create online orders or immediate in-store sales."
+        onBack={() => navigate('home')}
+        actions={<>
+          {hasHeldCart ? <Button startIcon={<RestoreRoundedIcon />} onClick={resumeCart}>Resume held sale</Button> : null}
+          <Button variant="outlined" startIcon={<SaveRoundedIcon />} disabled={!items.length} onClick={holdCart}>Hold sale</Button>
+        </>}
+      />
 
       <Box component="form" onSubmit={submitOrder} className="order-workspace">
         <Stack spacing={2}>

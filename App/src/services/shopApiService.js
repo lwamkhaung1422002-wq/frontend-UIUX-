@@ -399,6 +399,8 @@ export async function savePaymentMethods(uid, paymentMethods) {
 export async function createProductDocument(uid, product) {
   return api.createProduct(shopIdFrom(uid), {
     name: product.name,
+    sku: product.sku,
+    description: product.description,
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
     optionTree: normalizeOptionTree(product.optionTree),
