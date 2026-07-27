@@ -5,14 +5,12 @@
 .app-main {
   min-height: 100vh;
   padding: 24px;
-  background:
-    radial-gradient(circle at 88% -8%, rgba(91, 61, 245, 0.08), transparent 26rem),
-    linear-gradient(180deg, #fbfaff 0%, #f6f3fb 100%);
+  background: #f8faf9;
 }
 
 @media (min-width: 768px) {
   .app-main {
-    width: calc(100% - 224px);
+    width: calc(100% - 248px);
   }
 }
 
@@ -33,7 +31,7 @@
 
 .page-header-title,
 .section-card-title {
-  color: #171321;
+  color: #17211d;
 }
 
 .page-stack {
@@ -66,8 +64,8 @@
 }
 
 .metric-card {
-  border-color: #e8e3f3 !important;
-  box-shadow: 0 8px 24px rgba(48, 34, 86, 0.035);
+  border-color: #e2e8e5 !important;
+  box-shadow: 0 1px 3px rgba(15, 61, 45, 0.06);
 }
 
 .metric-grid.wide {
@@ -117,13 +115,13 @@
 
 .section-card {
   padding: 20px;
-  border-color: #e8e3f3 !important;
-  box-shadow: 0 10px 30px rgba(48, 34, 86, 0.045);
+  border-color: #e2e8e5 !important;
+  box-shadow: 0 1px 3px rgba(15, 61, 45, 0.05);
   transition: box-shadow 140ms ease, border-color 140ms ease, transform 140ms ease;
 }
 
 .section-card:hover {
-  border-color: #ddd6fe !important;
+  border-color: #a7f3d0 !important;
 }
 
 .section-card-header {
@@ -167,7 +165,7 @@
 .MuiChip-root:focus-visible,
 .MuiToggleButton-root:focus-visible,
 .MuiInputBase-root.Mui-focused {
-  outline: 3px solid rgba(91, 61, 245, 0.18);
+  outline: 3px solid rgba(5, 150, 105, 0.2);
   outline-offset: 2px;
 }
 
@@ -202,8 +200,8 @@
   height: 28px;
   margin-right: 8px;
   border-radius: 999px;
-  background: #ede9fe;
-  color: #5b3df5;
+  background: #d1fae5;
+  color: #047857;
   font-size: 13px;
   font-weight: 900;
 }
@@ -212,8 +210,8 @@
   position: sticky;
   top: 88px;
   padding: 20px;
-  border-color: #ddd6fe !important;
-  box-shadow: 0 18px 50px rgba(76, 50, 140, 0.1);
+  border-color: #a7f3d0 !important;
+  box-shadow: 0 18px 50px rgba(6, 78, 59, 0.1);
 }
 
 .cart-line {
@@ -221,10 +219,10 @@
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  border: 1px solid #e8e3f3;
+  border: 1px solid #e2e8e5;
   border-radius: 12px;
   padding: 12px 14px;
-  background: #fcfbff;
+  background: #fbfdfc;
 }
 
 .empty-state {
@@ -245,8 +243,8 @@
   display: grid;
   place-items: center;
   border-radius: 12px;
-  color: #5b3df5;
-  background: #ede9fe;
+  color: #047857;
+  background: #d1fae5;
 }
 
 .mobile-order-list {
@@ -511,6 +509,55 @@
 .positive {
   color: #16a34a;
   font-weight: 700;
+}
+
+.product-grid,
+.customer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.product-card {
+  overflow: hidden;
+  border-color: #e2e8e5 !important;
+}
+
+.product-image {
+  height: 112px;
+  display: grid;
+  place-items: center;
+  color: #059669;
+  background: linear-gradient(145deg, #ecfdf5, #d1fae5);
+}
+
+.product-image svg {
+  font-size: 42px;
+}
+
+.customer-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.customer-stats span {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f3f7f5;
+}
+
+.customer-stats small {
+  color: #66736d;
+}
+
+.dialog-form {
+  display: grid;
+  gap: 16px;
+  padding-top: 12px !important;
 }
 
 .negative {

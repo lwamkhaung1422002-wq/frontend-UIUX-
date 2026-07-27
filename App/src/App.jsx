@@ -17,6 +17,8 @@ const FinancePage = lazy(routeLoaders.finance)
 const BalancePage = lazy(routeLoaders.balance)
 const OrderPage = lazy(routeLoaders.order)
 const AppSettingsPage = lazy(routeLoaders.settings)
+const ProductsPage = lazy(routeLoaders.products)
+const CustomersPage = lazy(routeLoaders.customers)
 const LoginPage = lazy(() => import('./pages/LoginPage.jsx'))
 
 const pages = {
@@ -27,15 +29,18 @@ const pages = {
   balance: BalancePage,
   order: OrderPage,
   settings: AppSettingsPage,
+  products: ProductsPage,
+  customers: CustomersPage,
 }
 
 const theme = createTheme({
   palette: {
     mode: 'light',
     primary: {
-      main: '#5b3df5',
-      dark: '#4226c9',
-      light: '#ede9fe',
+      main: '#059669',
+      dark: '#047857',
+      light: '#d1fae5',
+      contrastText: '#ffffff',
     },
     success: {
       main: '#16a34a',
@@ -47,23 +52,23 @@ const theme = createTheme({
       main: '#dc2626',
     },
     background: {
-      default: '#f8f7fc',
+      default: '#f8faf9',
       paper: '#ffffff',
     },
     text: {
-      primary: '#171321',
-      secondary: '#645f72',
+      primary: '#17211d',
+      secondary: '#66736d',
     },
-    divider: '#e6e0f2',
+    divider: '#e2e8e5',
   },
   shape: {
-    borderRadius: 12,
+    borderRadius: 10,
   },
   typography: {
     fontFamily: '"Noto Sans Myanmar", Roboto, Arial, sans-serif',
     h5: {
-      fontWeight: 700,
-      letterSpacing: 0,
+      fontWeight: 750,
+      letterSpacing: '-0.025em',
     },
     h6: {
       fontWeight: 700,
@@ -79,14 +84,14 @@ const theme = createTheme({
     MuiButton: {
       styleOverrides: {
         root: {
-          borderRadius: 10,
+          borderRadius: 8,
           minHeight: 42,
           boxShadow: 'none',
         },
         contained: {
-          boxShadow: '0 8px 18px rgba(91, 61, 245, 0.16)',
+          boxShadow: '0 4px 10px rgba(5, 150, 105, 0.16)',
           '&:hover': {
-            boxShadow: '0 10px 22px rgba(91, 61, 245, 0.2)',
+            boxShadow: '0 7px 16px rgba(5, 150, 105, 0.22)',
           },
         },
       },
@@ -94,14 +99,14 @@ const theme = createTheme({
     MuiCard: {
       styleOverrides: {
         root: {
-          borderRadius: 16,
+          borderRadius: 12,
         },
       },
     },
     MuiPaper: {
       styleOverrides: {
         root: {
-          borderRadius: 14,
+          borderRadius: 12,
           backgroundImage: 'none',
         },
       },
@@ -114,7 +119,7 @@ const theme = createTheme({
     MuiOutlinedInput: {
       styleOverrides: {
         root: {
-          borderRadius: 12,
+          borderRadius: 8,
           backgroundColor: '#fff',
         },
       },
@@ -130,7 +135,7 @@ const theme = createTheme({
     MuiTableHead: {
       styleOverrides: {
         root: {
-          backgroundColor: '#f5f3ff',
+          backgroundColor: '#f3f7f5',
         },
       },
     },
@@ -169,7 +174,7 @@ function AppGate() {
 
 function ProtectedApp({ onGetStarted }) {
   const { user, shop, logout } = useAuth()
-  const { loading: dataLoading, error: dataError, refresh } = useData()
+  const { data, loading: dataLoading, error: dataError, refresh } = useData()
   const location = useLocation()
   const routerNavigate = useNavigate()
   const candidatePage = location.pathname.replace(/^\/+/, '') || 'home'
@@ -227,6 +232,7 @@ function ProtectedApp({ onGetStarted }) {
       preview={Boolean(user.preview)}
       userEmail={user.email}
       shopName={shop?.name || 'Shop Owner'}
+      data={data}
     >
       {dataError ? (
         <Alert severity="error" sx={{ mb: 2 }}>

@@ -397,6 +397,10 @@ export async function createProductDocument(uid, product) {
   })
 }
 
+export async function createCustomerDocument(uid, customer) {
+  return api.createCustomer(shopIdFrom(uid), customer)
+}
+
 export async function updateProductDocument(uid, productId, product) {
   return api.updateProduct(shopIdFrom(uid), productId, {
     name: product.name,

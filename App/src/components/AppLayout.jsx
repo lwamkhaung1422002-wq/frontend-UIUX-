@@ -5,19 +5,27 @@ import {
   BottomNavigationAction,
   Button,
   Drawer,
+  IconButton,
+  InputAdornment,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
+  Badge,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  TextField,
+  Tooltip,
   SpeedDial,
   SpeedDialAction,
   Toolbar,
   Typography,
   useMediaQuery,
 } from '@mui/material'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded'
 import ReceiptLongRoundedIcon from '@mui/icons-material/ReceiptLongRounded'
 import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
@@ -29,17 +37,25 @@ import RocketLaunchRoundedIcon from '@mui/icons-material/RocketLaunchRounded'
 import MoreHorizRoundedIcon from '@mui/icons-material/MoreHorizRounded'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
+import MenuRoundedIcon from '@mui/icons-material/MenuRounded'
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
+import NotificationsNoneRoundedIcon from '@mui/icons-material/NotificationsNoneRounded'
+import StoreRoundedIcon from '@mui/icons-material/StoreRounded'
+import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
+import PeopleAltRoundedIcon from '@mui/icons-material/PeopleAltRounded'
 import { preloadRoute } from '../routes.js'
 
-const drawerWidth = 224
+const drawerWidth = 248
 
 const navItems = [
-  { key: 'home', label: 'Home', icon: <DashboardRoundedIcon /> },
+  { key: 'home', label: 'Overview', icon: <DashboardRoundedIcon /> },
+  { key: 'order', label: 'Point of Sale', icon: <AddShoppingCartRoundedIcon /> },
   { key: 'sales', label: 'Sales', icon: <ReceiptLongRoundedIcon /> },
-  { key: 'stock', label: 'Stock', icon: <Inventory2RoundedIcon /> },
+  { key: 'products', label: 'Products', icon: <CategoryRoundedIcon /> },
+  { key: 'stock', label: 'Inventory', icon: <Inventory2RoundedIcon /> },
   { key: 'finance', label: 'Finance', icon: <AccountBalanceWalletRoundedIcon /> },
-  { key: 'balance', label: 'Balance', icon: <TrendingUpRoundedIcon /> },
-  { key: 'order', label: 'Order', icon: <AddShoppingCartRoundedIcon /> },
+  { key: 'customers', label: 'Customers', icon: <PeopleAltRoundedIcon /> },
+  { key: 'balance', label: 'Reports', icon: <TrendingUpRoundedIcon /> },
   { key: 'settings', label: 'Settings', icon: <SettingsRoundedIcon /> },
 ]
 
@@ -51,11 +67,50 @@ export default function AppLayout({
   preview = false,
   userEmail,
   shopName = 'Shop Owner',
+  data,
   children,
 }) {
   const desktop = useMediaQuery('(min-width:768px)')
   const current = navItems.find((item) => item.key === page) || navItems[0]
   const [moreAnchor, setMoreAnchor] = useState(null)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
+  const [notificationsAnchor, setNotificationsAnchor] = useState(null)
+  const notifications = useMemo(() => {
+    const lowStock = (data?.stocks || []).filter((stock) => Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0) <= 3)
+    const unpaid = (data?.orders || []).filter((order) => Number(order.balanceDue || 0) > 0)
+    const pendingCod = unpaid.filter((order) => /cod/i.test(String(order.paymentMethod || order.source || '')))
+    return [
+      ...(lowStock.length ? [{ label: `${lowStock.length} low-stock item${lowStock.length === 1 ? '' : 's'}`, page: 'stock' }] : []),
+      ...(unpaid.length ? [{ label: `${unpaid.length} order${unpaid.length === 1 ? '' : 's'} awaiting payment`, page: 'finance' }] : []),
+      ...(pendingCod.length ? [{ label: `${pendingCod.length} pending COD settlement${pendingCod.length === 1 ? '' : 's'}`, page: 'finance' }] : []),
+    ]
+  }, [data])
+  const searchResults = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return []
+    const orders = (data?.orders || []).filter((order) =>
+      [order.id, order.customer?.name, order.customer?.phone, order.paymentId]
+        .some((value) => String(value || '').toLowerCase().includes(term)),
+    ).slice(0, 5).map((order) => ({ label: `Order #${order.id}`, meta: order.customer?.name || 'Walk-in customer', page: 'sales' }))
+    const products = (data?.products || []).filter((product) =>
+      [product.name, product.sku, ...(product.variants || []).map((variant) => variant.sku)]
+        .some((value) => String(value || '').toLowerCase().includes(term)),
+    ).slice(0, 5).map((product) => ({ label: product.name, meta: product.sku || 'Product', page: 'stock' }))
+    return [...orders, ...products].slice(0, 8)
+  }, [data, search])
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setCommandOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [])
   const mobilePrimary = navItems.filter((item) =>
     ['home', 'sales', 'stock', 'order'].includes(item.key),
   )
@@ -66,11 +121,25 @@ export default function AppLayout({
         <ListItemButton
           key={item.key}
           selected={page === item.key}
-          onClick={() => onNavigate(item.key)}
+          onClick={() => {
+            onNavigate(item.key)
+            setMobileOpen(false)
+          }}
           onMouseEnter={() => preloadRoute(item.key)}
           onFocus={() => preloadRoute(item.key)}
           onTouchStart={() => preloadRoute(item.key)}
-          sx={{ borderRadius: 2, mb: 0.5 }}
+          sx={{
+            borderRadius: 2,
+            mb: 0.5,
+            color: 'rgba(255,255,255,.72)',
+            '& .MuiListItemIcon-root': { color: 'inherit' },
+            '&.Mui-selected': {
+              color: '#fff',
+              bgcolor: 'rgba(16,185,129,.2)',
+              boxShadow: 'inset 3px 0 #34d399',
+            },
+            '&.Mui-selected:hover, &:hover': { bgcolor: 'rgba(255,255,255,.09)' },
+          }}
         >
           <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
           <ListItemText primary={item.label} slotProps={{ primary: { fontWeight: 700 } }} />
@@ -92,12 +161,41 @@ export default function AppLayout({
           width: desktop ? `calc(100% - ${drawerWidth}px)` : '100%',
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ minHeight: { xs: 64, md: 72 }, gap: 1.5 }}>
+          {!desktop ? (
+            <IconButton aria-label="Open navigation" onClick={() => setMobileOpen(true)}>
+              <MenuRoundedIcon />
+            </IconButton>
+          ) : null}
           <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-            <Typography variant="h6" noWrap>
-              {shopName}
+            <Typography variant="h6" noWrap sx={{ lineHeight: 1.2 }}>
+              {current.label}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap sx={{ display: { xs: 'none', sm: 'block' } }}>
+              Manage your store operations
             </Typography>
           </Box>
+          <TextField
+            size="small"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            onFocus={() => setSearchOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && searchResults[0]) {
+                onNavigate(searchResults[0].page)
+                setSearchOpen(false)
+              }
+            }}
+            placeholder="Search orders, products…"
+            aria-label="Global search"
+            sx={{ width: { sm: 220, lg: 300 }, display: { xs: 'none', sm: 'block' } }}
+            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon fontSize="small" /></InputAdornment> } }}
+          />
+          <Tooltip title="Notifications">
+            <IconButton aria-label="Notifications" onClick={(event) => setNotificationsAnchor(event.currentTarget)}>
+              <Badge badgeContent={notifications.length} color="error"><NotificationsNoneRoundedIcon /></Badge>
+            </IconButton>
+          </Tooltip>
           {!preview && userEmail ? (
             <Typography
               variant="body2"
@@ -113,11 +211,11 @@ export default function AppLayout({
           <Button
             size="small"
             variant={preview ? 'contained' : 'outlined'}
-            startIcon={preview ? <RocketLaunchRoundedIcon /> : <LogoutRoundedIcon />}
-            onClick={preview ? onGetStarted : onLogout}
+            startIcon={preview ? <RocketLaunchRoundedIcon /> : <AddShoppingCartRoundedIcon />}
+            onClick={preview ? onGetStarted : () => onNavigate('order')}
             sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
           >
-            {preview ? 'Get Started' : 'Logout'}
+            {preview ? 'Get Started' : 'New Sale'}
           </Button>
         </Toolbar>
       </AppBar>
@@ -131,20 +229,44 @@ export default function AppLayout({
             '& .MuiDrawer-paper': {
               width: drawerWidth,
               boxSizing: 'border-box',
-              borderRight: '1px solid',
-              borderColor: 'divider',
+              border: 0,
+              color: '#fff',
+              background: 'linear-gradient(180deg, #064e3b, #063d31)',
             },
           }}
         >
-          <Toolbar>
-            <Box>
-              <Typography variant="subtitle1" fontWeight={800}>
+          <Toolbar sx={{ minHeight: 72, gap: 1.25 }}>
+            <Box sx={{ width: 38, height: 38, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: '#10b981' }}>
+              <StoreRoundedIcon />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle1" fontWeight={850} noWrap>
                 {shopName}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
-                POS workspace
+              <Typography variant="caption" sx={{ color: 'rgba(255,255,255,.58)' }}>
+                Store management
               </Typography>
             </Box>
+          </Toolbar>
+          {nav}
+          <Box sx={{ mt: 'auto', p: 2, borderTop: '1px solid rgba(255,255,255,.1)' }}>
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,.55)' }}>Signed in as</Typography>
+            <Typography variant="body2" noWrap sx={{ color: '#fff', mb: 1 }}>{userEmail || 'Preview user'}</Typography>
+            <Button color="inherit" size="small" startIcon={<LogoutRoundedIcon />} onClick={preview ? onGetStarted : onLogout}>
+              {preview ? 'Get started' : 'Log out'}
+            </Button>
+          </Box>
+        </Drawer>
+      ) : null}
+      {!desktop ? (
+        <Drawer
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          PaperProps={{ sx: { width: 'min(82vw, 288px)', color: '#fff', background: '#064e3b' } }}
+        >
+          <Toolbar sx={{ gap: 1.25 }}>
+            <StoreRoundedIcon />
+            <Typography fontWeight={850}>{shopName}</Typography>
           </Toolbar>
           {nav}
         </Drawer>
@@ -238,6 +360,45 @@ export default function AppLayout({
           {preview ? 'Get Started' : 'Logout'}
         </MenuItem>
       </Menu>
+      <Menu
+        anchorEl={notificationsAnchor}
+        open={Boolean(notificationsAnchor)}
+        onClose={() => setNotificationsAnchor(null)}
+      >
+        {notifications.length ? notifications.map((item) => (
+          <MenuItem key={item.label} onClick={() => { onNavigate(item.page); setNotificationsAnchor(null) }}>
+            {item.label}
+          </MenuItem>
+        )) : <MenuItem disabled>No new notifications</MenuItem>}
+      </Menu>
+      <Dialog open={searchOpen && Boolean(search.trim())} onClose={() => setSearchOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Search results</DialogTitle>
+        <DialogContent sx={{ p: 1 }}>
+          {searchResults.map((result) => (
+            <ListItemButton key={`${result.page}-${result.label}`} onClick={() => { onNavigate(result.page); setSearchOpen(false); setSearch('') }} sx={{ borderRadius: 2 }}>
+              <ListItemText primary={result.label} secondary={result.meta} />
+            </ListItemButton>
+          ))}
+          {!searchResults.length ? <Typography color="text.secondary" sx={{ p: 2 }}>No orders or products found.</Typography> : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={commandOpen} onClose={() => setCommandOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Quick command <Typography component="span" variant="caption" color="text.secondary">Ctrl + K</Typography></DialogTitle>
+        <DialogContent sx={{ p: 1 }}>
+          {[
+            ['New sale', 'order'],
+            ['Add stock', 'stock'],
+            ['Receive payment', 'finance'],
+            ['Record expense', 'balance'],
+            ['Open sales', 'sales'],
+            ['Open settings', 'settings'],
+          ].map(([label, target]) => (
+            <ListItemButton key={label} onClick={() => { onNavigate(target); setCommandOpen(false) }} sx={{ borderRadius: 2 }}>
+              <ListItemText primary={label} />
+            </ListItemButton>
+          ))}
+        </DialogContent>
+      </Dialog>
 
       <SpeedDial
         ariaLabel="Quick actions"
