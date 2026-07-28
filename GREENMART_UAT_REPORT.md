@@ -4,8 +4,8 @@ Generated: 2026-07-29 (Asia/Yangon)
 
 ## Tested release
 
-- Commit: local verified working tree based on `3f9826c` (publication commit assigned after this evidence update)
-- GitHub publication: existing release is on `General-Store-Managment/main`; the verified decimal-transaction update is pending publication
+- Verified implementation commit: `c0b6fe1`
+- GitHub publication: `General-Store-Managment/main` (publication status confirmed in the final handoff)
 - Environment: local Windows development/UAT
 - Database: PostgreSQL `online_shop_local_dev`, schema `public`
 - Migration state: `18 migrations found`, schema up to date
