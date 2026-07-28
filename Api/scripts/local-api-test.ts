@@ -206,6 +206,53 @@ async function main(): Promise<void> {
       },
     });
     assert.equal(duplicateDecimalTransfer.duplicate, true);
+    const decimalOrder = await request(baseUrl, `/shops/${shopId}/orders`, {
+      method: "POST",
+      token,
+      body: {
+        fulfillmentStatus: "reserved",
+        source: "In-store",
+        items: [{
+          productId: decimalProduct.product.id,
+          unitId: kilogram.unit.id,
+          quantity: 0.25,
+          unitPrice: 3000,
+        }],
+      },
+    });
+    assert.equal(decimalOrder.order.items[0].baseQuantity, "0.25");
+    await request(baseUrl, `/shops/${shopId}/orders/${decimalOrder.order.id}/status`, {
+      method: "PATCH",
+      token,
+      body: { fulfillmentStatus: "completed" },
+    });
+    const decimalAfterSale = await request(
+      baseUrl,
+      `/shops/${shopId}/inventory-balances?search=${encodeURIComponent(decimalProduct.product.name)}`,
+      { token },
+    );
+    const decimalMainAfterSale = decimalAfterSale.balances.find(
+      (balance: Json) => balance.locationId === locations.locations[0].id,
+    );
+    assert.equal(decimalMainAfterSale.onHand, "0.5");
+    const decimalReturn = await request(
+      baseUrl,
+      `/shops/${shopId}/orders/${decimalOrder.order.id}/product-returns`,
+      {
+        method: "POST",
+        token,
+        headers: { "Idempotency-Key": `decimal-return-${stamp}` },
+        body: {
+          items: [{
+            orderItemId: decimalOrder.order.items[0].id,
+            quantity: 0.1,
+            condition: "SELLABLE",
+            reason: "Measured customer return",
+          }],
+        },
+      },
+    );
+    assert.equal(decimalReturn.returns[0].quantity, "0.1");
 
     const inventoryResult = await request(baseUrl, `/shops/${shopId}/inventory`, {
       method: "POST",
@@ -480,6 +527,54 @@ async function main(): Promise<void> {
     const supplierResult = await request(baseUrl, `/shops/${shopId}/suppliers`, {
       method: "POST", token, body: { name: `API Supplier ${stamp}` },
     });
+    const decimalPurchase = await request(baseUrl, `/shops/${shopId}/purchases`, {
+      method: "POST",
+      token,
+      body: {
+        supplierId: supplierResult.supplier.id,
+        items: [{
+          productId: decimalProduct.product.id,
+          unitId: kilogram.unit.id,
+          quantity: 0.5,
+          unitCost: 1500,
+        }],
+      },
+    });
+    assert.equal(decimalPurchase.purchase.items[0].baseQuantity, "0.5");
+    await request(baseUrl, `/shops/${shopId}/purchases/${decimalPurchase.purchase.id}/send`, {
+      method: "POST",
+      token,
+      body: {},
+    });
+    const decimalPurchaseReceipt = await request(
+      baseUrl,
+      `/shops/${shopId}/purchases/${decimalPurchase.purchase.id}/receive`,
+      {
+        method: "POST",
+        token,
+        headers: { "Idempotency-Key": `decimal-purchase-receipt-${stamp}` },
+        body: {
+          note: "Measured purchase receipt",
+          items: [{ purchaseItemId: decimalPurchase.purchase.items[0].id, quantity: 0.375 }],
+        },
+      },
+    );
+    assert.equal(decimalPurchaseReceipt.purchase.receipts[0].baseQuantity, "0.375");
+    assert.equal(decimalPurchaseReceipt.purchase.items[0].receivedBaseQuantity, "0.375");
+    const decimalPurchaseReturn = await request(
+      baseUrl,
+      `/shops/${shopId}/purchases/${decimalPurchase.purchase.id}/returns`,
+      {
+        method: "POST",
+        token,
+        body: {
+          purchaseReceiptId: decimalPurchaseReceipt.purchase.receipts[0].id,
+          quantity: 0.125,
+          reason: "Measured supplier return",
+        },
+      },
+    );
+    assert.equal(decimalPurchaseReturn.purchase.returns[0].baseQuantity, "0.125");
     const purchaseResult = await request(baseUrl, `/shops/${shopId}/purchases`, {
       method: "POST", token,
       body: { supplierId: supplierResult.supplier.id, items: [{ productId, quantity: 4, unitCost: 900 }] },
@@ -685,6 +780,7 @@ async function main(): Promise<void> {
         "product create",
         "paginated variant query",
         "decimal-safe quantity conversion and balance",
+        "fractional sale, customer return, purchase receipt and supplier return snapshots",
         "inventory create",
         "destructive inventory deletion rejected",
         "delivery cost expense",

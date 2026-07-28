@@ -46,11 +46,14 @@ import { formatKs, getStockVariantKey, getToday, SOURCE_OPTIONS } from '../utils
 function initialLine(data) {
   const product = data.products[0]
   const variant = (product?.variants || []).find((entry) => entry.isActive !== false)
+  const unit = (product?.units || []).find((entry) => entry.isBase && entry.canSell !== false) ||
+    (product?.units || []).find((entry) => entry.canSell !== false)
   return {
     productId: product?.id || '',
     variantId: variant?.id || '',
     optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
     quantity: 1,
+    unitId: unit?.unitId || '',
     unitPrice: variant?.price ?? product?.price ?? '',
     serialIds: [],
     lotId: '',
@@ -126,6 +129,13 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
   const hasOptions = optionTree.levels.length > 0
   const allOptionsSelected = !hasOptions || optionTree.levels.every((_, index) => lineDraft.optionValueIds[index])
   const selectedVariantId = selectedVariant?.id || lineDraft.variantId
+  const sellingUnits = (selectedProduct?.units || []).filter((entry) => entry.canSell !== false)
+  const selectedSellingUnit = sellingUnits.find((entry) => entry.unitId === lineDraft.unitId) ||
+    sellingUnits.find((entry) => entry.isBase) || sellingUnits[0]
+  const sellingConversionFactor = Number(selectedSellingUnit?.conversionFactor || 1)
+  const sellingQuantityStep = selectedSellingUnit?.unit?.precision > 0
+    ? 10 ** -selectedSellingUnit.unit.precision
+    : 1
   const representativeStock = stockForVariant(data.stocks, lineDraft.productId, selectedVariantId)
   const alreadySelectedSerialIds = new Set(items.flatMap((item) => item.serialIds || []))
   const availableSerials = (data.inventorySerials || []).filter((serial) =>
@@ -217,6 +227,8 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
   const updateLineProduct = (productId) => {
     const product = data.products.find((entry) => String(entry.id) === String(productId))
     const variant = (product?.variants || []).find((entry) => entry.isActive !== false)
+    const unit = (product?.units || []).find((entry) => entry.isBase && entry.canSell !== false) ||
+      (product?.units || []).find((entry) => entry.canSell !== false)
     setLineDraft((current) => ({
       ...current,
       productId,
@@ -224,6 +236,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
       unitPrice: variant?.price ?? product?.price ?? '',
       quantity: 1,
+      unitId: unit?.unitId || '',
       serialIds: [],
       lotId: '',
       lotOverrideReason: '',
@@ -269,6 +282,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
 
   const addItem = async () => {
     const quantity = Number(lineDraft.quantity || 0)
+    const baseQuantity = quantity * sellingConversionFactor
     const unitPrice = Number(lineDraft.unitPrice || selectedVariant?.price || selectedProduct?.price || 0)
     if (!selectedProduct || !allOptionsSelected || quantity <= 0) {
       notify('Choose a product, every option, and valid quantity.', 'warning')
@@ -299,7 +313,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
     }
     const variantId = resolvedVariant?.id || ''
     const nextAvailable = Number(availableMap[stockLookupKey(selectedProduct, variantId)] || 0)
-    if (!preorder && quantity > nextAvailable) {
+    if (!preorder && baseQuantity > nextAvailable) {
       notify(`Only ${nextAvailable} item(s) are available.`, 'warning')
       return
     }
@@ -319,6 +333,9 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       variantName: resolvedVariant ? variantDisplayName(resolvedVariant) : 'Default',
       optionPath: resolvedVariant?.optionPath || [],
       quantity,
+      unitId: selectedSellingUnit?.unitId,
+      unitName: selectedSellingUnit?.unit?.symbol || selectedSellingUnit?.unit?.name || '',
+      conversionFactor: sellingConversionFactor,
       baseUnitPrice: unitPrice,
       unitPrice: unitPrice + modifierPrice,
       unitCost: Number(resolvedVariant?.cost ?? selectedProduct.cost ?? stock.unitCost ?? 0),
@@ -337,6 +354,8 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       productId: current.productId,
       variantId: current.variantId,
       optionValueIds: current.optionValueIds,
+      unitId: current.unitId,
+      unitPrice: current.unitPrice,
     }))
   }
 
@@ -512,7 +531,18 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
                   </Select>
                 </FormControl>
               )) : null}
-              <TextField className="span-4" type="number" label="Quantity" value={lineDraft.quantity} onChange={(event) => setLineDraft((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
+              {sellingUnits.length ? <FormControl className="span-4">
+                <InputLabel id="order-unit-label">Selling unit</InputLabel>
+                <Select labelId="order-unit-label" label="Selling unit" value={selectedSellingUnit?.unitId || ''} onChange={(event) => {
+                  const unit = sellingUnits.find((entry) => entry.unitId === event.target.value)
+                  const factor = Number(unit?.conversionFactor || 1)
+                  const basePrice = Number(selectedVariant?.price ?? selectedProduct?.price ?? 0)
+                  setLineDraft((current) => ({ ...current, unitId: event.target.value, unitPrice: basePrice * factor }))
+                }}>
+                  {sellingUnits.map((entry) => <MenuItem key={entry.unitId} value={entry.unitId}>{entry.unit?.name || entry.unit?.symbol || 'Unit'} × {Number(entry.conversionFactor || 1)} base</MenuItem>)}
+                </Select>
+              </FormControl> : null}
+              <TextField className="span-4" type="number" label="Quantity" value={lineDraft.quantity} onChange={(event) => setLineDraft((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: sellingQuantityStep, step: sellingQuantityStep } }} />
               <TextField className="span-4" type="number" label="Unit price" value={lineDraft.unitPrice} onChange={(event) => setLineDraft((current) => ({ ...current, unitPrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
               {selectedProduct?.trackingMode === 'SERIAL' ? (
                 <FormControl className="span-12">

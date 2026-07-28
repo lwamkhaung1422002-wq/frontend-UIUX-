@@ -596,6 +596,7 @@ export async function createOrderAtomic(uid, order, stocks, _existingOrders, pay
       unitPrice: Number(item.unitPrice || 0),
       discount: Number(item.discount || 0),
       deductionType: item.deductionType || 'discount',
+      ...(item.unitId ? { unitId: item.unitId } : {}),
       ...(item.serialIds?.length ? { serialIds: item.serialIds } : {}),
       ...(item.lotId ? { lotId: item.lotId, lotOverrideReason: item.lotOverrideReason } : {}),
       ...(item.modifierOptionIds?.length ? { modifierOptionIds: item.modifierOptionIds } : {}),

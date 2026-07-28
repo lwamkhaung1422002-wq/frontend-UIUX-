@@ -6,16 +6,19 @@ const round = (value: number) => Math.round(value * 1_000) / 1_000;
 
 async function main(): Promise<void> {
   const shopPrefix = process.env.RECONCILE_SHOP_PREFIX?.trim();
+  const shopSuffix = process.env.RECONCILE_SHOP_SUFFIX?.trim();
   const shops = await prisma.shop.findMany({
     where: {
       ledgerEnabled: true,
       ...(shopPrefix ? { OR: [{ id: { startsWith: shopPrefix } }, { name: { startsWith: shopPrefix } }] } : {}),
+      ...(shopSuffix ? { name: { endsWith: shopSuffix } } : {}),
     },
     select: { id: true, name: true, ledgerCutoverAt: true },
   });
   let differences = 0;
 
   for (const shop of shops) {
+    const differencesBeforeShop = differences;
     const balances = await prisma.inventoryBalance.findMany({ where: { shopId: shop.id } });
     for (const balance of balances) {
       const [movements, reservations, lots, activeSerials] = await Promise.all([
@@ -77,7 +80,7 @@ async function main(): Promise<void> {
         console.error(`FAIL ${shop.name} ${keyOf(balance)}: ${failures.join("; ")}`);
       }
     }
-    console.log(`${differences === 0 ? "PASS" : "CHECK"} ${shop.name} high-water=${shop.ledgerCutoverAt?.toISOString() ?? "none"}`);
+    console.log(`${differences === differencesBeforeShop ? "PASS" : "FAIL"} ${shop.name} high-water=${shop.ledgerCutoverAt?.toISOString() ?? "none"}`);
   }
   console.log(JSON.stringify({ status: differences === 0 ? "PASS" : "FAIL", unexplainedDifferences: differences }));
   if (differences > 0) process.exitCode = 1;

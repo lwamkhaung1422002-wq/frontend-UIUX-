@@ -69,6 +69,12 @@ authRouter.post("/register", authRateLimit, async (request, response, next) => {
       await applyTemplateDefaults(transaction, createdShop.id, "GENERAL_STORE");
 
       return { user: createdUser, shop: createdShop };
+    }, {
+      // Template defaults create several tenant-scoped records. Keep the
+      // transaction atomic while allowing slower CI/Windows database runners
+      // enough time under concurrent browser registration tests.
+      maxWait: 10_000,
+      timeout: 20_000,
     });
 
     const token = signAccessToken({ userId: user.id, email: user.email });

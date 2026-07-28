@@ -1,5 +1,8 @@
+/* global process */
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 expect.configure({ timeout: 15000 })
 
@@ -23,6 +26,14 @@ for (const width of widths) {
       await expect(page.getByRole('button', { name: 'Open global search' })).toBeVisible()
     } else {
       await expect(page.getByText('Store management')).toBeVisible()
+    }
+    if ([390, 820, 1280].includes(width)) {
+      const evidenceDirectory = join(process.cwd(), 'uat-evidence', 'screenshots')
+      mkdirSync(evidenceDirectory, { recursive: true })
+      await page.screenshot({
+        path: join(evidenceDirectory, `greenmart-settings-${width}px.png`),
+        fullPage: true,
+      })
     }
   })
 }

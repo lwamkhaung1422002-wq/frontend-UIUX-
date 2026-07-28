@@ -8,10 +8,10 @@ const apiBaseUrl = `http://127.0.0.1:${apiPort}`
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
-  // The Prisma PostgreSQL adapter shares one process-level pool in the API
-  // webServer. Two browser workers keep UAT parallel without allowing several
-  // bcrypt/auth/database flows to starve one another on small CI runners.
-  workers: Number(process.env.PLAYWRIGHT_WORKERS || 2),
+  // Full owner/template journeys share one isolated API database. A single
+  // worker keeps bcrypt registration and Prisma transactions deterministic;
+  // explicitly opt into more workers only on a provisioned CI database pool.
+  workers: Number(process.env.PLAYWRIGHT_WORKERS || 1),
   reporter: 'list',
   use: {
     baseURL: webBaseUrl,

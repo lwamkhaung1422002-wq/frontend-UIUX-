@@ -2,7 +2,9 @@ import { expect, test } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
 test('fresh owner can register, restore a session, reauthenticate, and create a product', async ({ page }, testInfo) => {
-  test.setTimeout(90_000)
+  // Registration, product setup and eight full Axe scans intentionally form
+  // one persisted-session journey and can exceed 90s on Windows CI runners.
+  test.setTimeout(180_000)
   test.skip(testInfo.project.name !== 'desktop-chromium', 'The full owner journey runs once; responsive coverage is separate.')
   const stamp = `${Date.now()}-${testInfo.workerIndex}`
   const email = `owner-journey-${stamp}@example.local`

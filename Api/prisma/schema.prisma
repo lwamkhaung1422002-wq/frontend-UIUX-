@@ -276,6 +276,7 @@ model PurchaseItem {
   productName      String
   quantity         Int
   receivedQuantity Int               @default(0)
+  receivedBaseQuantity Decimal       @default(0) @db.Decimal(18, 3)
   unitCost         Int
   lineTotal        Int
   unitId           String?
@@ -298,6 +299,7 @@ model PurchaseReceipt {
   purchaseItemId   String
   inventoryBatchId String
   quantity         Int
+  baseQuantity     Decimal?       @db.Decimal(18, 3)
   idempotencyKey   String?
   note             String?
   receivedAt       DateTime       @default(now())
@@ -332,6 +334,7 @@ model PurchaseReturn {
   purchaseItemId   String
   inventoryBatchId String
   quantity         Int
+  baseQuantity     Decimal?       @db.Decimal(18, 3)
   amount           Int
   reason           String
   returnedAt       DateTime       @default(now())
@@ -434,6 +437,7 @@ model OrderItemAllocation {
   orderItemId      String
   inventoryBatchId String
   quantity         Int
+  baseQuantity     Decimal?       @db.Decimal(18, 3)
   unitCost         Int
   createdAt        DateTime       @default(now())
   orderItem        OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)

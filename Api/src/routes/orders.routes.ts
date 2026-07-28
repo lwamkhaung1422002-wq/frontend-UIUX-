@@ -24,11 +24,29 @@ const orderListQuerySchema = z.object({
 });
 
 const moneySchema = z.coerce.number().int().nonnegative();
+const quantitySchema = z.coerce.number().positive("Quantity must be greater than 0.");
+const QUANTITY_SCALE = 3;
+
+function quantityDecimal(value: string | number | Prisma.Decimal | null | undefined): Prisma.Decimal {
+  return new Prisma.Decimal(value ?? 0).toDecimalPlaces(QUANTITY_SCALE, Prisma.Decimal.ROUND_HALF_UP);
+}
+
+function compatibilityQuantity(value: string | number | Prisma.Decimal): number {
+  return quantityDecimal(value).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toNumber();
+}
+
+function storedItemBaseQuantity(item: { quantity: number; baseQuantity?: unknown }): Prisma.Decimal {
+  return quantityDecimal(item.baseQuantity == null ? item.quantity : String(item.baseQuantity));
+}
+
+function storedAllocationBaseQuantity(allocation: { quantity: number; baseQuantity?: unknown }): Prisma.Decimal {
+  return quantityDecimal(allocation.baseQuantity == null ? allocation.quantity : String(allocation.baseQuantity));
+}
 
 const orderItemSchema = z.object({
   productId: z.string().trim().min(1, "Product is required."),
   variantId: z.string().trim().optional(),
-  quantity: z.coerce.number().int().positive("Quantity must be greater than 0."),
+  quantity: quantitySchema,
   unitPrice: moneySchema.optional(),
   discount: moneySchema.optional(),
   deductionType: z.enum(["discount", "advance-payment"]).default("discount"),
@@ -92,20 +110,23 @@ function badRequest(message: string): Error {
 }
 
 function lineTotal(
-  quantity: number,
+  quantity: string | number | Prisma.Decimal,
   unitPrice: number,
   discount = 0,
   deductionType = "discount",
 ): number {
   const lineDiscount = deductionType === "discount" ? discount : 0;
-  return Math.max(0, quantity * unitPrice - lineDiscount);
+  return Prisma.Decimal.max(0, quantityDecimal(quantity).mul(unitPrice).minus(lineDiscount))
+    .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)
+    .toNumber();
 }
 
-type IngredientRequirement = { productId: string; quantity: number; sourceId: string };
+type IngredientRequirement = { productId: string; quantity: string; sourceId: string };
 
 function recipeIngredientRequirements(item: {
   id: string;
   quantity: number;
+  baseQuantity?: unknown;
   product: {
     recipe: null | {
       id: string;
@@ -119,7 +140,11 @@ function recipeIngredientRequirements(item: {
   if (!recipe) return [];
   const requirements = recipe.components.map((component) => ({
     productId: component.ingredientProductId,
-    quantity: Number(component.quantity) * item.quantity / Number(recipe.yieldQuantity),
+    quantity: quantityDecimal(component.quantity as string)
+      .mul(storedItemBaseQuantity(item))
+      .div(quantityDecimal(recipe.yieldQuantity as string))
+      .toDecimalPlaces(QUANTITY_SCALE, Prisma.Decimal.ROUND_HALF_UP)
+      .toString(),
     sourceId: `${item.id}:${component.id}`,
   }));
   for (const selection of item.modifierSelections || []) {
@@ -130,7 +155,10 @@ function recipeIngredientRequirements(item: {
       if (typeof delta.productId !== "string" || !Number.isFinite(Number(delta.quantity))) continue;
       requirements.push({
         productId: delta.productId,
-        quantity: Number(delta.quantity) * item.quantity,
+        quantity: quantityDecimal(delta.quantity as string)
+          .mul(storedItemBaseQuantity(item))
+          .toDecimalPlaces(QUANTITY_SCALE, Prisma.Decimal.ROUND_HALF_UP)
+          .toString(),
         sourceId: `${item.id}:modifier:${selection.id}:${delta.productId}`,
       });
     }
@@ -150,6 +178,7 @@ const allowedStatusTransitions: Record<string, string[]> = {
 function fefoEligibleBatches<T extends {
   id: string;
   quantity: number;
+  baseQuantity?: unknown;
   reservedQuantity: number;
   unitCost: number;
   receivedAt: Date;
@@ -199,52 +228,58 @@ async function reserveOrderInventory(
       include: { lots: { where: { status: "ACTIVE" } } },
     }));
 
-    let remaining = item.quantity;
-    const allocations: Array<{ inventoryBatchId: string; quantity: number; unitCost: number }> = [];
+    let remaining = storedItemBaseQuantity(item);
+    const allocations: Array<{ inventoryBatchId: string; quantity: number; baseQuantity: string; unitCost: number }> = [];
 
     for (const batch of batches) {
-      if (remaining <= 0) break;
+      if (!remaining.greaterThan("0.0005")) break;
 
-      const available = batch.quantity - batch.reservedQuantity;
-      const take = Math.min(available, remaining);
+      const available = quantityDecimal(
+        batch.baseQuantity == null ? batch.quantity : String(batch.baseQuantity),
+      ).minus(batch.reservedQuantity);
+      const take = Prisma.Decimal.min(available, remaining);
 
-      if (take <= 0) continue;
+      if (!take.greaterThan(0)) continue;
 
       await tx.inventoryBatch.update({
         where: { id: batch.id },
-        data: { reservedQuantity: batch.reservedQuantity + take },
+        data: { reservedQuantity: batch.reservedQuantity + compatibilityQuantity(take) },
       });
 
       allocations.push({
         inventoryBatchId: batch.id,
-        quantity: take,
+        quantity: compatibilityQuantity(take),
+        baseQuantity: take.toString(),
         unitCost: batch.unitCost,
       });
 
-      remaining -= take;
+      remaining = remaining.minus(take);
     }
 
-    if (remaining > 0) {
+    if (remaining.greaterThan("0.0005")) {
       throw badRequest(
-        `${item.productName}${item.variantName ? ` / ${item.variantName}` : ""} is short by ${remaining}.`,
+        `${item.productName}${item.variantName ? ` / ${item.variantName}` : ""} is short by ${remaining.toString()}.`,
       );
     }
 
     const totalCost = allocations.reduce(
-      (sum, allocation) => sum + allocation.quantity * allocation.unitCost,
-      0,
+      (sum, allocation) => sum.plus(quantityDecimal(allocation.baseQuantity).mul(allocation.unitCost)),
+      new Prisma.Decimal(0),
     );
+    const itemBaseQuantity = storedItemBaseQuantity(item);
 
     await tx.orderItem.update({
       where: { id: item.id },
       data: {
-        unitCost: item.quantity > 0 ? Math.round(totalCost / item.quantity) : item.unitCost,
+        unitCost: itemBaseQuantity.greaterThan(0)
+          ? totalCost.div(itemBaseQuantity).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toNumber()
+          : item.unitCost,
         allocations: { create: allocations },
       },
     });
     await setInventoryReservation(tx, {
       shopId, productId: item.productId, variantId: item.variantId,
-      sourceType: "OrderItem", sourceId: item.id, quantity: item.quantity,
+      sourceType: "OrderItem", sourceId: item.id, quantity: itemBaseQuantity.toString(),
     });
   }
 
@@ -442,9 +477,26 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
         if (selectedModifierIds.length && !product.recipe) {
           throw badRequest("Modifiers are only supported for recipe menu items.");
         }
+        const productUnit = item.unitId
+          ? product.units.find((entry) => entry.unitId === item.unitId && entry.canSell)
+          : product.units.find((entry) => entry.isBase);
+        if (item.unitId && !productUnit) throw badRequest("Selling unit is not enabled for this product.");
+        const rawEnteredQuantity = new Prisma.Decimal(item.quantity);
+        const enteredQuantity = quantityDecimal(rawEnteredQuantity);
+        const unitPrecision = productUnit?.unit.precision ?? product.quantityPrecision;
+        if (rawEnteredQuantity.decimalPlaces() > unitPrecision) {
+          throw badRequest(`This selling unit accepts at most ${unitPrecision} decimal places.`);
+        }
+        const conversionFactor = new Prisma.Decimal(productUnit?.conversionFactor ?? 1);
+        const baseQuantity = enteredQuantity
+          .mul(conversionFactor)
+          .toDecimalPlaces(QUANTITY_SCALE, Prisma.Decimal.ROUND_HALF_UP);
+        if (productUnit?.minimumOrderQty && enteredQuantity.lessThan(productUnit.minimumOrderQty)) {
+          throw badRequest(`Minimum order quantity is ${productUnit.minimumOrderQty} ${productUnit.unit.symbol}.`);
+        }
         if (product.trackingMode === "SERIAL") {
-          if (item.serialIds?.length !== item.quantity) {
-            throw badRequest(`${product.name} requires one selected serial for every sold unit.`);
+          if (!baseQuantity.isInteger() || item.serialIds?.length !== baseQuantity.toNumber()) {
+            throw badRequest(`${product.name} requires one selected serial for every sold base unit.`);
           }
           const serialCount = await tx.inventorySerial.count({
             where: {
@@ -452,25 +504,9 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
               id: { in: item.serialIds }, status: "IN_STOCK",
             },
           });
-          if (serialCount !== item.quantity) throw badRequest("A selected serial is unavailable or belongs to another product.");
+          if (serialCount !== baseQuantity.toNumber()) throw badRequest("A selected serial is unavailable or belongs to another product.");
         } else if (item.serialIds?.length) {
           throw badRequest("Serial selection is only supported for serial-tracked products.");
-        }
-
-        const productUnit = item.unitId
-          ? product.units.find((entry) => entry.unitId === item.unitId && entry.canSell)
-          : product.units.find((entry) => entry.isBase);
-        if (item.unitId && !productUnit) throw badRequest("Selling unit is not enabled for this product.");
-        if (productUnit?.unit.precision === 0 && !Number.isInteger(item.quantity)) {
-          throw badRequest("This selling unit does not accept fractional quantity.");
-        }
-        const conversionFactor = Number(productUnit?.conversionFactor ?? 1);
-        const baseQuantity = item.quantity * conversionFactor;
-        if (productUnit?.minimumOrderQty && item.quantity < Number(productUnit.minimumOrderQty)) {
-          throw badRequest(`Minimum order quantity is ${productUnit.minimumOrderQty} ${productUnit.unit.symbol}.`);
-        }
-        if (!Number.isInteger(baseQuantity)) {
-          throw badRequest("Fractional base quantities require the ledger-only sales contract, which is not enabled for this legacy-compatible order.");
         }
         let lotOverride = null;
         if (item.lotId) {
@@ -492,7 +528,8 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
             throw badRequest("Selected lot is unavailable, expired, or belongs to another product.");
           }
           const batchAvailable = lotOverride.inventoryBatch.quantity - lotOverride.inventoryBatch.reservedQuantity;
-          if (Number(lotOverride.quantity) < baseQuantity || batchAvailable < baseQuantity) {
+          if (quantityDecimal(lotOverride.quantity).lessThan(baseQuantity) ||
+              quantityDecimal(batchAvailable).lessThan(baseQuantity)) {
             throw badRequest("Selected lot does not have enough available quantity.");
           }
         } else if (item.lotOverrideReason) {
@@ -503,7 +540,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           : null;
         const eligibleTiers = product.priceTiers
           .filter((tier) =>
-            Number(tier.minimumQuantity) <= baseQuantity &&
+            quantityDecimal(tier.minimumQuantity).lessThanOrEqualTo(baseQuantity) &&
             (!tier.variantId || tier.variantId === variant?.id) &&
             (!tier.productUnitId || tier.productUnitId === productUnit?.id) &&
             (!tier.priceGroupId || tier.priceGroupId === customer?.priceGroupId),
@@ -525,7 +562,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           product,
           variant,
           quantity: baseQuantity,
-          enteredQuantity: item.quantity,
+          enteredQuantity,
           conversionFactor,
           productUnit,
           appliedTier,
@@ -536,7 +573,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           lotOverride,
           lotOverrideReason: item.lotOverrideReason,
           selectedModifiers,
-          lineTotal: lineTotal(item.quantity, unitPrice, discount, item.deductionType),
+          lineTotal: lineTotal(enteredQuantity, unitPrice, discount, item.deductionType),
         });
       }
 
@@ -577,45 +614,47 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
             : [];
 
         let remaining = prepared.quantity;
-        const allocations: Array<{ inventoryBatchId: string; quantity: number; unitCost: number }> =
+        const allocations: Array<{ inventoryBatchId: string; quantity: number; baseQuantity: string; unitCost: number }> =
           [];
 
         for (const batch of batches) {
-          if (remaining <= 0) break;
+          if (!remaining.greaterThan("0.0005")) break;
 
-          const available = batch.quantity - batch.reservedQuantity;
-          const take = Math.min(available, remaining);
+          const available = quantityDecimal(batch.baseQuantity ?? batch.quantity)
+            .minus(batch.reservedQuantity);
+          const take = Prisma.Decimal.min(available, remaining);
 
-          if (take <= 0) continue;
+          if (!take.greaterThan(0)) continue;
 
           await tx.inventoryBatch.update({
             where: { id: batch.id },
-            data: { reservedQuantity: batch.reservedQuantity + take },
+            data: { reservedQuantity: batch.reservedQuantity + compatibilityQuantity(take) },
           });
 
           allocations.push({
             inventoryBatchId: batch.id,
-            quantity: take,
+            quantity: compatibilityQuantity(take),
+            baseQuantity: take.toString(),
             unitCost: batch.unitCost,
           });
 
-          remaining -= take;
+          remaining = remaining.minus(take);
         }
 
-        if (input.fulfillmentStatus === "reserved" && !prepared.product.recipe && remaining > 0) {
+        if (input.fulfillmentStatus === "reserved" && !prepared.product.recipe && remaining.greaterThan("0.0005")) {
           throw badRequest(
-            `${prepared.product.name}${prepared.variant ? ` / ${prepared.variant.name}` : ""} is short by ${remaining}.`,
+            `${prepared.product.name}${prepared.variant ? ` / ${prepared.variant.name}` : ""} is short by ${remaining.toString()}.`,
           );
         }
 
         const totalCost = allocations.reduce(
-          (sum, allocation) => sum + allocation.quantity * allocation.unitCost,
-          0,
+          (sum, allocation) => sum.plus(quantityDecimal(allocation.baseQuantity).mul(allocation.unitCost)),
+          new Prisma.Decimal(0),
         );
         const fallbackCost = prepared.variant?.cost ?? prepared.product.cost ?? 0;
         const unitCost =
-          prepared.quantity > 0 && allocations.length > 0
-            ? Math.round(totalCost / prepared.quantity)
+          prepared.quantity.greaterThan(0) && allocations.length > 0
+            ? totalCost.div(prepared.quantity).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toNumber()
             : fallbackCost;
 
         const createdItem = await tx.orderItem.create({
@@ -623,10 +662,10 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
             orderId: createdOrder.id,
             productId: prepared.product.id,
             productName: prepared.product.name,
-            quantity: prepared.quantity,
-            enteredQuantity: String(prepared.enteredQuantity),
-            conversionFactor: String(prepared.conversionFactor),
-            baseQuantity: String(prepared.quantity),
+            quantity: compatibilityQuantity(prepared.quantity),
+            enteredQuantity: prepared.enteredQuantity.toString(),
+            conversionFactor: prepared.conversionFactor.toString(),
+            baseQuantity: prepared.quantity.toString(),
             ...(prepared.productUnit ? { unitId: prepared.productUnit.unitId } : {}),
             ...(prepared.appliedTier ? {
               appliedTierId: prepared.appliedTier.id,
@@ -681,7 +720,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
               orderId: createdOrder.id, lotId: prepared.lotOverride.id,
               lotNumber: prepared.lotOverride.lotNumber,
               reason: prepared.lotOverrideReason,
-              quantity: prepared.quantity,
+              quantity: prepared.quantity.toString(),
             },
           });
         }
@@ -689,7 +728,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           await setInventoryReservation(tx, {
             shopId, productId: prepared.product.id,
             ...(prepared.variant?.id ? { variantId: prepared.variant.id } : {}),
-            sourceType: "OrderItem", sourceId: createdItem.id, quantity: prepared.quantity,
+            sourceType: "OrderItem", sourceId: createdItem.id, quantity: prepared.quantity.toString(),
           });
         }
       }
@@ -849,7 +888,8 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
           }
           await setInventoryReservation(tx, {
             shopId, productId: item.productId, variantId: item.variantId,
-            sourceType: "OrderItem", sourceId: item.id, quantity: item.quantity, release: true,
+            sourceType: "OrderItem", sourceId: item.id,
+            quantity: storedItemBaseQuantity(item).toString(), release: true,
           });
           for (const allocation of item.allocations) {
             const lot = await tx.inventoryLot.findFirst({
@@ -857,17 +897,22 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
               orderBy: [{ expiresAt: "asc" }, { receivedAt: "asc" }],
             });
             if (lot) {
-              const remainingLot = Number(lot.quantity) - allocation.quantity;
-              if (remainingLot < 0) throw badRequest("Lot balance is lower than the reserved sale allocation.");
+              const allocationQuantity = storedAllocationBaseQuantity(allocation);
+              const remainingLot = quantityDecimal(lot.quantity).minus(allocationQuantity);
+              if (remainingLot.isNegative()) throw badRequest("Lot balance is lower than the reserved sale allocation.");
               await tx.inventoryLot.update({
                 where: { id: lot.id },
-                data: { quantity: String(remainingLot), ...(remainingLot === 0 ? { status: "DEPLETED" } : {}) },
+                data: {
+                  quantity: remainingLot.toString(),
+                  ...(remainingLot.isZero() ? { status: "DEPLETED" } : {}),
+                },
               });
             }
             await recordInventoryMovement(tx, {
               shopId, productId: item.productId, variantId: item.variantId,
               inventoryBatchId: allocation.inventoryBatchId,
-              type: "SALE", direction: "OUT", quantity: allocation.quantity,
+              type: "SALE", direction: "OUT",
+              quantity: storedAllocationBaseQuantity(allocation).toString(),
               unitCost: allocation.unitCost, sourceType: "OrderItemAllocation", sourceId: allocation.id,
               idempotencyKey: request.header("Idempotency-Key")
                 ? `${request.header("Idempotency-Key")}:sale:${allocation.id}`
@@ -953,7 +998,10 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
           await tx.inventoryBatch.update({
             where: { id: batch.id },
             data: {
-              reservedQuantity: Math.max(0, batch.reservedQuantity - allocation.quantity),
+              reservedQuantity: Math.max(
+                0,
+                batch.reservedQuantity - compatibilityQuantity(storedAllocationBaseQuantity(allocation)),
+              ),
             },
           });
         }
@@ -965,7 +1013,8 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
         }
         await setInventoryReservation(tx, {
           shopId, productId: item.productId, variantId: item.variantId,
-          sourceType: "OrderItem", sourceId: item.id, quantity: item.quantity, release: true,
+          sourceType: "OrderItem", sourceId: item.id,
+          quantity: storedItemBaseQuantity(item).toString(), release: true,
         });
       }
 
@@ -1036,12 +1085,16 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
       for (const requested of input.items) {
         const item = order.items.find((entry) => entry.id === requested.orderItemId);
         if (!item) throw notFound("Order item not found.");
-        const alreadyReturned = item.returns.reduce((sum, entry) => sum + Number(entry.quantity), 0);
-        if (alreadyReturned + requested.quantity > item.quantity) {
+        const requestedQuantity = quantityDecimal(requested.quantity);
+        const alreadyReturned = item.returns.reduce(
+          (sum, entry) => sum.plus(quantityDecimal(entry.quantity)),
+          new Prisma.Decimal(0),
+        );
+        if (alreadyReturned.plus(requestedQuantity).greaterThan(storedItemBaseQuantity(item))) {
           throw badRequest(`Return quantity exceeds sold quantity for ${item.productName}.`);
         }
         if (item.product.trackingMode === "SERIAL") {
-          if (!Number.isInteger(requested.quantity) || requested.serialIds?.length !== requested.quantity) {
+          if (!requestedQuantity.isInteger() || requested.serialIds?.length !== requestedQuantity.toNumber()) {
             throw badRequest(`${item.productName} requires the exact sold serial for every returned unit.`);
           }
           const soldSerialIds = new Set(
@@ -1060,7 +1113,7 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
           data: {
             shopId, orderId, orderItemId: item.id, productId: item.productId,
             ...(item.variantId ? { variantId: item.variantId } : {}),
-            quantity: String(requested.quantity), condition: requested.condition, reason: requested.reason,
+            quantity: requestedQuantity.toString(), condition: requested.condition, reason: requested.reason,
             ...(requestKey ? { idempotencyKey: `${requestKey}:${item.id}` } : {}),
           },
         });
@@ -1073,22 +1126,27 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
           });
           locationId = quarantine.id;
         } else {
-          let remaining = requested.quantity;
+          let remaining = requestedQuantity;
           for (const allocation of item.allocations) {
-            if (remaining <= 0) break;
+            if (!remaining.greaterThan("0.0005")) break;
             const batch = await tx.inventoryBatch.findUnique({ where: { id: allocation.inventoryBatchId } });
             if (!batch) continue;
-            const restore = Math.min(remaining, allocation.quantity);
+            const restore = Prisma.Decimal.min(remaining, storedAllocationBaseQuantity(allocation));
             await tx.inventoryBatch.update({
               where: { id: batch.id },
               // Legacy batches encode completed allocations in reservedQuantity.
               // A sellable return releases that sold allocation; the forward ledger
               // records the physical CUSTOMER_RETURN separately below.
-              data: { reservedQuantity: Math.max(0, batch.reservedQuantity - restore) },
+              data: {
+                reservedQuantity: Math.max(
+                  0,
+                  batch.reservedQuantity - compatibilityQuantity(restore),
+                ),
+              },
             });
-            remaining -= restore;
+            remaining = remaining.minus(restore);
           }
-          if (remaining > 0) {
+          if (remaining.greaterThan("0.0005")) {
             throw badRequest(`Original inventory allocation is incomplete for ${item.productName}.`);
           }
         }
@@ -1107,7 +1165,7 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
         }
         await recordInventoryMovement(tx, {
           shopId, productId: item.productId, variantId: item.variantId,
-          type: "CUSTOMER_RETURN", direction: "IN", quantity: requested.quantity,
+          type: "CUSTOMER_RETURN", direction: "IN", quantity: requestedQuantity.toString(),
           unitCost: item.unitCost, sourceType: "CustomerReturn", sourceId: customerReturn.id,
           idempotencyKey: `${String(request.header("Idempotency-Key") || `customer.return:${customerReturn.id}`)}:${item.id}`,
           reason: `${requested.condition}: ${requested.reason}`,
@@ -1117,7 +1175,7 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
           shopId, actorId: authUser.id, action: "inventory.customer_return",
           entity: "CustomerReturn", entityId: customerReturn.id,
           metadata: {
-            orderId, orderItemId: item.id, quantity: requested.quantity,
+            orderId, orderItemId: item.id, quantity: requestedQuantity.toString(),
             condition: requested.condition, serialIds: requested.serialIds ?? [],
             financialRefundCreated: false,
           },

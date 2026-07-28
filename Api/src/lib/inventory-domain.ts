@@ -111,7 +111,7 @@ export async function recordInventoryMovement(tx: Tx, input: MovementInput) {
 
 export async function setInventoryReservation(tx: Tx, input: {
   shopId: string; productId: string; variantId?: string | null;
-  sourceType: string; sourceId: string; quantity: number; release?: boolean;
+  sourceType: string; sourceId: string; quantity: number | string | Prisma.Decimal; release?: boolean;
 }) {
   const shop = await tx.shop.findUniqueOrThrow({ where: { id: input.shopId }, select: { ledgerEnabled: true } });
   if (!shop.ledgerEnabled) return null;

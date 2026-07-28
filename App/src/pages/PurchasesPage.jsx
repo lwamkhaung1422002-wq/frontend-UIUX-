@@ -19,7 +19,7 @@ import {
 import { formatDate, formatKs, getToday } from '../utils/storage.js'
 import useSessionState from '../hooks/useSessionState.js'
 
-const initialPurchase = { supplierId: '', productId: '', variantId: '', quantity: 1, unitCost: 0, deliveryCost: 0, notes: '' }
+const initialPurchase = { supplierId: '', productId: '', variantId: '', unitId: '', quantity: 1, unitCost: 0, deliveryCost: 0, notes: '' }
 
 export default function PurchasesPage({ refresh, requireAuth, navigate }) {
   const { data } = useData()
@@ -43,6 +43,13 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
     payable: purchases.reduce((sum, item) => sum + Math.max(0, Number(item.total || 0) - Number(item.paidAmount || 0)), 0),
   }), [purchases])
   const methods = (data.catalogSettings?.paymentMethods || []).filter((method) => method.active && method.type !== 'cod')
+  const selectedProduct = (data.products || []).find((product) => product.id === form.productId)
+  const purchaseUnits = (selectedProduct?.units || []).filter((entry) => entry.canPurchase !== false)
+  const selectedPurchaseUnit = purchaseUnits.find((entry) => entry.unitId === form.unitId) ||
+    purchaseUnits.find((entry) => entry.isBase) || purchaseUnits[0]
+  const quantityStep = selectedPurchaseUnit?.unit?.precision > 0
+    ? 10 ** -selectedPurchaseUnit.unit.precision
+    : 1
 
   const run = async (operation, successMessage, close = true) => {
     if (requireAuth?.()) return
@@ -62,7 +69,13 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
   const create = () => run(async () => {
     await createPurchaseDocument(user.uid, {
       supplierId: form.supplierId, deliveryCost: Number(form.deliveryCost), notes: form.notes,
-      items: [{ productId: form.productId, ...(form.variantId ? { variantId: form.variantId } : {}), quantity: Number(form.quantity), unitCost: Number(form.unitCost) }],
+      items: [{
+        productId: form.productId,
+        ...(form.variantId ? { variantId: form.variantId } : {}),
+        ...(selectedPurchaseUnit?.unitId ? { unitId: selectedPurchaseUnit.unitId } : {}),
+        quantity: Number(form.quantity),
+        unitCost: Number(form.unitCost),
+      }],
     })
     setCreateOpen(false)
     setForm(initialPurchase)
@@ -70,14 +83,22 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
 
   const openReceive = (purchase) => setWorkflow({
     type: 'receive', purchase, review: false, receivedAt: getToday(), note: '', idempotencyKey: crypto.randomUUID(),
-    items: purchase.items.filter((item) => item.receivedQuantity < item.quantity).map((item) => ({
-      id: item.id, name: item.productName, selected: true, remaining: item.quantity - item.receivedQuantity,
-      quantity: item.quantity - item.receivedQuantity,
+    items: purchase.items.filter((item) =>
+      Number(item.receivedBaseQuantity ?? item.receivedQuantity) < Number(item.baseQuantity ?? item.quantity)
+    ).map((item) => {
+      const factor = Number(item.conversionFactor || 1)
+      const remainingBase = Number(item.baseQuantity ?? item.quantity) - Number(item.receivedBaseQuantity ?? item.receivedQuantity)
+      const remaining = remainingBase / factor
+      const precision = item.product?.units?.find((entry) => entry.unitId === item.unitId)?.unit?.precision ?? 3
+      return {
+      id: item.id, name: item.productName, selected: true, remaining,
+      quantity: remaining,
+      precision,
       trackingMode: item.product?.trackingMode || 'NONE',
       requiresExpiry: item.product?.capabilities?.['inventory.expiry'] === true,
       locationId: data.inventoryLocations?.find((location) => location.type === 'SELLABLE' && location.isActive !== false)?.id || data.inventoryLocations?.[0]?.id || '',
       lotNumber: '', expiresAt: '', serials: '',
-    })),
+    }}),
   })
   const openPayment = (purchase) => setWorkflow({
     type: 'payment', purchase, review: false, amount: purchase.total - purchase.paidAmount,
@@ -86,8 +107,9 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
   const openReturn = (purchase) => {
     const receipts = (purchase.receipts || []).map((receipt) => {
       const item = purchase.items.find((line) => line.id === receipt.purchaseItemId)
-      const returned = (purchase.returns || []).filter((entry) => entry.inventoryBatchId === receipt.inventoryBatchId).reduce((sum, entry) => sum + Number(entry.quantity), 0)
-      return { ...receipt, label: `${item?.productName || 'Product'} · ${receipt.quantity - returned} available`, available: receipt.quantity - returned, unitCost: item?.unitCost || 0 }
+      const returned = (purchase.returns || []).filter((entry) => entry.inventoryBatchId === receipt.inventoryBatchId).reduce((sum, entry) => sum + Number(entry.baseQuantity ?? entry.quantity), 0)
+      const available = Number(receipt.baseQuantity ?? receipt.quantity) - returned
+      return { ...receipt, label: `${item?.productName || 'Product'} · ${available} base units available`, available, unitCost: receipt.inventoryBatch?.unitCost ?? item?.unitCost ?? 0 }
     }).filter((receipt) => receipt.available > 0)
     setWorkflow({ type: 'return', purchase, review: false, receipts, receiptId: receipts[0]?.id || '', quantity: 1, reason: '', returnedAt: getToday() })
   }
@@ -180,13 +202,21 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
       <DialogTitle>New purchase order</DialogTitle>
       <DialogContent className="dialog-form">
         <TextField select label="Supplier" value={form.supplierId} onChange={(event) => setForm((current) => ({ ...current, supplierId: event.target.value }))}>{(data.suppliers || []).filter((item) => item.isActive).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField>
-        <TextField select label="Product" value={form.productId} onChange={(event) => setForm((current) => ({ ...current, productId: event.target.value, variantId: '' }))}>{(data.products || []).filter((item) => item.isActive !== false).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField>
-        <TextField type="number" label="Quantity" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} />
+        <TextField select label="Product" value={form.productId} onChange={(event) => {
+          const product = (data.products || []).find((item) => item.id === event.target.value)
+          const unit = (product?.units || []).find((entry) => entry.isBase && entry.canPurchase !== false) ||
+            (product?.units || []).find((entry) => entry.canPurchase !== false)
+          setForm((current) => ({ ...current, productId: event.target.value, variantId: '', unitId: unit?.unitId || '' }))
+        }}>{(data.products || []).filter((item) => item.isActive !== false).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField>
+        {purchaseUnits.length ? <TextField select label="Purchase unit" value={selectedPurchaseUnit?.unitId || ''} onChange={(event) => setForm((current) => ({ ...current, unitId: event.target.value }))}>
+          {purchaseUnits.map((entry) => <MenuItem key={entry.unitId} value={entry.unitId}>{entry.unit?.name || entry.unit?.symbol || 'Unit'} × {Number(entry.conversionFactor || 1)} base</MenuItem>)}
+        </TextField> : null}
+        <TextField type="number" label="Quantity" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: quantityStep, step: quantityStep } }} />
         <TextField type="number" label="Unit cost" value={form.unitCost} onChange={(event) => setForm((current) => ({ ...current, unitCost: event.target.value }))} />
         <TextField type="number" label="Delivery cost" value={form.deliveryCost} onChange={(event) => setForm((current) => ({ ...current, deliveryCost: event.target.value }))} />
         <TextField label="Notes" value={form.notes} multiline onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} />
       </DialogContent>
-      <DialogActions><Button onClick={() => setCreateOpen(false)}>Cancel</Button><Button variant="contained" disabled={busy || !form.supplierId || !form.productId || Number(form.quantity) < 1} onClick={create}>Create draft</Button></DialogActions>
+      <DialogActions><Button onClick={() => setCreateOpen(false)}>Cancel</Button><Button variant="contained" disabled={busy || !form.supplierId || !form.productId || Number(form.quantity) <= 0} onClick={create}>Create draft</Button></DialogActions>
     </Dialog>
 
     <Dialog open={Boolean(workflow)} onClose={() => !busy && setWorkflow(null)} maxWidth="sm" fullWidth fullScreen={fullScreen}>
@@ -197,7 +227,7 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
         {!workflow?.review && workflow?.type === 'receive' ? <>
           {workflow.items.map((item, index) => <Box key={item.id} className="purchase-line">
             <FormControlLabel control={<Checkbox checked={item.selected} onChange={(event) => setWorkflow((current) => ({ ...current, items: current.items.map((line, lineIndex) => lineIndex === index ? { ...line, selected: event.target.checked } : line) }))} />} label={`${item.name} (${item.remaining} remaining)`} />
-            <TextField size="small" type="number" label="Quantity" value={item.quantity} disabled={!item.selected} slotProps={{ htmlInput: { min: 1, max: item.remaining } }} onChange={(event) => setWorkflow((current) => ({ ...current, items: current.items.map((line, lineIndex) => lineIndex === index ? { ...line, quantity: event.target.value } : line) }))} />
+            <TextField size="small" type="number" label="Quantity" value={item.quantity} disabled={!item.selected} slotProps={{ htmlInput: { min: 10 ** -item.precision, step: 10 ** -item.precision, max: item.remaining } }} onChange={(event) => setWorkflow((current) => ({ ...current, items: current.items.map((line, lineIndex) => lineIndex === index ? { ...line, quantity: event.target.value } : line) }))} />
             {item.selected ? <Box sx={{ display: 'grid', gap: 1, width: '100%' }}>
               <TextField select size="small" label="Receiving location" value={item.locationId} onChange={(event) => setWorkflow((current) => ({ ...current, items: current.items.map((line, lineIndex) => lineIndex === index ? { ...line, locationId: event.target.value } : line) }))}>
                 {(data.inventoryLocations || []).filter((location) => location.isActive !== false).map((location) => <MenuItem key={location.id} value={location.id}>{location.name} · {location.type}</MenuItem>)}
@@ -221,7 +251,7 @@ export default function PurchasesPage({ refresh, requireAuth, navigate }) {
         </> : null}
         {!workflow?.review && workflow?.type === 'return' ? <>
           <TextField select label="Receipt and product" value={workflow.receiptId} onChange={(event) => setWorkflow((current) => ({ ...current, receiptId: event.target.value, quantity: 1 }))}>{workflow.receipts.map((receipt) => <MenuItem key={receipt.id} value={receipt.id}>{receipt.label}</MenuItem>)}</TextField>
-          <TextField type="number" label="Return quantity" value={workflow.quantity} helperText={selectedReceipt ? `Maximum ${selectedReceipt.available}` : ''} onChange={(event) => setWorkflow((current) => ({ ...current, quantity: event.target.value }))} />
+          <TextField type="number" label="Return quantity (base unit)" value={workflow.quantity} helperText={selectedReceipt ? `Maximum ${selectedReceipt.available}` : ''} slotProps={{ htmlInput: { min: 0.001, step: 0.001, max: selectedReceipt?.available } }} onChange={(event) => setWorkflow((current) => ({ ...current, quantity: event.target.value }))} />
           <TextField type="date" label="Return date" value={workflow.returnedAt} slotProps={{ inputLabel: { shrink: true } }} onChange={(event) => setWorkflow((current) => ({ ...current, returnedAt: event.target.value }))} />
           <TextField required label="Reason" value={workflow.reason} multiline onChange={(event) => setWorkflow((current) => ({ ...current, reason: event.target.value }))} />
         </> : null}

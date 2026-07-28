@@ -245,7 +245,7 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
       return
     }
     const item = workflow.order.items.find((entry) => entry.id === workflow.orderItemId)
-    if (!item || Number(workflow.quantity) > Number(item.quantity)) {
+    if (!item || Number(workflow.quantity) > Number(item.baseQuantity ?? item.quantity)) {
       notify('Return quantity cannot exceed the sold quantity.', 'warning')
       return
     }
@@ -535,11 +535,15 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
                 }))}
               >
                 {(returnWorkflow?.order.items || []).map((item) => (
-                  <MenuItem key={item.id} value={item.id}>{item.productName || item.type} · sold {item.quantity}</MenuItem>
+                  <MenuItem key={item.id} value={item.id}>{item.productName || item.type} · sold {Number(item.baseQuantity ?? item.quantity)} base units</MenuItem>
                 ))}
               </Select>
             </FormControl>
-            <TextField type="number" label="Return quantity" value={returnWorkflow?.quantity || 1} onChange={(event) => setReturnWorkflow((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1, step: 1 } }} />
+            <TextField type="number" label="Return quantity (base unit)" value={returnWorkflow?.quantity || 1} onChange={(event) => setReturnWorkflow((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: {
+              min: returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? 1 : 0.001,
+              step: returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? 1 : 0.001,
+              max: Number(returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.baseQuantity ?? returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.quantity ?? 0),
+            } }} />
             {returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? (
               <FormControl fullWidth>
                 <InputLabel id="return-serials-label">Returned serials / IMEIs</InputLabel>

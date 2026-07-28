@@ -1,6 +1,8 @@
 /* global process */
 import { expect, test } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 const stores = [
   ['General Store Demo', 'General Store'],
@@ -24,6 +26,8 @@ test('demo owner can reach every isolated template store through the real UI', a
   await page.getByRole('textbox', { name: 'Password' }).fill(process.env.E2E_DEMO_PASSWORD)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible({ timeout: 20_000 })
+  const evidenceDirectory = join(process.cwd(), 'uat-evidence', 'screenshots')
+  mkdirSync(evidenceDirectory, { recursive: true })
 
   for (const [storeName, templateLabel] of stores) {
     const switcher = page.getByRole('button', { name: /Switch store/ })
@@ -41,5 +45,9 @@ test('demo owner can reach every isolated template store through the real UI', a
       .analyze()
     const serious = results.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact))
     expect(serious, `${storeName} must have zero serious/critical accessibility violations`).toEqual([])
+    await page.screenshot({
+      path: join(evidenceDirectory, `${storeName.toLowerCase().replaceAll(' ', '-')}.png`),
+      fullPage: true,
+    })
   }
 })
