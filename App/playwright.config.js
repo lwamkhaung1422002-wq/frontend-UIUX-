@@ -8,7 +8,10 @@ const apiBaseUrl = `http://127.0.0.1:${apiPort}`
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
-  workers: 4,
+  // The Prisma PostgreSQL adapter shares one process-level pool in the API
+  // webServer. Two browser workers keep UAT parallel without allowing several
+  // bcrypt/auth/database flows to starve one another on small CI runners.
+  workers: Number(process.env.PLAYWRIGHT_WORKERS || 2),
   reporter: 'list',
   use: {
     baseURL: webBaseUrl,

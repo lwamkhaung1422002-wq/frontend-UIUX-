@@ -4,7 +4,8 @@ Generated: 2026-07-28 (Asia/Yangon)
 
 ## Tested release
 
-- Commit: `d0268da` (plus this report-only evidence update)
+- Commit: `fa00f4c` (plus this report-only evidence update)
+- GitHub publication: `faceff9` on `General-Store-Managment/main`; application/API/migrations/tests are published
 - Environment: local Windows development/UAT
 - Database: PostgreSQL `online_shop_local_dev`, schema `public`
 - Migration state: `17 migrations found`, schema up to date
@@ -29,6 +30,7 @@ Generated: 2026-07-28 (Asia/Yangon)
 | Eight-store reconciliation | PASS | Eight stores passed; unexplained differences `0` |
 | Serious/critical Axe violations | PASS | `0` on login and authenticated critical workspaces |
 | Staging deployment/smoke | BLOCKED | No staging target or deployment credentials are configured in this workspace |
+| GitHub workflow publication | BLOCKED | OAuth token lacks GitHub `workflow` scope; the two local workflow files are therefore not present in the publication commit |
 | Backup restore drill | PASS | 41 tables and 3,540 rows restored into a freshly migrated isolated database; SHA-256 comparison differences `0` |
 
 ## Demo environment
@@ -82,6 +84,7 @@ Seed data includes template capabilities, units, products/variants, opening inve
 - `PASS` Duplicate receipt/return/completion requests do not duplicate mutations.
 - `PASS` Optimistic version conflicts are rejected.
 - `PASS` New stores and deterministic demos use flagged `LEDGER` reads; decimal on-hand/reserved balances remain canonical in the UI.
+- `PASS` Decimal multi-location transfers create atomic OUT/IN movement pairs; physical counts reconcile through audited optimistic adjustments.
 - `PASS` Expired and modified JWTs are rejected; existing/missing-account login failures use the same safe error.
 - `PASS` Authentication brute-force rate limiting returns `429` after the configured threshold.
 - `PASS` Completed sales are recognized by completion/recognition date.
@@ -119,6 +122,7 @@ Health: GET / and GET /health
 - Decimal inventory receipts were rounded in the legacy UI read path; new stores now read canonical ledger balances and use idempotent, optimistic decimal adjustments.
 - Re-running the deterministic demo under a different environment-controlled email could conflict with its stable owner ID; owner seeding is now idempotent by stable ID.
 - Store switching UAT used the default assertion timeout during full parallel execution; it now waits for the real post-switch data reload while preserving a bounded timeout.
+- Four concurrent browser workers could starve parallel bcrypt/database flows on small runners; the release gate now uses two bounded workers and the full suite passes reliably.
 
 ## Known limitations and production recommendation
 
@@ -126,6 +130,7 @@ Health: GET / and GET /health
 - Staff membership/roles and subscription/billing remain separate future releases.
 - Barcode and full restaurant POS (tables, waiters, dine-in, KDS) remain intentionally excluded.
 - Staging deployment/smoke is not evidenced because no staging target is configured.
+- The source release is on GitHub main, but publishing `.github/workflows/production-gate.yml` and `staging-smoke.yml` still requires a GitHub token with `workflow` scope.
 
 Production recommendation: **NO-GO (external release)** until staging deployment and smoke testing pass.
 Local implementation/UAT recommendation: **PASS** for continued staging preparation; no unexplained inventory differences, high/critical dependency advisories, or serious/critical Axe violations remain.
