@@ -21,6 +21,10 @@ export function errorHandler(
     response.status(403).json({ message: error.message });
     return;
   }
+  if (error instanceof Error && error.name === "ConflictError") {
+    response.status(409).json({ message: error.message });
+    return;
+  }
 
   if (error instanceof ZodError) {
     response.status(400).json({

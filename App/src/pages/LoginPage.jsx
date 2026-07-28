@@ -69,7 +69,7 @@ export default function LoginPage() {
           p: 7,
           color: 'white',
           background:
-            'radial-gradient(circle at 80% 20%, rgba(255,255,255,.22), transparent 22rem), linear-gradient(145deg, #2e1c80, #5b3df5 58%, #8b73ff)',
+            'radial-gradient(circle at 80% 20%, rgba(255,255,255,.22), transparent 22rem), linear-gradient(145deg, #064e3b, #047857 58%, #10b981)',
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -95,8 +95,8 @@ export default function LoginPage() {
           sx={{
             width: '100%',
             maxWidth: 440,
-            borderColor: '#e1daf2',
-            boxShadow: '0 24px 70px rgba(52, 37, 91, 0.10)',
+            borderColor: 'divider',
+            boxShadow: '0 24px 70px rgba(6, 78, 59, 0.12)',
             borderRadius: 4,
           }}
         >

@@ -28,14 +28,23 @@ function dateRange(input: z.infer<typeof querySchema>) {
 }
 
 function isRecognizedSale(order: {
-  paymentStatus: string;
   fulfillmentStatus: string;
 }): boolean {
-  return (
-    order.paymentStatus === "paid" &&
-    order.fulfillmentStatus !== "cancelled" &&
-    order.fulfillmentStatus !== "preorder"
-  );
+  return order.fulfillmentStatus === "completed";
+}
+
+function recognizedAt(order: {
+  completedAt: Date | null;
+  items: Array<{ recognizedAt: Date | null }>;
+}): Date | null {
+  return order.completedAt
+    ?? order.items.map((item) => item.recognizedAt).find((value): value is Date => Boolean(value))
+    ?? null;
+}
+
+function isInRange(value: Date | null, range: ReturnType<typeof dateRange>): boolean {
+  if (!value) return false;
+  return (!range?.gte || value >= range.gte) && (!range?.lte || value <= range.lte);
 }
 
 function parseJsonArray(value: string | null): unknown[] {
@@ -94,15 +103,12 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const orderCreatedAt = dateRange(query);
+    const recognitionRange = dateRange(query);
     const expenseSpentAt = dateRange(query);
 
-    const [orders, payments, expenses, customersCount, productsCount, lowStockBatches] = await Promise.all([
+    const [orders, payments, expenses, customersCount, productsCount, lowStockBatches, purchases, balances] = await Promise.all([
       prisma.order.findMany({
-        where: {
-          shopId,
-          ...(orderCreatedAt ? { createdAt: orderCreatedAt } : {}),
-        },
+        where: { shopId },
         include: {
           items: true,
         },
@@ -123,10 +129,16 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
           variant: true,
         },
       }),
+      prisma.purchase.findMany({ where: { shopId }, include: { payments: true } }),
+      prisma.inventoryBalance.findMany({ where: { shopId }, include: { product: true } }),
     ]);
 
-    const recognizedOrders = orders.filter(isRecognizedSale);
-    const revenue = recognizedOrders.reduce((sum, order) => sum + order.total, 0);
+    const recognizedOrders = orders.filter((order) =>
+      isRecognizedSale(order) && (!recognitionRange || isInRange(recognizedAt(order), recognitionRange)),
+    );
+    const periodPayments = payments.filter((payment) => !recognitionRange || isInRange(payment.paidAt, recognitionRange));
+    const refunds = periodPayments.filter((payment) => payment.type === "refund").reduce((sum, payment) => sum + payment.amount, 0);
+    const revenue = recognizedOrders.reduce((sum, order) => sum + order.total, 0) - refunds;
     const costOfGoods = recognizedOrders.reduce(
       (sum, order) =>
         sum +
@@ -140,8 +152,18 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
     const operatingExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
     const netProfit = grossProfit - operatingExpenses;
     const unpaidTotal = orders
-      .filter((order) => order.paymentStatus === "unpaid" && order.fulfillmentStatus !== "cancelled")
+      .filter((order) => isRecognizedSale(order))
       .reduce((sum, order) => sum + Math.max(0, order.total - paidAmountForOrder(order.id, payments)), 0);
+    const cashReceived = periodPayments
+      .filter((payment) => payment.type === "payment" && payment.scope !== "cod-settlement-void")
+      .reduce((sum, payment) => sum + payment.amount, 0);
+    const purchasePayments = purchases.flatMap((purchase) => purchase.payments)
+      .filter((payment) => !payment.reversedAt && (!recognitionRange || isInRange(payment.paidAt, recognitionRange)))
+      .reduce((sum, payment) => sum + payment.amount, 0);
+    const supplierPayable = purchases.reduce((sum, purchase) => sum + Math.max(0, purchase.total - purchase.paidAmount), 0);
+    const inventoryValuation = balances.reduce((sum, balance) =>
+      sum + Number(balance.onHand) * Number(balance.product.cost ?? 0), 0);
+    const cashBalance = cashReceived - refunds - purchasePayments - operatingExpenses;
 
     const lowStock = lowStockBatches
       .map((batch) => ({
@@ -163,6 +185,13 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
         operatingExpenses,
         netProfit,
         unpaidTotal,
+        customerReceivables: unpaidTotal,
+        supplierPayables: supplierPayable,
+        cashReceived,
+        purchasePayments,
+        refunds,
+        cashBalance,
+        inventoryValuation,
         salesCount: recognizedOrders.length,
         ordersCount: orders.length,
         customersCount,
@@ -183,13 +212,10 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const orderCreatedAt = dateRange(query);
+    const recognitionRange = dateRange(query);
 
     const orders = await prisma.order.findMany({
-      where: {
-        shopId,
-        ...(orderCreatedAt ? { createdAt: orderCreatedAt } : {}),
-      },
+      where: { shopId },
       include: {
         customer: true,
         items: true,
@@ -198,7 +224,9 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
       orderBy: { createdAt: "desc" },
     });
 
-    const rows = orders.map((order) => {
+    const rows = orders
+      .filter((order) => !recognitionRange || isInRange(recognizedAt(order), recognitionRange))
+      .map((order) => {
       const costOfGoods = order.items.reduce(
         (sum, item) => sum + item.unitCost * item.quantity,
         0,
@@ -218,9 +246,10 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
         revenue,
         costOfGoods,
         grossProfit: revenue - costOfGoods,
+        recognizedAt: recognizedAt(order),
         createdAt: order.createdAt,
       };
-    });
+      });
 
     response.status(200).json({ rows });
   } catch (error) {

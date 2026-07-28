@@ -45,7 +45,7 @@ export const orderSchema = z.object({
   discount: numberField,
   deliveryFee: numberField,
   total: numberField,
-  fulfillmentStatus: z.enum(['draft', 'reserved', 'completed', 'cancelled', 'preorder']),
+  fulfillmentStatus: z.enum(['draft', 'new', 'confirmed', 'preparing', 'ready', 'reserved', 'completed', 'cancelled', 'preorder']),
   paymentStatus: z.enum(['unpaid', 'paid', 'refunded']),
   source: z.string().default(''),
   remark: z.string().default(''),
@@ -243,10 +243,5 @@ export function isStockReserved(order) {
 
 export function isRevenueRecognized(order) {
   const normalized = normalizeOrder(order)
-  return (
-    normalized &&
-    normalized.paymentStatus === 'paid' &&
-    normalized.fulfillmentStatus !== 'preorder' &&
-    normalized.fulfillmentStatus !== 'cancelled'
-  )
+  return Boolean(normalized && normalized.fulfillmentStatus === 'completed')
 }

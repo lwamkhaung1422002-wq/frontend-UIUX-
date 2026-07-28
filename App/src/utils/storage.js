@@ -22,8 +22,50 @@ export function getToday() {
   return `${year}-${month}-${day}`
 }
 
+export const defaultStoreFormatPreferences = {
+  currencyCode: 'MMK',
+  locale: 'en-MM',
+  dateFormat: 'yyyy-MM-dd',
+  timeZone: 'Asia/Yangon',
+}
+
+let storeFormatPreferences = { ...defaultStoreFormatPreferences }
+
+export function setStoreFormatPreferences(preferences = {}) {
+  storeFormatPreferences = { ...defaultStoreFormatPreferences, ...preferences }
+}
+
+export function formatMoney(value, preferences = storeFormatPreferences) {
+  const settings = { ...defaultStoreFormatPreferences, ...preferences }
+  if (settings.currencyCode === 'MMK') {
+    return `${new Intl.NumberFormat(settings.locale, { maximumFractionDigits: 0 }).format(Number(value || 0))} Ks`
+  }
+  return new Intl.NumberFormat(settings.locale, {
+    style: 'currency',
+    currency: settings.currencyCode,
+    currencyDisplay: 'symbol',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0))
+}
+
+export function formatDate(value, preferences = storeFormatPreferences) {
+  if (!value) return '—'
+  const settings = { ...defaultStoreFormatPreferences, ...preferences }
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: settings.timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(date).map((part) => [part.type, part.value]),
+  )
+  if (settings.dateFormat === 'dd/MM/yyyy') return `${parts.day}/${parts.month}/${parts.year}`
+  if (settings.dateFormat === 'MM/dd/yyyy') return `${parts.month}/${parts.day}/${parts.year}`
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
 export function formatKs(value) {
-  return `${Number(value || 0).toLocaleString()} Ks`
+  return formatMoney(value)
 }
 
 export function getVariantKey(size, color, type) {

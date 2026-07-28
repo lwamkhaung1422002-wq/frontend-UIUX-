@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Box, CircularProgress, CssBaseline, ThemeProvider, createTheme } from '@mui/material'
-import { HashRouter, useLocation, useNavigate } from 'react-router-dom'
 import AppLayout from './components/AppLayout.jsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
 import { DataProvider, useData } from './contexts/DataContext.jsx'
@@ -41,8 +40,8 @@ const theme = createTheme({
   palette: {
     mode: 'light',
     primary: {
-      main: '#059669',
-      dark: '#047857',
+      main: '#047857',
+      dark: '#065f46',
       light: '#d1fae5',
       contrastText: '#ffffff',
     },
@@ -157,8 +156,8 @@ function LoadingScreen() {
 function AppGate() {
   const { user, loading } = useAuth()
   const [showAuth, setShowAuth] = useState(false)
-  const location = useLocation()
-  const shouldShowAuth = (!user && location.pathname.replace(/^\/+/, '')) || (showAuth && (!user || user.preview))
+  const route = useHashRoute()
+  const shouldShowAuth = (!user && route.replace(/^\/+/, '')) || (showAuth && (!user || user.preview))
 
   if (loading) return <LoadingScreen />
   if (!user || shouldShowAuth) {
@@ -177,19 +176,18 @@ function AppGate() {
 }
 
 function ProtectedApp({ onGetStarted }) {
-  const { user, shop, logout } = useAuth()
+  const { user, shop, logout, selectShop } = useAuth()
   const { data, loading: dataLoading, error: dataError, refresh } = useData()
-  const location = useLocation()
-  const routerNavigate = useNavigate()
-  const candidatePage = location.pathname.replace(/^\/+/, '') || 'home'
+  const route = useHashRoute()
+  const candidatePage = route.replace(/^\/+/, '') || 'home'
   const page = pages[candidatePage] ? candidatePage : 'home'
 
   const navigate = useCallback(
     (nextPage) => {
       if (!pages[nextPage]) return
-      routerNavigate(`/${nextPage}`)
+      window.location.hash = `/${nextPage}`
     },
-    [routerNavigate],
+    [],
   )
   const requireAuth = useCallback(() => {
     if (!user.preview) return false
@@ -236,8 +234,16 @@ function ProtectedApp({ onGetStarted }) {
       preview={Boolean(user.preview)}
       userEmail={user.email}
       shopName={shop?.name || 'Shop Owner'}
+      shops={user.shops || []}
+      shopId={shop?.id}
+      onShopChange={selectShop}
       data={data}
     >
+      {user.preview ? (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Preview mode: changes are not saved. Create an account to manage a live store.
+        </Alert>
+      ) : null}
       {dataError ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           {dataError}
@@ -263,13 +269,22 @@ export default function App() {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <FeedbackProvider>
-          <HashRouter>
-            <AuthProvider>
-              <AppGate />
-            </AuthProvider>
-          </HashRouter>
+          <AuthProvider>
+            <AppGate />
+          </AuthProvider>
         </FeedbackProvider>
       </ThemeProvider>
     </AppErrorBoundary>
   )
+}
+
+function useHashRoute() {
+  const readRoute = () => window.location.hash.replace(/^#/, '') || '/'
+  const [route, setRoute] = useState(readRoute)
+  useEffect(() => {
+    const update = () => setRoute(readRoute())
+    window.addEventListener('hashchange', update)
+    return () => window.removeEventListener('hashchange', update)
+  }, [])
+  return route
 }

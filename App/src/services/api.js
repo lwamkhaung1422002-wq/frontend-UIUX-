@@ -39,7 +39,7 @@ async function parseResponse(response) {
   return data
 }
 
-export async function apiRequest(path, { method = 'GET', body, token = getStoredToken() } = {}) {
+export async function apiRequest(path, { method = 'GET', body, token = getStoredToken(), headers: extraHeaders = {} } = {}) {
   if (!token && path !== '/auth/register' && path !== '/auth/login') {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('auth-required'))
@@ -50,6 +50,7 @@ export async function apiRequest(path, { method = 'GET', body, token = getStored
   const headers = {
     ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extraHeaders,
   }
 
   let response
@@ -71,6 +72,59 @@ export const api = {
   login: (payload) => apiRequest('/auth/login', { method: 'POST', body: payload, token: null }),
   me: () => apiRequest('/auth/me'),
   shops: () => apiRequest('/shops'),
+  storeTemplates: () => apiRequest('/shops/templates'),
+  storeConfiguration: (shopId) => apiRequest(`/shops/${shopId}/configuration`),
+  updateStoreConfiguration: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/configuration`, { method: 'PATCH', body: payload }),
+  units: (shopId) => apiRequest(`/shops/${shopId}/units`),
+  inventoryLocations: (shopId) => apiRequest(`/shops/${shopId}/locations`),
+  createUnit: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/units`, { method: 'POST', body: payload }),
+  inventoryBalances: (shopId, query = 'pageSize=100') =>
+    apiRequest(`/shops/${shopId}/inventory-balances?${query}`),
+  inventoryMovements: (shopId, query = 'pageSize=100') =>
+    apiRequest(`/shops/${shopId}/inventory-movements?${query}`),
+  inventoryLots: (shopId, query = 'pageSize=100') =>
+    apiRequest(`/shops/${shopId}/lots?${query}`),
+  inventorySerials: (shopId, query = 'pageSize=100') =>
+    apiRequest(`/shops/${shopId}/serials?${query}`),
+  dispositionSerial: (shopId, serialId, payload, idempotencyKey) =>
+    apiRequest(`/shops/${shopId}/serials/${serialId}/disposition`, {
+      method: 'POST', body: payload, headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  warranties: (shopId) => apiRequest(`/shops/${shopId}/warranties`),
+  createWarranty: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/warranties`, { method: 'POST', body: payload }),
+  updateWarrantyStatus: (shopId, warrantyId, payload) =>
+    apiRequest(`/shops/${shopId}/warranties/${warrantyId}/status`, { method: 'PATCH', body: payload }),
+  recipes: (shopId) => apiRequest(`/shops/${shopId}/recipes`),
+  replaceRecipe: (shopId, productId, payload) =>
+    apiRequest(`/shops/${shopId}/recipes/${productId}`, { method: 'PUT', body: payload }),
+  priceGroups: (shopId) => apiRequest(`/shops/${shopId}/price-groups`),
+  createPriceGroup: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/price-groups`, { method: 'POST', body: payload }),
+  createPriceTier: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/price-tiers`, { method: 'POST', body: payload }),
+  receiveInventoryOperation: (shopId, payload, idempotencyKey) =>
+    apiRequest(`/shops/${shopId}/inventory-operations/receive`, {
+      method: 'POST',
+      body: payload,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  adjustInventoryOperation: (shopId, payload, idempotencyKey) =>
+    apiRequest(`/shops/${shopId}/inventory-operations/adjust`, {
+      method: 'POST',
+      body: payload,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  transferInventoryOperation: (shopId, payload, idempotencyKey) =>
+    apiRequest(`/shops/${shopId}/inventory-operations/transfer`, {
+      method: 'POST',
+      body: payload,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  createInventoryLocation: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/locations`, { method: 'POST', body: payload }),
   shopSettings: (shopId) => apiRequest(`/shops/${shopId}/settings`),
   updateShopSettings: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/settings`, { method: 'PATCH', body: payload }),
@@ -78,7 +132,7 @@ export const api = {
   categories: (shopId) => apiRequest(`/shops/${shopId}/categories`),
   createCategory: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/categories`, { method: 'POST', body: payload }),
-  products: (shopId) => apiRequest(`/shops/${shopId}/products`),
+  products: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/products?${query}`),
   createProduct: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/products`, { method: 'POST', body: payload }),
   updateProduct: (shopId, productId, payload) =>
@@ -99,26 +153,31 @@ export const api = {
   adjustInventory: (shopId, batchId, payload) =>
     apiRequest(`/shops/${shopId}/inventory/${batchId}/adjustments`, { method: 'POST', body: payload }),
   adjustments: (shopId) => apiRequest(`/shops/${shopId}/inventory-adjustments`),
-  customers: (shopId) => apiRequest(`/shops/${shopId}/customers`),
+  customers: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/customers?${query}`),
   createCustomer: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/customers`, { method: 'POST', body: payload }),
-  suppliers: (shopId) => apiRequest(`/shops/${shopId}/suppliers`),
+  suppliers: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/suppliers?${query}`),
   createSupplier: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/suppliers`, { method: 'POST', body: payload }),
   updateSupplier: (shopId, supplierId, payload) =>
     apiRequest(`/shops/${shopId}/suppliers/${supplierId}`, { method: 'PATCH', body: payload }),
-  purchases: (shopId) => apiRequest(`/shops/${shopId}/purchases`),
+  purchases: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/purchases?${query}`),
   createPurchase: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/purchases`, { method: 'POST', body: payload }),
   sendPurchase: (shopId, purchaseId) =>
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/send`, { method: 'POST', body: {} }),
-  receivePurchase: (shopId, purchaseId, payload) =>
-    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/receive`, { method: 'POST', body: payload }),
+  receivePurchase: (shopId, purchaseId, payload, idempotencyKey) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/receive`, {
+      method: 'POST', body: payload,
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {},
+    }),
   payPurchase: (shopId, purchaseId, payload) =>
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/payments`, { method: 'POST', body: payload }),
+  reversePurchasePayment: (shopId, purchaseId, paymentId, payload) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/payments/${paymentId}/reverse`, { method: 'POST', body: payload }),
   returnPurchase: (shopId, purchaseId, payload) =>
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/returns`, { method: 'POST', body: payload }),
-  orders: (shopId) => apiRequest(`/shops/${shopId}/orders`),
+  orders: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/orders?${query}`),
   createOrder: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/orders`, { method: 'POST', body: payload }),
   completeOrder: (shopId, orderId, fulfillmentStatus) =>
@@ -141,6 +200,12 @@ export const api = {
     apiRequest(`/shops/${shopId}/payments/${paymentId}/void`, { method: 'POST', body: payload }),
   refundPayment: (shopId, orderId, payload) =>
     apiRequest(`/shops/${shopId}/orders/${orderId}/refunds`, { method: 'POST', body: payload }),
+  returnOrderProducts: (shopId, orderId, payload, idempotencyKey) =>
+    apiRequest(`/shops/${shopId}/orders/${orderId}/product-returns`, {
+      method: 'POST',
+      body: payload,
+      headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
   expenses: (shopId) => apiRequest(`/shops/${shopId}/expenses`),
   createExpense: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/expenses`, { method: 'POST', body: payload }),

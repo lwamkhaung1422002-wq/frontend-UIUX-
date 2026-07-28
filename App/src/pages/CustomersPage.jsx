@@ -9,13 +9,14 @@ import SectionCard from '../components/SectionCard.jsx'
 import EmptyState from '../components/EmptyState.jsx'
 import { createCustomerDocument } from '../services/shopApiService.js'
 import { formatKs } from '../utils/storage.js'
+import useSessionState from '../hooks/useSessionState.js'
 
 const blankCustomer = { name: '', phone: '', email: '', address: '', city: '', notes: '' }
 
 export default function CustomersPage({ refresh, requireAuth }) {
   const { data } = useData()
   const { user } = useAuth()
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useSessionState('customers:query', '')
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(blankCustomer)
   const [saving, setSaving] = useState(false)

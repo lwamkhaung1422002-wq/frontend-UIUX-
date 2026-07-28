@@ -9,13 +9,14 @@ import SectionCard from '../components/SectionCard.jsx'
 import EmptyState from '../components/EmptyState.jsx'
 import { createSupplierDocument } from '../services/shopApiService.js'
 import { formatKs } from '../utils/storage.js'
+import useSessionState from '../hooks/useSessionState.js'
 
 const blank = { name: '', contactPerson: '', phone: '', email: '', address: '', notes: '' }
 
 export default function SuppliersPage({ refresh, requireAuth, navigate }) {
   const { data } = useData()
   const { user } = useAuth()
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useSessionState('suppliers:query', '')
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(blank)
   const [saving, setSaving] = useState(false)

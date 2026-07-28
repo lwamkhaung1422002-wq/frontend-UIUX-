@@ -41,6 +41,25 @@ describe('financial summary', () => {
       netProfit: 15000,
     })
   })
+
+  it('recognizes a completed credit sale separately from its unpaid cash balance', () => {
+    const summary = calculateFinancialSummary([{
+      id: 'credit-sale',
+      customer: { name: 'Wholesale customer', phone: '', city: '', address: '' },
+      date: '2026-07-01',
+      items: [{
+        id: 'credit-line', type: 'Carton', size: 'Default', color: '-',
+        quantity: 2, unitPrice: 10000, unitCost: 6000, discount: 0,
+        lineTotal: 20000, allocations: [],
+      }],
+      subtotal: 20000, discount: 0, deliveryFee: 0, total: 20000,
+      fulfillmentStatus: 'completed', paymentStatus: 'unpaid',
+    }], [])
+
+    expect(summary.revenue).toBe(20000)
+    expect(summary.costOfGoods).toBe(12000)
+    expect(summary.grossProfit).toBe(8000)
+  })
 })
 
 describe('payment method balances', () => {

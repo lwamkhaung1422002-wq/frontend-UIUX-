@@ -1,15 +1,26 @@
 import { Router } from "express";
 import { z } from "zod";
 
+import { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
+import { recordInventoryMovement, setInventoryReservation } from "../lib/inventory-domain.js";
 import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
+import { assertCapability } from "../lib/store-capabilities.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
 
 export const ordersRouter = Router();
 
 const paramsSchema = z.object({
   shopId: z.string().min(1),
+});
+const orderListQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  status: z.string().trim().optional(),
+  sort: z.enum(["createdAt", "completedAt", "total"]).default("createdAt"),
+  direction: z.enum(["asc", "desc"]).default("desc"),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().refine((value) => [25, 50, 100].includes(value)).default(25),
 });
 
 const moneySchema = z.coerce.number().int().nonnegative();
@@ -21,6 +32,11 @@ const orderItemSchema = z.object({
   unitPrice: moneySchema.optional(),
   discount: moneySchema.optional(),
   deductionType: z.enum(["discount", "advance-payment"]).default("discount"),
+  serialIds: z.array(z.string().min(1)).optional(),
+  unitId: z.string().min(1).optional(),
+  lotId: z.string().min(1).optional(),
+  lotOverrideReason: z.string().trim().optional(),
+  modifierOptionIds: z.array(z.string().min(1)).default([]),
 });
 
 const embeddedCustomerSchema = z.object({
@@ -36,7 +52,7 @@ const createOrderSchema = z.object({
   customerId: z.string().trim().optional(),
   customer: embeddedCustomerSchema.optional(),
   orderNumber: z.string().trim().optional(),
-  fulfillmentStatus: z.enum(["reserved", "preorder"]).default("reserved"),
+  fulfillmentStatus: z.enum(["new", "confirmed", "preparing", "ready", "reserved", "preorder"]).default("reserved"),
   discount: moneySchema.optional(),
   deliveryFee: moneySchema.optional(),
   source: z.string().trim().optional(),
@@ -45,11 +61,20 @@ const createOrderSchema = z.object({
 });
 
 const updateStatusSchema = z.object({
-  fulfillmentStatus: z.enum(["reserved", "completed"]),
+  fulfillmentStatus: z.enum(["confirmed", "preparing", "ready", "reserved", "completed"]),
 });
 
 const cancelOrderSchema = z.object({
   reason: z.string().trim().optional(),
+});
+const productReturnSchema = z.object({
+  items: z.array(z.object({
+    orderItemId: z.string().min(1),
+    quantity: z.coerce.number().positive(),
+    condition: z.enum(["SELLABLE", "DAMAGED"]),
+    reason: z.string().trim().min(1),
+    serialIds: z.array(z.string().min(1)).optional(),
+  })).min(1),
 });
 
 ordersRouter.use(requireAuth);
@@ -74,6 +99,70 @@ function lineTotal(
 ): number {
   const lineDiscount = deductionType === "discount" ? discount : 0;
   return Math.max(0, quantity * unitPrice - lineDiscount);
+}
+
+type IngredientRequirement = { productId: string; quantity: number; sourceId: string };
+
+function recipeIngredientRequirements(item: {
+  id: string;
+  quantity: number;
+  product: {
+    recipe: null | {
+      id: string;
+      yieldQuantity: unknown;
+      components: Array<{ id: string; ingredientProductId: string; quantity: unknown }>;
+    };
+  };
+  modifierSelections?: Array<{ id: string; ingredientDelta: unknown }>;
+}): IngredientRequirement[] {
+  const recipe = item.product.recipe;
+  if (!recipe) return [];
+  const requirements = recipe.components.map((component) => ({
+    productId: component.ingredientProductId,
+    quantity: Number(component.quantity) * item.quantity / Number(recipe.yieldQuantity),
+    sourceId: `${item.id}:${component.id}`,
+  }));
+  for (const selection of item.modifierSelections || []) {
+    const deltas = Array.isArray(selection.ingredientDelta) ? selection.ingredientDelta : [];
+    for (const raw of deltas) {
+      if (!raw || typeof raw !== "object") continue;
+      const delta = raw as { productId?: unknown; quantity?: unknown };
+      if (typeof delta.productId !== "string" || !Number.isFinite(Number(delta.quantity))) continue;
+      requirements.push({
+        productId: delta.productId,
+        quantity: Number(delta.quantity) * item.quantity,
+        sourceId: `${item.id}:modifier:${selection.id}:${delta.productId}`,
+      });
+    }
+  }
+  return requirements;
+}
+
+const allowedStatusTransitions: Record<string, string[]> = {
+  new: ["confirmed"],
+  confirmed: ["preparing"],
+  preparing: ["ready"],
+  ready: ["completed"],
+  preorder: ["reserved"],
+  reserved: ["completed"],
+};
+
+function fefoEligibleBatches<T extends {
+  id: string;
+  quantity: number;
+  reservedQuantity: number;
+  unitCost: number;
+  receivedAt: Date;
+  createdAt: Date;
+  lots: Array<{ expiresAt: Date | null; status: string }>;
+}>(batches: T[], now = new Date()): T[] {
+  return batches
+    .filter((batch) => !batch.lots.some((lot) => lot.status === "ACTIVE" && lot.expiresAt && lot.expiresAt <= now))
+    .sort((left, right) => {
+      const leftExpiry = left.lots.find((lot) => lot.status === "ACTIVE")?.expiresAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const rightExpiry = right.lots.find((lot) => lot.status === "ACTIVE")?.expiresAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      return leftExpiry - rightExpiry || left.receivedAt.getTime() - right.receivedAt.getTime() || left.createdAt.getTime() - right.createdAt.getTime();
+    });
 }
 
 async function reserveOrderInventory(
@@ -101,14 +190,14 @@ async function reserveOrderInventory(
       throw badRequest("Order already has reserved inventory allocations.");
     }
 
-    const batches = await tx.inventoryBatch.findMany({
+    const batches = fefoEligibleBatches(await tx.inventoryBatch.findMany({
       where: {
         shopId,
         productId: item.productId,
         variantId: item.variantId ?? null,
       },
-      orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
-    });
+      include: { lots: { where: { status: "ACTIVE" } } },
+    }));
 
     let remaining = item.quantity;
     const allocations: Array<{ inventoryBatchId: string; quantity: number; unitCost: number }> = [];
@@ -153,6 +242,10 @@ async function reserveOrderInventory(
         allocations: { create: allocations },
       },
     });
+    await setInventoryReservation(tx, {
+      shopId, productId: item.productId, variantId: item.variantId,
+      sourceType: "OrderItem", sourceId: item.id, quantity: item.quantity,
+    });
   }
 
   return tx.order.update({
@@ -165,6 +258,8 @@ async function reserveOrderInventory(
           product: true,
           variant: true,
           allocations: { include: { inventoryBatch: true } },
+          serialAllocations: { include: { serial: true } },
+          modifierSelections: true,
         },
       },
       payments: true,
@@ -176,11 +271,23 @@ ordersRouter.get("/:shopId/orders", async (request, response, next) => {
   try {
     const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
+    const query = orderListQuerySchema.parse(request.query);
 
     await assertUserOwnsShop(authUser.id, shopId);
-
-    const orders = await prisma.order.findMany({
-      where: { shopId },
+    const where = {
+      shopId,
+      ...(query.status ? { fulfillmentStatus: query.status } : {}),
+      ...(query.search ? {
+        OR: [
+          { orderNumber: { contains: query.search, mode: "insensitive" as const } },
+          { customer: { is: { name: { contains: query.search, mode: "insensitive" as const } } } },
+          { items: { some: { productName: { contains: query.search, mode: "insensitive" as const } } } },
+        ],
+      } : {}),
+    };
+    const [orders, totalCount] = await prisma.$transaction([
+      prisma.order.findMany({
+      where,
       include: {
         customer: true,
         items: {
@@ -190,14 +297,24 @@ ordersRouter.get("/:shopId/orders", async (request, response, next) => {
             allocations: {
               include: { inventoryBatch: true },
             },
+            serialAllocations: { include: { serial: true } },
+            modifierSelections: true,
           },
         },
         payments: true,
       },
-      orderBy: { createdAt: "desc" },
-    });
+      orderBy: { [query.sort]: query.direction },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
+      prisma.order.count({ where }),
+    ]);
 
-    response.status(200).json({ orders });
+    response.status(200).json({
+      orders,
+      totalCount,
+      pagination: { page: query.page, pageSize: query.pageSize, total: totalCount },
+    });
   } catch (error) {
     next(error);
   }
@@ -210,7 +327,6 @@ ordersRouter.get("/:shopId/orders/:orderId", async (request, response, next) => 
     const orderId = z.string().min(1).parse(request.params.orderId);
 
     await assertUserOwnsShop(authUser.id, shopId);
-
     const order = await prisma.order.findFirst({
       where: { id: orderId, shopId },
       include: {
@@ -222,6 +338,7 @@ ordersRouter.get("/:shopId/orders/:orderId", async (request, response, next) => 
             allocations: {
               include: { inventoryBatch: true },
             },
+            modifierSelections: true,
           },
         },
         payments: true,
@@ -243,6 +360,9 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
     const input = createOrderSchema.parse(request.body);
 
     await assertUserOwnsShop(authUser.id, shopId);
+    if (["new", "confirmed", "preparing", "ready"].includes(input.fulfillmentStatus)) {
+      await assertCapability(prisma, shopId, "restaurant.recipes");
+    }
 
     if (input.customerId && input.customer) {
       throw badRequest("Use either customerId or customer, not both.");
@@ -279,7 +399,12 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       for (const item of input.items) {
         const product = await tx.product.findFirst({
           where: { id: item.productId, shopId },
-          include: { variants: true },
+          include: {
+            variants: true,
+            units: { include: { unit: true } },
+            priceTiers: true,
+            recipe: { include: { components: true, modifierGroups: { include: { options: true } } } },
+          },
         });
 
         if (!product) throw notFound("Product not found.");
@@ -298,18 +423,119 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
         if (variant && (!variant.isActive || variant.archivedAt)) {
           throw badRequest("Product variant is archived and cannot be sold.");
         }
+        const selectedModifierIds = [...new Set(item.modifierOptionIds)];
+        const modifierGroups = product.recipe?.modifierGroups || [];
+        const selectedModifiers = modifierGroups.flatMap((group) =>
+          group.options.filter((option) => selectedModifierIds.includes(option.id))
+            .map((option) => ({ ...option, group })),
+        );
+        if (selectedModifiers.length !== selectedModifierIds.length) {
+          throw badRequest("A selected modifier is inactive or belongs to another menu item.");
+        }
+        for (const group of modifierGroups) {
+          const count = selectedModifiers.filter((option) => option.modifierGroupId === group.id).length;
+          const minimum = Math.max(group.required ? 1 : 0, group.minSelect);
+          if (count < minimum || count > group.maxSelect) {
+            throw badRequest(`${group.name} requires between ${minimum} and ${group.maxSelect} selection(s).`);
+          }
+        }
+        if (selectedModifierIds.length && !product.recipe) {
+          throw badRequest("Modifiers are only supported for recipe menu items.");
+        }
+        if (product.trackingMode === "SERIAL") {
+          if (item.serialIds?.length !== item.quantity) {
+            throw badRequest(`${product.name} requires one selected serial for every sold unit.`);
+          }
+          const serialCount = await tx.inventorySerial.count({
+            where: {
+              shopId, productId: product.id, variantId: variant?.id ?? null,
+              id: { in: item.serialIds }, status: "IN_STOCK",
+            },
+          });
+          if (serialCount !== item.quantity) throw badRequest("A selected serial is unavailable or belongs to another product.");
+        } else if (item.serialIds?.length) {
+          throw badRequest("Serial selection is only supported for serial-tracked products.");
+        }
 
-        const unitPrice = item.unitPrice ?? variant?.price ?? product.price;
+        const productUnit = item.unitId
+          ? product.units.find((entry) => entry.unitId === item.unitId && entry.canSell)
+          : product.units.find((entry) => entry.isBase);
+        if (item.unitId && !productUnit) throw badRequest("Selling unit is not enabled for this product.");
+        if (productUnit?.unit.precision === 0 && !Number.isInteger(item.quantity)) {
+          throw badRequest("This selling unit does not accept fractional quantity.");
+        }
+        const conversionFactor = Number(productUnit?.conversionFactor ?? 1);
+        const baseQuantity = item.quantity * conversionFactor;
+        if (productUnit?.minimumOrderQty && item.quantity < Number(productUnit.minimumOrderQty)) {
+          throw badRequest(`Minimum order quantity is ${productUnit.minimumOrderQty} ${productUnit.unit.symbol}.`);
+        }
+        if (!Number.isInteger(baseQuantity)) {
+          throw badRequest("Fractional base quantities require the ledger-only sales contract, which is not enabled for this legacy-compatible order.");
+        }
+        let lotOverride = null;
+        if (item.lotId) {
+          if (product.trackingMode !== "LOT") {
+            throw badRequest("Manual lot selection is only supported for lot-tracked products.");
+          }
+          if (!item.lotOverrideReason) {
+            throw badRequest("A reason is required when overriding FEFO lot allocation.");
+          }
+          lotOverride = await tx.inventoryLot.findFirst({
+            where: {
+              id: item.lotId, shopId, productId: product.id,
+              variantId: variant?.id ?? null, status: "ACTIVE",
+              OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+            },
+            include: { inventoryBatch: { include: { lots: { where: { status: "ACTIVE" } } } } },
+          });
+          if (!lotOverride?.inventoryBatch) {
+            throw badRequest("Selected lot is unavailable, expired, or belongs to another product.");
+          }
+          const batchAvailable = lotOverride.inventoryBatch.quantity - lotOverride.inventoryBatch.reservedQuantity;
+          if (Number(lotOverride.quantity) < baseQuantity || batchAvailable < baseQuantity) {
+            throw badRequest("Selected lot does not have enough available quantity.");
+          }
+        } else if (item.lotOverrideReason) {
+          throw badRequest("A lot override reason cannot be supplied without selecting a lot.");
+        }
+        const customer = customerId
+          ? await tx.customer.findFirst({ where: { id: customerId, shopId }, select: { priceGroupId: true } })
+          : null;
+        const eligibleTiers = product.priceTiers
+          .filter((tier) =>
+            Number(tier.minimumQuantity) <= baseQuantity &&
+            (!tier.variantId || tier.variantId === variant?.id) &&
+            (!tier.productUnitId || tier.productUnitId === productUnit?.id) &&
+            (!tier.priceGroupId || tier.priceGroupId === customer?.priceGroupId),
+          )
+          .sort((left, right) => {
+            const specificity = (tier: typeof left) =>
+              Number(Boolean(tier.priceGroupId)) * 4 + Number(Boolean(tier.productUnitId)) * 2 + Number(Boolean(tier.variantId));
+            return specificity(right) - specificity(left) ||
+              Number(right.minimumQuantity) - Number(left.minimumQuantity) ||
+              left.id.localeCompare(right.id);
+          });
+        const appliedTier = eligibleTiers[0] ?? null;
+        const modifierPrice = selectedModifiers.reduce((sum, option) => sum + option.priceDelta, 0);
+        const unitPrice = (item.unitPrice ?? appliedTier?.unitPrice ?? variant?.price ?? product.price) + modifierPrice;
         const discount = item.discount ?? 0;
 
         preparedItems.push({
           input: item,
           product,
           variant,
-          quantity: item.quantity,
+          quantity: baseQuantity,
+          enteredQuantity: item.quantity,
+          conversionFactor,
+          productUnit,
+          appliedTier,
           unitPrice,
           discount,
           deductionType: item.deductionType,
+          serialIds: item.serialIds ?? [],
+          lotOverride,
+          lotOverrideReason: item.lotOverrideReason,
+          selectedModifiers,
           lineTotal: lineTotal(item.quantity, unitPrice, discount, item.deductionType),
         });
       }
@@ -337,15 +563,17 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
 
       for (const prepared of preparedItems) {
         const batches =
-          input.fulfillmentStatus === "reserved"
-            ? await tx.inventoryBatch.findMany({
+          input.fulfillmentStatus === "reserved" && !prepared.product.recipe
+            ? prepared.lotOverride
+              ? [prepared.lotOverride.inventoryBatch!]
+              : fefoEligibleBatches(await tx.inventoryBatch.findMany({
                 where: {
                   shopId,
                   productId: prepared.product.id,
                   variantId: prepared.variant?.id ?? null,
                 },
-                orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
-              })
+                include: { lots: { where: { status: "ACTIVE" } } },
+              }))
             : [];
 
         let remaining = prepared.quantity;
@@ -374,7 +602,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           remaining -= take;
         }
 
-        if (input.fulfillmentStatus === "reserved" && remaining > 0) {
+        if (input.fulfillmentStatus === "reserved" && !prepared.product.recipe && remaining > 0) {
           throw badRequest(
             `${prepared.product.name}${prepared.variant ? ` / ${prepared.variant.name}` : ""} is short by ${remaining}.`,
           );
@@ -390,12 +618,32 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
             ? Math.round(totalCost / prepared.quantity)
             : fallbackCost;
 
-        await tx.orderItem.create({
+        const createdItem = await tx.orderItem.create({
           data: {
             orderId: createdOrder.id,
             productId: prepared.product.id,
             productName: prepared.product.name,
             quantity: prepared.quantity,
+            enteredQuantity: String(prepared.enteredQuantity),
+            conversionFactor: String(prepared.conversionFactor),
+            baseQuantity: String(prepared.quantity),
+            ...(prepared.productUnit ? { unitId: prepared.productUnit.unitId } : {}),
+            ...(prepared.appliedTier ? {
+              appliedTierId: prepared.appliedTier.id,
+              pricingSnapshot: {
+                tierId: prepared.appliedTier.id,
+                minimumQuantity: String(prepared.appliedTier.minimumQuantity),
+                unitPrice: prepared.appliedTier.unitPrice,
+                priceGroupId: prepared.appliedTier.priceGroupId,
+                productUnitId: prepared.appliedTier.productUnitId,
+                variantId: prepared.appliedTier.variantId,
+              },
+            } : {
+              pricingSnapshot: {
+                tierId: null, unitPrice: prepared.unitPrice,
+                productUnitId: prepared.productUnit?.id ?? null,
+              },
+            }),
             unitPrice: prepared.unitPrice,
             unitCost,
             discount: prepared.discount,
@@ -405,8 +653,45 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
             allocations: {
               create: allocations,
             },
+            ...(prepared.selectedModifiers.length ? { modifierSelections: {
+              create: prepared.selectedModifiers.map((option) => ({
+                modifierOptionId: option.id,
+                groupName: option.group.name,
+                optionName: option.name,
+                priceDelta: option.priceDelta,
+                ingredientDelta: (Array.isArray(option.ingredientDelta) ? option.ingredientDelta : []) as Prisma.InputJsonValue,
+              })),
+            } } : {}),
           },
         });
+        if (prepared.serialIds.length) {
+          await tx.orderItemSerialAllocation.createMany({
+            data: prepared.serialIds.map((serialId: string) => ({ orderItemId: createdItem.id, serialId })),
+          });
+          await tx.inventorySerial.updateMany({
+            where: { id: { in: prepared.serialIds }, shopId, status: "IN_STOCK" },
+            data: { status: "RESERVED" },
+          });
+        }
+        if (prepared.lotOverride) {
+          await writeAuditLog(tx, {
+            shopId, actorId: authUser.id, action: "inventory.lot_override",
+            entity: "OrderItem", entityId: createdItem.id,
+            metadata: {
+              orderId: createdOrder.id, lotId: prepared.lotOverride.id,
+              lotNumber: prepared.lotOverride.lotNumber,
+              reason: prepared.lotOverrideReason,
+              quantity: prepared.quantity,
+            },
+          });
+        }
+        if (input.fulfillmentStatus === "reserved" && !prepared.product.recipe) {
+          await setInventoryReservation(tx, {
+            shopId, productId: prepared.product.id,
+            ...(prepared.variant?.id ? { variantId: prepared.variant.id } : {}),
+            sourceType: "OrderItem", sourceId: createdItem.id, quantity: prepared.quantity,
+          });
+        }
       }
 
       const fullOrder = await tx.order.findUniqueOrThrow({
@@ -420,6 +705,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
               allocations: {
                 include: { inventoryBatch: true },
               },
+              modifierSelections: true,
             },
           },
           payments: true,
@@ -496,8 +782,36 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
     if (existingOrder.fulfillmentStatus === "preorder") {
       throw badRequest("Preorders cannot be completed until converted in a future preorder flow.");
     }
+    if (existingOrder.fulfillmentStatus === "completed" && input.fulfillmentStatus !== "completed") {
+      throw badRequest("Completed sales cannot be reopened; use an explicit product return.");
+    }
+    if (!allowedStatusTransitions[existingOrder.fulfillmentStatus]?.includes(input.fulfillmentStatus)) {
+      throw badRequest(`Invalid order transition: ${existingOrder.fulfillmentStatus} → ${input.fulfillmentStatus}.`);
+    }
 
     const order = await prisma.$transaction(async (tx) => {
+      const operationalOrder = await tx.order.findFirstOrThrow({
+        where: { id: orderId, shopId },
+        include: {
+          items: {
+            include: {
+              product: { include: { recipe: { include: { components: true } } } },
+              allocations: true,
+              modifierSelections: true,
+            },
+          },
+        },
+      });
+      if (input.fulfillmentStatus === "confirmed" && existingOrder.fulfillmentStatus === "new") {
+        for (const item of operationalOrder.items) {
+          for (const requirement of recipeIngredientRequirements(item)) {
+            await setInventoryReservation(tx, {
+              shopId, productId: requirement.productId,
+              sourceType: "RecipeOrderItem", sourceId: requirement.sourceId, quantity: requirement.quantity,
+            });
+          }
+        }
+      }
       const updatedOrder = await tx.order.update({
         where: { id: orderId },
         data: {
@@ -506,10 +820,70 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
         },
         include: {
           customer: true,
-          items: { include: { product: true, variant: true, allocations: true } },
+          items: { include: { product: true, variant: true, allocations: true, serialAllocations: true } },
           payments: true,
         },
       });
+      if (input.fulfillmentStatus === "completed" && existingOrder.fulfillmentStatus !== "completed") {
+        for (const item of updatedOrder.items) {
+          const recipeItem = operationalOrder.items.find((entry) => entry.id === item.id);
+          const recipe = recipeItem?.product.recipe;
+          if (recipe) {
+            for (const requirement of recipeIngredientRequirements(recipeItem!)) {
+              await setInventoryReservation(tx, {
+                shopId, productId: requirement.productId,
+                sourceType: "RecipeOrderItem", sourceId: requirement.sourceId,
+                quantity: requirement.quantity, release: true,
+              });
+              await recordInventoryMovement(tx, {
+                shopId, productId: requirement.productId,
+                type: "RECIPE_CONSUMPTION", direction: "OUT", quantity: requirement.quantity,
+                sourceType: "RecipeOrderItem", sourceId: requirement.sourceId,
+                idempotencyKey: request.header("Idempotency-Key")
+                  ? `${request.header("Idempotency-Key")}:recipe:${requirement.sourceId}`
+                  : `recipe.complete:${requirement.sourceId}`,
+                occurredAt: updatedOrder.completedAt ?? new Date(),
+              });
+            }
+            continue;
+          }
+          await setInventoryReservation(tx, {
+            shopId, productId: item.productId, variantId: item.variantId,
+            sourceType: "OrderItem", sourceId: item.id, quantity: item.quantity, release: true,
+          });
+          for (const allocation of item.allocations) {
+            const lot = await tx.inventoryLot.findFirst({
+              where: { inventoryBatchId: allocation.inventoryBatchId, status: "ACTIVE" },
+              orderBy: [{ expiresAt: "asc" }, { receivedAt: "asc" }],
+            });
+            if (lot) {
+              const remainingLot = Number(lot.quantity) - allocation.quantity;
+              if (remainingLot < 0) throw badRequest("Lot balance is lower than the reserved sale allocation.");
+              await tx.inventoryLot.update({
+                where: { id: lot.id },
+                data: { quantity: String(remainingLot), ...(remainingLot === 0 ? { status: "DEPLETED" } : {}) },
+              });
+            }
+            await recordInventoryMovement(tx, {
+              shopId, productId: item.productId, variantId: item.variantId,
+              inventoryBatchId: allocation.inventoryBatchId,
+              type: "SALE", direction: "OUT", quantity: allocation.quantity,
+              unitCost: allocation.unitCost, sourceType: "OrderItemAllocation", sourceId: allocation.id,
+              idempotencyKey: request.header("Idempotency-Key")
+                ? `${request.header("Idempotency-Key")}:sale:${allocation.id}`
+                : `sale:${allocation.id}`,
+              occurredAt: updatedOrder.completedAt ?? new Date(),
+              ...(lot ? { lotId: lot.id } : {}),
+            });
+          }
+          if (item.serialAllocations.length) {
+            await tx.inventorySerial.updateMany({
+              where: { id: { in: item.serialAllocations.map((entry) => entry.serialId) }, shopId, status: "RESERVED" },
+              data: { status: "SOLD", soldAt: updatedOrder.completedAt ?? new Date() },
+            });
+          }
+        }
+      }
       await writeAuditLog(tx, {
         shopId,
         actorId: authUser.id,
@@ -540,7 +914,14 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
       const existingOrder = await tx.order.findFirst({
         where: { id: orderId, shopId },
         include: {
-          items: { include: { allocations: true } },
+          items: {
+            include: {
+              allocations: true,
+              serialAllocations: true,
+              modifierSelections: true,
+              product: { include: { recipe: { include: { components: true } } } },
+            },
+          },
           payments: true,
         },
       });
@@ -555,6 +936,13 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
       }
 
       for (const item of existingOrder.items) {
+        for (const requirement of recipeIngredientRequirements(item)) {
+          await setInventoryReservation(tx, {
+            shopId, productId: requirement.productId,
+            sourceType: "RecipeOrderItem", sourceId: requirement.sourceId,
+            quantity: requirement.quantity, release: true,
+          });
+        }
         for (const allocation of item.allocations) {
           const batch = await tx.inventoryBatch.findUnique({
             where: { id: allocation.inventoryBatchId },
@@ -569,6 +957,16 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
             },
           });
         }
+        if (item.serialAllocations.length) {
+          await tx.inventorySerial.updateMany({
+            where: { id: { in: item.serialAllocations.map((entry) => entry.serialId) }, shopId, status: "RESERVED" },
+            data: { status: "IN_STOCK", soldAt: null },
+          });
+        }
+        await setInventoryReservation(tx, {
+          shopId, productId: item.productId, variantId: item.variantId,
+          sourceType: "OrderItem", sourceId: item.id, quantity: item.quantity, release: true,
+        });
       }
 
       const cancelledOrder = await tx.order.update({
@@ -601,6 +999,135 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
   } catch (error) {
     next(error);
   }
+});
+
+ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = paramsSchema.parse(request.params);
+    const orderId = z.string().min(1).parse(request.params.orderId);
+    const input = productReturnSchema.parse(request.body);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const result = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { id: orderId, shopId, fulfillmentStatus: "completed" },
+        include: {
+          items: {
+            include: {
+              product: true,
+              allocations: true,
+              returns: true,
+              serialAllocations: { include: { serial: true } },
+            },
+          },
+        },
+      });
+      if (!order) throw badRequest("Only completed sales can receive product returns.");
+      const requestKey = request.header("Idempotency-Key");
+      if (requestKey) {
+        const keys = input.items.map((entry) => `${requestKey}:${entry.orderItemId}`);
+        const existingReturns = await tx.customerReturn.findMany({
+          where: { shopId, idempotencyKey: { in: keys } },
+        });
+        if (existingReturns.length === keys.length) return { returns: existingReturns, duplicate: true };
+        if (existingReturns.length) throw badRequest("The idempotency key was already used for a different return payload.");
+      }
+      const created = [];
+      for (const requested of input.items) {
+        const item = order.items.find((entry) => entry.id === requested.orderItemId);
+        if (!item) throw notFound("Order item not found.");
+        const alreadyReturned = item.returns.reduce((sum, entry) => sum + Number(entry.quantity), 0);
+        if (alreadyReturned + requested.quantity > item.quantity) {
+          throw badRequest(`Return quantity exceeds sold quantity for ${item.productName}.`);
+        }
+        if (item.product.trackingMode === "SERIAL") {
+          if (!Number.isInteger(requested.quantity) || requested.serialIds?.length !== requested.quantity) {
+            throw badRequest(`${item.productName} requires the exact sold serial for every returned unit.`);
+          }
+          const soldSerialIds = new Set(
+            item.serialAllocations
+              .filter((entry) => entry.serial.status === "SOLD")
+              .map((entry) => entry.serialId),
+          );
+          if (new Set(requested.serialIds).size !== requested.serialIds.length ||
+              requested.serialIds.some((serialId) => !soldSerialIds.has(serialId))) {
+            throw badRequest("A selected serial was not sold on this order or was already returned.");
+          }
+        } else if (requested.serialIds?.length) {
+          throw badRequest("Serial selection is only valid for serial-tracked products.");
+        }
+        const customerReturn = await tx.customerReturn.create({
+          data: {
+            shopId, orderId, orderItemId: item.id, productId: item.productId,
+            ...(item.variantId ? { variantId: item.variantId } : {}),
+            quantity: String(requested.quantity), condition: requested.condition, reason: requested.reason,
+            ...(requestKey ? { idempotencyKey: `${requestKey}:${item.id}` } : {}),
+          },
+        });
+        let locationId: string | undefined;
+        if (requested.condition === "DAMAGED") {
+          const quarantine = await tx.inventoryLocation.upsert({
+            where: { shopId_name: { shopId, name: "Quarantine" } },
+            update: {},
+            create: { shopId, name: "Quarantine", type: "QUARANTINE" },
+          });
+          locationId = quarantine.id;
+        } else {
+          let remaining = requested.quantity;
+          for (const allocation of item.allocations) {
+            if (remaining <= 0) break;
+            const batch = await tx.inventoryBatch.findUnique({ where: { id: allocation.inventoryBatchId } });
+            if (!batch) continue;
+            const restore = Math.min(remaining, allocation.quantity);
+            await tx.inventoryBatch.update({
+              where: { id: batch.id },
+              // Legacy batches encode completed allocations in reservedQuantity.
+              // A sellable return releases that sold allocation; the forward ledger
+              // records the physical CUSTOMER_RETURN separately below.
+              data: { reservedQuantity: Math.max(0, batch.reservedQuantity - restore) },
+            });
+            remaining -= restore;
+          }
+          if (remaining > 0) {
+            throw badRequest(`Original inventory allocation is incomplete for ${item.productName}.`);
+          }
+        }
+        if (requested.serialIds?.length) {
+          const updated = await tx.inventorySerial.updateMany({
+            where: { id: { in: requested.serialIds }, shopId, status: "SOLD" },
+            data: {
+              status: requested.condition === "DAMAGED" ? "QUARANTINED" : "RETURNED",
+              soldAt: null,
+              ...(locationId ? { locationId } : {}),
+            },
+          });
+          if (updated.count !== requested.serialIds.length) {
+            throw badRequest("One or more serials changed state before the return completed.");
+          }
+        }
+        await recordInventoryMovement(tx, {
+          shopId, productId: item.productId, variantId: item.variantId,
+          type: "CUSTOMER_RETURN", direction: "IN", quantity: requested.quantity,
+          unitCost: item.unitCost, sourceType: "CustomerReturn", sourceId: customerReturn.id,
+          idempotencyKey: `${String(request.header("Idempotency-Key") || `customer.return:${customerReturn.id}`)}:${item.id}`,
+          reason: `${requested.condition}: ${requested.reason}`,
+          ...(locationId ? { locationId } : {}),
+        });
+        await writeAuditLog(tx, {
+          shopId, actorId: authUser.id, action: "inventory.customer_return",
+          entity: "CustomerReturn", entityId: customerReturn.id,
+          metadata: {
+            orderId, orderItemId: item.id, quantity: requested.quantity,
+            condition: requested.condition, serialIds: requested.serialIds ?? [],
+            financialRefundCreated: false,
+          },
+        });
+        created.push(customerReturn);
+      }
+      return { returns: created, duplicate: false };
+    });
+    response.status(result.duplicate ? 200 : 201).json(result);
+  } catch (error) { next(error); }
 });
 
 ordersRouter.delete("/:shopId/orders/:orderId", async (request, response, next) => {

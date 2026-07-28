@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
+import { recordInventoryMovement } from "../lib/inventory-domain.js";
 import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
@@ -169,6 +170,15 @@ inventoryRouter.post("/:shopId/inventory", async (request, response, next) => {
           deliveryCost: input.deliveryCost ?? 0,
         },
       });
+      await recordInventoryMovement(tx, {
+        shopId, productId: createdBatch.productId, variantId: createdBatch.variantId,
+        inventoryBatchId: createdBatch.id, type: "OPENING", direction: "IN",
+        quantity: createdBatch.quantity, unitCost: createdBatch.unitCost,
+        sourceType: "InventoryBatch", sourceId: createdBatch.id,
+        idempotencyKey: String(request.header("Idempotency-Key") || `inventory.create:${createdBatch.id}`),
+        ...(input.note ? { reason: input.note } : {}),
+        occurredAt: createdBatch.receivedAt,
+      });
 
       return createdBatch;
     });
@@ -234,37 +244,12 @@ inventoryRouter.delete("/:shopId/inventory/:inventoryBatchId", async (request, r
   try {
     const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
-    const inventoryBatchId = z.string().min(1).parse(request.params.inventoryBatchId);
+    z.string().min(1).parse(request.params.inventoryBatchId);
 
     await assertUserOwnsShop(authUser.id, shopId);
-
-    const existingBatch = await prisma.inventoryBatch.findFirst({
-      where: { id: inventoryBatchId, shopId },
-      select: { id: true, reservedQuantity: true },
-    });
-
-    if (!existingBatch) {
-      throw notFound("Inventory batch not found.");
-    }
-
-    if (existingBatch.reservedQuantity > 0) {
-      throw badRequest("Inventory batch has reserved stock and cannot be deleted.");
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await tx.inventoryBatch.delete({
-        where: { id: inventoryBatchId },
-      });
-      await writeAuditLog(tx, {
-        shopId,
-        actorId: authUser.id,
-        action: "inventory.delete",
-        entity: "InventoryBatch",
-        entityId: inventoryBatchId,
-      });
-    });
-
-    response.status(204).send();
+    throw badRequest(
+      "Inventory records cannot be deleted. Use an adjustment, return, quarantine, or reversal so the audit trail is preserved.",
+    );
   } catch (error) {
     next(error);
   }
@@ -349,6 +334,18 @@ inventoryRouter.post(
             reason: input.reason,
           },
         });
+        const delta = afterQuantity - beforeQuantity;
+        if (delta !== 0) {
+          await recordInventoryMovement(tx, {
+            shopId, productId: batch.productId, variantId: batch.variantId,
+            inventoryBatchId: batch.id,
+            type: delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+            direction: delta > 0 ? "IN" : "OUT", quantity: Math.abs(delta),
+            unitCost: batch.unitCost, sourceType: "StockAdjustment", sourceId: adjustment.id,
+            idempotencyKey: String(request.header("Idempotency-Key") || `inventory.adjust:${adjustment.id}`),
+            reason: input.reason,
+          });
+        }
 
         return { inventoryBatch, adjustment };
       });

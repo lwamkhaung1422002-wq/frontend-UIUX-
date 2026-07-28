@@ -4,7 +4,9 @@ import { z } from "zod";
 
 import { signAccessToken } from "../lib/jwt.js";
 import { prisma } from "../lib/prisma.js";
+import { applyTemplateDefaults } from "../lib/store-capabilities.js";
 import { type AuthenticatedRequest, requireAuth } from "../middleware/auth.middleware.js";
+import { authRateLimit } from "../middleware/rate-limit.middleware.js";
 
 export const authRouter = Router();
 
@@ -20,7 +22,7 @@ const loginSchema = z.object({
   password: z.string().min(1, "Password is required."),
 });
 
-authRouter.post("/register", async (request, response, next) => {
+authRouter.post("/register", authRateLimit, async (request, response, next) => {
   try {
     const input = registerSchema.parse(request.body);
 
@@ -55,12 +57,16 @@ authRouter.post("/register", async (request, response, next) => {
         data: {
           name: input.shopName,
           ownerId: createdUser.id,
+          ledgerEnabled: true,
+          inventoryReadMode: "LEDGER",
+          ledgerCutoverAt: new Date(),
           setting: {
             create: {},
           },
         },
         include: { setting: true },
       });
+      await applyTemplateDefaults(transaction, createdShop.id, "GENERAL_STORE");
 
       return { user: createdUser, shop: createdShop };
     });
@@ -73,7 +79,7 @@ authRouter.post("/register", async (request, response, next) => {
   }
 });
 
-authRouter.post("/login", async (request, response, next) => {
+authRouter.post("/login", authRateLimit, async (request, response, next) => {
   try {
     const input = loginSchema.parse(request.body);
 

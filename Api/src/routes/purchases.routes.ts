@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { writeAuditLog } from "../lib/audit-log.js";
+import { recordInventoryMovement } from "../lib/inventory-domain.js";
 import { prisma } from "../lib/prisma.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
 
@@ -35,7 +36,20 @@ const purchaseInput = z.object({
 });
 const receiptInput = z.object({
   receivedAt: z.coerce.date().optional(),
-  items: z.array(z.object({ purchaseItemId: z.string().min(1), quantity: z.coerce.number().int().positive() })).min(1),
+  note: z.string().trim().optional(),
+  items: z.array(z.object({
+    purchaseItemId: z.string().min(1),
+    quantity: z.coerce.number().int().positive(),
+    locationId: z.string().min(1).optional(),
+    lot: z.object({
+      lotNumber: z.string().trim().min(1),
+      expiresAt: z.coerce.date().optional(),
+    }).optional(),
+    serials: z.array(z.object({
+      serial: z.string().trim().min(1),
+      imei: z.string().trim().min(1).optional(),
+    })).optional(),
+  })).min(1),
 });
 const paymentInput = z.object({
   amount: z.coerce.number().int().positive(),
@@ -49,6 +63,17 @@ const returnInput = z.object({
   quantity: z.coerce.number().int().positive(),
   reason: z.string().trim().min(1),
   returnedAt: z.coerce.date().optional(),
+});
+const reversalInput = z.object({
+  reason: z.string().trim().min(1),
+});
+const listQuery = z.object({
+  search: z.string().trim().optional(),
+  status: z.string().trim().optional(),
+  sort: z.enum(["createdAt", "orderedAt", "purchaseNumber", "total"]).default("createdAt"),
+  direction: z.enum(["asc", "desc"]).default("desc"),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().refine((value) => [25, 50, 100].includes(value)).default(25),
 });
 
 function badRequest(message: string) {
@@ -74,12 +99,23 @@ purchasesRouter.get("/:shopId/suppliers", async (request, response, next) => {
     const auth = getAuthUser(request);
     const { shopId } = params.parse(request.params);
     await assertUserOwnsShop(auth.id, shopId);
-    const suppliers = await prisma.supplier.findMany({
-      where: { shopId },
+    const query = listQuery.parse(request.query);
+    const where = {
+      shopId,
+      ...(query.status ? { isActive: query.status === "active" } : {}),
+      ...(query.search ? { name: { contains: query.search, mode: "insensitive" as const } } : {}),
+    };
+    const [suppliers, total] = await prisma.$transaction([prisma.supplier.findMany({
+      where,
       include: { purchases: { select: { total: true, paidAmount: true, status: true } } },
-      orderBy: { name: "asc" },
+      orderBy: { name: query.direction },
+      skip: (query.page - 1) * query.pageSize, take: query.pageSize,
+    }), prisma.supplier.count({ where })]);
+    response.json({
+      suppliers,
+      totalCount: total,
+      pagination: { page: query.page, pageSize: query.pageSize, total },
     });
-    response.json({ suppliers });
   } catch (error) { next(error); }
 });
 
@@ -128,8 +164,24 @@ purchasesRouter.get("/:shopId/purchases", async (request, response, next) => {
     const auth = getAuthUser(request);
     const { shopId } = params.parse(request.params);
     await assertUserOwnsShop(auth.id, shopId);
-    const purchases = await prisma.purchase.findMany({ where: { shopId }, include: purchaseInclude, orderBy: { createdAt: "desc" } });
-    response.json({ purchases });
+    const query = listQuery.parse(request.query);
+    const where = {
+      shopId,
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.search ? { OR: [
+        { purchaseNumber: { contains: query.search, mode: "insensitive" as const } },
+        { supplier: { name: { contains: query.search, mode: "insensitive" as const } } },
+      ] } : {}),
+    };
+    const [purchases, total] = await prisma.$transaction([
+      prisma.purchase.findMany({ where, include: purchaseInclude, orderBy: { [query.sort]: query.direction }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+      prisma.purchase.count({ where }),
+    ]);
+    response.json({
+      purchases,
+      totalCount: total,
+      pagination: { page: query.page, pageSize: query.pageSize, total },
+    });
   } catch (error) { next(error); }
 });
 
@@ -177,7 +229,11 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/send", async (request, resp
     const existing = await prisma.purchase.findFirst({ where: { id: request.params.purchaseId, shopId } });
     if (!existing) throw notFound("Purchase not found.");
     if (existing.status !== "draft") throw badRequest("Only draft purchases can be sent.");
-    const purchase = await prisma.purchase.update({ where: { id: existing.id }, data: { status: "ordered" }, include: purchaseInclude });
+    const purchase = await prisma.$transaction(async (tx) => {
+      const updated = await tx.purchase.update({ where: { id: existing.id }, data: { status: "ordered" }, include: purchaseInclude });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "purchase.send", entity: "Purchase", entityId: existing.id });
+      return updated;
+    });
     response.json({ purchase });
   } catch (error) { next(error); }
 });
@@ -187,34 +243,124 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/receive", async (request, r
     const auth = getAuthUser(request);
     const { shopId } = params.parse(request.params);
     const input = receiptInput.parse(request.body);
+    const idempotencyKey = request.header("Idempotency-Key");
     await assertUserOwnsShop(auth.id, shopId);
-    const purchase = await prisma.purchase.findFirst({ where: { id: request.params.purchaseId, shopId }, include: { items: true } });
+    if (idempotencyKey) {
+      const firstItem = input.items[0]!;
+      const duplicate = await prisma.purchaseReceipt.findFirst({
+        where: {
+          purchaseId: request.params.purchaseId,
+          purchaseItemId: firstItem.purchaseItemId,
+          idempotencyKey,
+        },
+      });
+      if (duplicate) {
+        const existingPurchase = await prisma.purchase.findFirst({
+          where: { id: request.params.purchaseId, shopId },
+          include: purchaseInclude,
+        });
+        if (!existingPurchase) throw notFound("Purchase not found.");
+        return response.json({ purchase: existingPurchase, duplicate: true });
+      }
+    }
+    const purchase = await prisma.purchase.findFirst({
+      where: { id: request.params.purchaseId, shopId },
+      include: { items: { include: { product: true } } },
+    });
     if (!purchase) throw notFound("Purchase not found.");
     if (!["ordered", "partially_received"].includes(purchase.status)) throw badRequest("Purchase is not open for receipt.");
+    const receiptLines = new Map(input.items.map((item) => [item.purchaseItemId, item]));
     const quantities = new Map(input.items.map((item) => [item.purchaseItemId, item.quantity]));
+    let defaultLocation = await prisma.inventoryLocation.findFirst({ where: { shopId, type: "SELLABLE", isActive: true } });
+    if (!defaultLocation) {
+      defaultLocation = await prisma.inventoryLocation.create({
+        data: { shopId, name: "Main stock", type: "SELLABLE" },
+      });
+    }
     for (const line of purchase.items) {
-      const quantity = quantities.get(line.id) ?? 0;
+      const receiptLine = receiptLines.get(line.id);
+      const quantity = receiptLine?.quantity ?? 0;
       if (quantity > line.quantity - line.receivedQuantity) throw badRequest(`Received quantity exceeds remaining quantity for ${line.productName}.`);
+      if (!quantity) continue;
+      const locationId = receiptLine?.locationId || defaultLocation?.id;
+      if (!locationId) throw badRequest(`A receiving location is required for ${line.productName}.`);
+      const location = await prisma.inventoryLocation.findFirst({ where: { id: locationId, shopId, isActive: true } });
+      if (!location) throw badRequest(`Receiving location is invalid for ${line.productName}.`);
+      const capabilities = (line.product.capabilities || {}) as Record<string, boolean>;
+      const usesLots = line.product.trackingMode === "LOT";
+      const requiresExpiry = capabilities["inventory.expiry"] === true;
+      if (usesLots && !receiptLine?.lot) throw badRequest(`Lot details are required for ${line.productName}.`);
+      if (requiresExpiry && !receiptLine?.lot?.expiresAt) throw badRequest(`Expiry date is required for ${line.productName}.`);
+      if (!usesLots && receiptLine?.lot) throw badRequest(`Lot details are not supported for ${line.productName}.`);
+      if (receiptLine?.lot?.expiresAt && receiptLine.lot.expiresAt <= new Date() && location.type !== "QUARANTINE") {
+        throw badRequest(`Expired ${line.productName} can only be received into quarantine.`);
+      }
+      if (location.type === "QUARANTINE" && !input.note) {
+        throw badRequest("A reason note is required for quarantine receiving.");
+      }
+      if (line.product.trackingMode === "SERIAL" && receiptLine?.serials?.length !== quantity) {
+        throw badRequest(`Exact serial details are required for every received ${line.productName}.`);
+      }
+      if (line.product.trackingMode !== "SERIAL" && receiptLine?.serials?.length) {
+        throw badRequest(`Serial details are not supported for ${line.productName}.`);
+      }
     }
     const updated = await prisma.$transaction(async (tx) => {
       for (const line of purchase.items) {
         const quantity = quantities.get(line.id) ?? 0;
         if (!quantity) continue;
+        const receiptLine = receiptLines.get(line.id)!;
+        const locationId = receiptLine.locationId || defaultLocation!.id;
         const batch = await tx.inventoryBatch.create({ data: {
           shopId, productId: line.productId, ...(line.variantId ? { variantId: line.variantId } : {}),
           quantity, unitCost: line.unitCost, ...(input.receivedAt ? { receivedAt: input.receivedAt } : {}),
           note: `Received from ${purchase.purchaseNumber}`,
         } });
         await tx.purchaseItem.update({ where: { id: line.id }, data: { receivedQuantity: { increment: quantity } } });
-        await tx.purchaseReceipt.create({ data: { purchaseId: purchase.id, purchaseItemId: line.id, inventoryBatchId: batch.id, quantity, ...(input.receivedAt ? { receivedAt: input.receivedAt } : {}) } });
+        const receipt = await tx.purchaseReceipt.create({ data: {
+          purchaseId: purchase.id, purchaseItemId: line.id, inventoryBatchId: batch.id, quantity,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(input.receivedAt ? { receivedAt: input.receivedAt } : {}),
+          ...(input.note !== undefined ? { note: input.note } : {}),
+        } });
+        let lotId: string | undefined;
+        if (receiptLine.lot) {
+          const lot = await tx.inventoryLot.create({ data: {
+            shopId, productId: line.productId, ...(line.variantId ? { variantId: line.variantId } : {}),
+            locationId, inventoryBatchId: batch.id, lotNumber: receiptLine.lot.lotNumber,
+            quantity: String(quantity), unitCost: line.unitCost,
+            ...(receiptLine.lot.expiresAt ? { expiresAt: receiptLine.lot.expiresAt } : {}),
+          } });
+          lotId = lot.id;
+        }
+        for (const serial of receiptLine.serials || []) {
+          await tx.inventorySerial.create({ data: {
+            shopId, productId: line.productId, ...(line.variantId ? { variantId: line.variantId } : {}),
+            locationId, serial: serial.serial, ...(serial.imei ? { imei: serial.imei } : {}),
+          } });
+        }
+        const movement = await recordInventoryMovement(tx, {
+          shopId, productId: line.productId, variantId: line.variantId,
+          inventoryBatchId: batch.id, type: "PURCHASE_RECEIPT", direction: "IN",
+          locationId,
+          quantity, unitCost: line.unitCost, sourceType: "PurchaseReceipt", sourceId: receipt.id,
+          idempotencyKey: idempotencyKey ? `${idempotencyKey}:${line.id}` : `purchase.receive:${receipt.id}`,
+          ...(input.note ? { reason: input.note } : {}),
+          ...(input.receivedAt ? { occurredAt: input.receivedAt } : {}),
+        });
+        if (lotId && movement) await tx.inventoryMovement.update({ where: { id: movement.id }, data: { lotId } });
       }
       const fullyReceived = purchase.items.every((line) =>
         line.receivedQuantity + (quantities.get(line.id) ?? 0) >= line.quantity,
       );
       const status = fullyReceived ? "received" : "partially_received";
+      await writeAuditLog(tx, {
+        shopId, actorId: auth.id, action: "purchase.receive", entity: "Purchase", entityId: purchase.id,
+        metadata: { items: input.items, note: input.note, receivedAt: input.receivedAt },
+      });
       return tx.purchase.update({ where: { id: purchase.id }, data: { status, ...(status === "received" ? { receivedAt: input.receivedAt ?? new Date() } : {}) }, include: purchaseInclude });
     });
-    response.json({ purchase: updated });
+    response.json({ purchase: updated, duplicate: false });
   } catch (error) { next(error); }
 });
 
@@ -235,7 +381,42 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/payments", async (request, 
         ...(input.paidAt !== undefined ? { paidAt: input.paidAt } : {}),
       } });
       const paidAmount = purchase.paidAmount + input.amount;
+      await writeAuditLog(tx, {
+        shopId, actorId: auth.id, action: "purchase.payment", entity: "Purchase", entityId: purchase.id,
+        metadata: { amount: input.amount, method: input.method, reference: input.reference, notes: input.notes, paidAt: input.paidAt },
+      });
       return tx.purchase.update({ where: { id: purchase.id }, data: { paidAmount, paymentStatus: paidAmount === purchase.total ? "paid" : "partial" }, include: purchaseInclude });
+    });
+    response.status(201).json({ purchase: updated });
+  } catch (error) { next(error); }
+});
+
+purchasesRouter.post("/:shopId/purchases/:purchaseId/payments/:paymentId/reverse", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request);
+    const { shopId } = params.parse(request.params);
+    const input = reversalInput.parse(request.body);
+    await assertUserOwnsShop(auth.id, shopId);
+    const purchase = await prisma.purchase.findFirst({ where: { id: request.params.purchaseId, shopId } });
+    if (!purchase) throw notFound("Purchase not found.");
+    const payment = await prisma.purchasePayment.findFirst({ where: { id: request.params.paymentId, purchaseId: purchase.id } });
+    if (!payment) throw notFound("Purchase payment not found.");
+    if (payment.reversedAt) throw badRequest("Purchase payment has already been reversed.");
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.purchasePayment.update({
+        where: { id: payment.id },
+        data: { reversedAt: new Date(), reversalReason: input.reason },
+      });
+      const paidAmount = Math.max(0, purchase.paidAmount - payment.amount);
+      await writeAuditLog(tx, {
+        shopId, actorId: auth.id, action: "purchase.payment.reverse", entity: "Purchase", entityId: purchase.id,
+        metadata: { paymentId: payment.id, amount: payment.amount, reason: input.reason },
+      });
+      return tx.purchase.update({
+        where: { id: purchase.id },
+        data: { paidAmount, paymentStatus: paidAmount === 0 ? "unpaid" : "partial" },
+        include: purchaseInclude,
+      });
     });
     response.status(201).json({ purchase: updated });
   } catch (error) { next(error); }
@@ -267,6 +448,15 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/returns", async (request, r
         quantity: input.quantity, amount, reason: input.reason,
         ...(input.returnedAt ? { returnedAt: input.returnedAt } : {}),
       } });
+      await recordInventoryMovement(tx, {
+        shopId, productId: receipt.purchaseItem.productId, variantId: receipt.purchaseItem.variantId,
+        inventoryBatchId: receipt.inventoryBatchId, type: "SUPPLIER_RETURN", direction: "OUT",
+        quantity: input.quantity, unitCost: receipt.purchaseItem.unitCost,
+        sourceType: "PurchaseReturn", sourceId: purchase.id,
+        idempotencyKey: String(request.header("Idempotency-Key") || `purchase.return:${purchase.id}:${receipt.id}:${input.quantity}`),
+        reason: input.reason,
+        ...(input.returnedAt ? { occurredAt: input.returnedAt } : {}),
+      });
       await writeAuditLog(tx, { shopId, actorId: auth.id, action: "purchase.return", entity: "Purchase", entityId: purchase.id, metadata: { quantity: input.quantity, amount, reason: input.reason } });
       return tx.purchase.update({ where: { id: purchase.id }, data: { total: { decrement: amount }, status: "partially_returned" }, include: purchaseInclude });
     });

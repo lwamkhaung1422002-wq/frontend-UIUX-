@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { emptyData, refreshUserData } from '../services/shopApiService.js'
 import { useAuth } from './AuthContext.jsx'
+import { setStoreFormatPreferences } from '../utils/storage.js'
 
 const DataContext = createContext(null)
 const previewData = emptyData
@@ -25,6 +26,10 @@ export function DataProvider({ children }) {
     setData(nextData)
     return nextData
   }, [user])
+
+  useEffect(() => {
+    setStoreFormatPreferences(data.catalogSettings)
+  }, [data.catalogSettings])
 
   useEffect(() => {
     let active = true

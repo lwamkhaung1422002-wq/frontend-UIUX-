@@ -2,7 +2,7 @@ import { Box, Paper, Skeleton, Stack } from '@mui/material'
 
 export default function PageSkeleton() {
   return (
-    <Box className="page-stack page-skeleton" aria-label="Loading page">
+    <Box className="page-stack page-skeleton" role="status" aria-label="Loading page">
       <Box>
         <Skeleton variant="text" width="34%" height={42} animation="wave" />
         <Skeleton variant="text" width="52%" animation="wave" />

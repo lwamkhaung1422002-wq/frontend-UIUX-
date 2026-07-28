@@ -80,4 +80,21 @@ describe('order model', () => {
     expect(order.subtotal).toBe(44000)
     expect(order.total).toBe(44000)
   })
+
+  it('normalizes restaurant lifecycle states without treating them as completed sales', () => {
+    const order = normalizeOrder({
+      id: 'restaurant-order',
+      customer: { name: 'Delivery customer', phone: '091111111', city: '', address: '' },
+      date: '2026-07-01',
+      items: [{
+        id: 'menu-line', type: 'Meal', size: 'Default', color: '-',
+        quantity: 1, unitPrice: 5000, unitCost: 2000, discount: 0,
+        lineTotal: 5000, allocations: [],
+      }],
+      subtotal: 5000, discount: 0, deliveryFee: 0, total: 5000,
+      fulfillmentStatus: 'preparing', paymentStatus: 'unpaid',
+    })
+
+    expect(order.fulfillmentStatus).toBe('preparing')
+  })
 })

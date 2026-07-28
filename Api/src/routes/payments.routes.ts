@@ -505,29 +505,13 @@ paymentsRouter.post("/:shopId/orders/:orderId/refunds", async (request, response
         },
       });
 
-      if (refundAmount >= paidAmount) {
-        for (const item of order.items) {
-          for (const allocation of item.allocations) {
-            const batch = await tx.inventoryBatch.findUnique({
-              where: { id: allocation.inventoryBatchId },
-            });
-            if (!batch) continue;
-            await tx.inventoryBatch.update({
-              where: { id: batch.id },
-              data: {
-                reservedQuantity: Math.max(0, batch.reservedQuantity - allocation.quantity),
-              },
-            });
-          }
-        }
-      }
       await writeAuditLog(tx, {
         shopId,
         actorId: authUser.id,
         action: "payment.refund",
         entity: "Payment",
         entityId: refund.id,
-        metadata: { orderId: order.id, refundAmount, method: input.method, restoredStock: refundAmount >= paidAmount },
+        metadata: { orderId: order.id, refundAmount, method: input.method, restoredStock: false },
       });
 
       return { refund: serializePayment(refund), order: updatedOrder };

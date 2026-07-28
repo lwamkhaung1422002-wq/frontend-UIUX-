@@ -14,22 +14,22 @@ import {
   Paper,
   Select,
   Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
 import PageHeader from '../components/PageHeader.jsx'
 import MetricCard from '../components/MetricCard.jsx'
-import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import EmptyState from '../components/EmptyState.jsx'
 import DataToolbar from '../components/DataToolbar.jsx'
 import SectionCard from '../components/SectionCard.jsx'
@@ -40,7 +40,7 @@ import {
   adjustStockBatch,
   createStockBatch,
   createVariantDocument,
-  deleteStockBatch,
+  transferStockBalance,
   updateProductDocument,
   updateVariantDocument,
 } from '../services/shopApiService.js'
@@ -53,6 +53,7 @@ import {
   valueIdsFromOptionPath,
 } from '../utils/catalog.js'
 import useSessionState from '../hooks/useSessionState.js'
+import { api, getStoredShopId } from '../services/api.js'
 
 const emptyStockForm = {
   date: getToday(),
@@ -63,6 +64,11 @@ const emptyStockForm = {
   salePrice: '',
   quantity: 1,
   deli: 0,
+  unitId: '',
+  locationId: '',
+  lotNumber: '',
+  expiresAt: '',
+  serials: '',
 }
 
 function rowText(row) {
@@ -85,7 +91,7 @@ function buildRows(state, search) {
   const grouped = {}
 
   state.stocks.forEach((stock) => {
-    const key = `${stock.date || '-'}__${getStockVariantKey(stock)}__${stock.unitCost}__${stock.salePrice}`
+    const key = `${stock.date || '-'}__${getStockVariantKey(stock)}__${stock.unitCost}__${stock.salePrice}__${stock.ledgerMode ? stock.locationId : ''}`
     if (!grouped[key]) {
       grouped[key] = {
         date: stock.date || '-',
@@ -100,6 +106,11 @@ function buildRows(state, search) {
         quantity: 0,
         reservedQuantity: 0,
         deli: 0,
+        ledgerMode: Boolean(stock.ledgerMode),
+        locationId: stock.locationId || '',
+        locationName: stock.locationName || '',
+        ledgerBalanceIds: [],
+        ledgerVersions: [],
         ids: [],
       }
     }
@@ -107,6 +118,8 @@ function buildRows(state, search) {
     grouped[key].reservedQuantity += Number(stock.reservedQuantity || 0)
     grouped[key].deli += Number(stock.deli || 0)
     grouped[key].ids.push(String(stock.id))
+    if (stock.ledgerBalanceId) grouped[key].ledgerBalanceIds.push(String(stock.ledgerBalanceId))
+    if (stock.ledgerBalanceId) grouped[key].ledgerVersions.push(Number(stock.ledgerVersion || 0))
   })
 
   const rows = Object.values(grouped)
@@ -120,9 +133,9 @@ function buildRows(state, search) {
         0,
       )
       const reservedSold = Number(row.reservedQuantity || 0)
-      const sold = allocatedSold || reservedSold || legacySold
+      const sold = row.ledgerMode ? reservedSold : (allocatedSold || reservedSold || legacySold)
       const adjustments = state.adjustmentMap[getStockVariantKey(row)] || []
-      const adjusted = adjustments.reduce(
+      const adjusted = row.ledgerMode ? 0 : adjustments.reduce(
         (sum, item) => sum + (item.action === 'SUB' ? -1 : 1) * Number(item.qty || item.quantity || 0),
         0,
       )
@@ -187,7 +200,6 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
   const [search, setSearch] = useSessionState('stock:main-search', '')
   const [stockDialogOpen, setStockDialogOpen] = useState(false)
   const [stockForm, setStockForm] = useState(emptyStockForm)
-  const [confirmAction, setConfirmAction] = useState(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [adjustTarget, setAdjustTarget] = useState(null)
   const [adjustDraft, setAdjustDraft] = useState({
@@ -195,6 +207,12 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
     quantity: 1,
     reason: '',
   })
+  const [workspace, setWorkspace] = useSessionState('inventory:workspace', 'balances')
+  const [warrantyWorkflow, setWarrantyWorkflow] = useState(null)
+  const [serialDisposition, setSerialDisposition] = useState(null)
+  const [transferTarget, setTransferTarget] = useState(null)
+  const [countTarget, setCountTarget] = useState(null)
+  const [locationDraft, setLocationDraft] = useState(null)
 
   const { rows, totals } = useMemo(() => buildRows(state, search), [search, state])
   const selectedProduct = data.products.find((product) => String(product.id) === String(stockForm.productId))
@@ -216,6 +234,8 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
       optionValueIds: firstVariant ? valueIdsFromOptionPath(firstVariant.optionPath) : [],
       unitCost: moneyOrBlank(firstVariant?.cost ?? firstProduct?.cost),
       salePrice: moneyOrBlank(firstVariant?.price ?? firstProduct?.price),
+      unitId: firstProduct?.units?.find((unit) => unit.isBase)?.unitId || data.units?.[0]?.id || '',
+      locationId: data.inventoryLocations?.find((location) => location.type === 'SELLABLE')?.id || data.inventoryLocations?.[0]?.id || '',
     })
     setStockDialogOpen(true)
   }
@@ -295,7 +315,26 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
           price: nextSalePrice,
         })
       }
-      await createStockBatch(user.uid, {
+      const advancedTracking = ['LOT', 'EXPIRY', 'SERIAL'].includes(selectedProduct?.trackingMode)
+      if (advancedTracking) {
+        const serials = String(stockForm.serials || '').split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean)
+        await api.receiveInventoryOperation(getStoredShopId() || user.uid, {
+          productId: stockForm.productId,
+          variantId: resolvedVariant?.id || stockForm.variantId || undefined,
+          unitId: stockForm.unitId,
+          locationId: stockForm.locationId,
+          enteredQuantity: Number(stockForm.quantity || 0),
+          unitCost: nextCost,
+          reason: 'Inventory receiving workflow',
+          ...(selectedProduct?.trackingMode === 'SERIAL' ? { serials: serials.map((serial) => ({ serial })) } : {}),
+          ...(['LOT', 'EXPIRY'].includes(selectedProduct?.trackingMode) ? {
+            lot: {
+              lotNumber: stockForm.lotNumber,
+              ...(stockForm.expiresAt ? { expiresAt: new Date(stockForm.expiresAt).toISOString() } : {}),
+            },
+          } : {}),
+        }, crypto.randomUUID())
+      } else await createStockBatch(user.uid, {
         productId: stockForm.productId,
         variantId: resolvedVariant?.id || stockForm.variantId || undefined,
         type: selectedProduct?.name,
@@ -316,33 +355,6 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
     }
   }
 
-  const deleteStock = (row) => {
-    if (requireAuth?.('delete stock')) return
-    setConfirmAction({
-      title: 'Delete stock batch?',
-      message: 'Only unused stock can be deleted. Reserved stock is protected by the API.',
-      run: async () => {
-        const targets = state.stocks.filter((stock) => row.ids.includes(String(stock.id)))
-        for (const stock of targets) await deleteStockBatch(user.uid, stock)
-        notify('Stock batch deleted.')
-        refresh()
-      },
-    })
-  }
-
-  const executeConfirmedAction = async () => {
-    if (!confirmAction) return
-    setConfirmBusy(true)
-    try {
-      await confirmAction.run()
-      setConfirmAction(null)
-    } catch (error) {
-      notify(error.message || 'The operation could not be completed.', 'error')
-    } finally {
-      setConfirmBusy(false)
-    }
-  }
-
   const saveAdjustment = async () => {
     if (requireAuth?.('adjust stock')) return
     if (!adjustDraft.reason.trim() || Number(adjustDraft.quantity || 0) <= 0) {
@@ -351,7 +363,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
     }
     setConfirmBusy(true)
     try {
-      await adjustStockBatch(user.uid, adjustTarget.ids[0], adjustDraft)
+      await adjustStockBatch(user.uid, adjustTarget, adjustDraft)
       notify('Stock adjustment recorded.')
       setAdjustTarget(null)
       refresh()
@@ -365,6 +377,142 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
   const exportStock = async () => {
     const { exportStockPDF } = await import('../utils/reports.js')
     exportStockPDF(rows, totals)
+  }
+
+  const saveTransfer = async () => {
+    if (!transferTarget?.targetLocationId || !transferTarget.reason.trim() || Number(transferTarget.quantity || 0) <= 0) {
+      notify('Target location, quantity and reason are required.', 'warning')
+      return
+    }
+    setConfirmBusy(true)
+    try {
+      await transferStockBalance(user.uid, transferTarget.stock, transferTarget)
+      notify('Inventory transfer recorded.')
+      setTransferTarget(null)
+      await refresh?.()
+    } catch (error) {
+      notify(error.message || 'Inventory could not be transferred.', 'error')
+    } finally {
+      setConfirmBusy(false)
+    }
+  }
+
+  const openTransfer = (stock) => {
+    const targetLocation = (data.inventoryLocations || []).find(
+      (location) => location.isActive !== false && String(location.id) !== String(stock.locationId),
+    )
+    setTransferTarget({
+      stock,
+      targetLocationId: targetLocation?.id || '',
+      quantity: 1,
+      reason: '',
+      idempotencyKey: crypto.randomUUID(),
+    })
+  }
+
+  const saveCount = async () => {
+    const counted = Number(countTarget?.countedQuantity)
+    const current = Number(countTarget?.stock?.adjustedQty || 0)
+    if (!Number.isFinite(counted) || counted < 0 || !countTarget?.reason.trim()) {
+      notify('Counted quantity and reason are required.', 'warning')
+      return
+    }
+    const difference = counted - current
+    if (Math.abs(difference) < 0.0005) {
+      notify('The physical count already matches the ledger.', 'info')
+      setCountTarget(null)
+      return
+    }
+    setConfirmBusy(true)
+    try {
+      await adjustStockBatch(user.uid, countTarget.stock, {
+        action: difference > 0 ? 'ADD' : 'SUB',
+        quantity: Math.abs(difference),
+        reason: `COUNT RECONCILIATION: ${countTarget.reason}`,
+      })
+      notify('Physical count reconciled.')
+      setCountTarget(null)
+      await refresh?.()
+    } catch (error) {
+      notify(error.message || 'Physical count could not be reconciled.', 'error')
+    } finally {
+      setConfirmBusy(false)
+    }
+  }
+
+  const saveLocation = async () => {
+    if (!locationDraft?.name.trim()) {
+      notify('Location name is required.', 'warning')
+      return
+    }
+    setConfirmBusy(true)
+    try {
+      await api.createInventoryLocation(getStoredShopId() || user.uid, locationDraft)
+      notify('Inventory location created.')
+      setLocationDraft(null)
+      await refresh?.()
+    } catch (error) {
+      notify(error.message || 'Inventory location could not be created.', 'error')
+    } finally {
+      setConfirmBusy(false)
+    }
+  }
+  const saveWarrantyWorkflow = async () => {
+    if (!warrantyWorkflow?.notes?.trim()) {
+      notify('Warranty notes are required.', 'warning')
+      return
+    }
+    setConfirmBusy(true)
+    try {
+      const shopId = getStoredShopId() || user.uid
+      if (warrantyWorkflow.mode === 'create') {
+        if (!warrantyWorkflow.serialId || !warrantyWorkflow.startsAt || !warrantyWorkflow.endsAt) {
+          notify('Serial, start date, and end date are required.', 'warning')
+          return
+        }
+        await api.createWarranty(shopId, {
+          serialId: warrantyWorkflow.serialId,
+          startsAt: new Date(warrantyWorkflow.startsAt).toISOString(),
+          endsAt: new Date(warrantyWorkflow.endsAt).toISOString(),
+          notes: warrantyWorkflow.notes.trim(),
+        })
+        notify('Warranty record created.')
+      } else {
+        await api.updateWarrantyStatus(shopId, warrantyWorkflow.warranty.id, {
+          status: warrantyWorkflow.status,
+          notes: warrantyWorkflow.notes.trim(),
+        })
+        notify(`Warranty marked ${warrantyWorkflow.status.toLowerCase()}.`)
+      }
+      setWarrantyWorkflow(null)
+      await refresh?.()
+    } catch (error) {
+      notify(error.message || 'Warranty could not be updated.', 'error')
+    } finally {
+      setConfirmBusy(false)
+    }
+  }
+  const saveSerialDisposition = async () => {
+    if (!serialDisposition?.reason?.trim()) {
+      notify('Inspection reason is required.', 'warning')
+      return
+    }
+    setConfirmBusy(true)
+    try {
+      await api.dispositionSerial(
+        getStoredShopId() || user.uid,
+        serialDisposition.serial.id,
+        { disposition: serialDisposition.disposition, reason: serialDisposition.reason.trim() },
+        serialDisposition.idempotencyKey,
+      )
+      notify(serialDisposition.disposition === 'RESTOCK' ? 'Serial released to sellable stock.' : 'Serial marked for supplier return.')
+      setSerialDisposition(null)
+      await refresh?.()
+    } catch (error) {
+      notify(error.message || 'Serial disposition could not be completed.', 'error')
+    } finally {
+      setConfirmBusy(false)
+    }
   }
   const lowStockThreshold = Number(data.catalogSettings?.lowStockDefault ?? 5)
   const reorderRows = rows
@@ -401,7 +549,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
             <Button variant="outlined" color="error" startIcon={<PictureAsPdfRoundedIcon />} onClick={exportStock}>
               Export PDF
             </Button>
-            <Button variant="contained" color="success" startIcon={<AddRoundedIcon />} onClick={openStockDialog}>
+            <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={openStockDialog}>
               Add Stock
             </Button>
           </>
@@ -428,13 +576,128 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
         <MetricCard title="Total Delivery Cost" value={formatKs(totals.totalDeliveryCost)} tone="warning" />
       </div>
 
+      <SectionCard title="Inventory workspace" subtitle="Balances remain legacy-compatible while ledger movements and tracked inventory are available for reconciliation.">
+        <Tabs value={workspace} onChange={(_, value) => setWorkspace(value)} variant="scrollable" scrollButtons="auto" aria-label="Inventory workspaces">
+          <Tab value="balances" label="Balances" />
+          <Tab value="movements" label="Movements" />
+          <Tab value="locations" label="Locations" />
+          <Tab value="counts" label="Counts" />
+          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.lots') || data.inventoryLots?.length ? <Tab value="lots" label="Lots / Expiry" /> : null}
+          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.serials') || data.inventorySerials?.length ? <Tab value="serials" label="Serials / IMEIs" /> : null}
+          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.warranty') || data.warranties?.length ? <Tab value="warranties" label="Warranty" /> : null}
+        </Tabs>
+        {workspace === 'balances' ? <Stack spacing={1} sx={{ mt: 2 }}>
+          {(data.inventoryBalances || []).slice(0, 10).map((balance) => (
+            <Box key={balance.id} className="purchase-line">
+              <span><b>{balance.product?.name || 'Product'}</b><small>{balance.location?.name || 'Default location'} · Version {balance.version}</small></span>
+              <span><b>{Number(balance.available ?? Number(balance.onHand || 0) - Number(balance.reserved || 0))} available</b><small>{Number(balance.onHand || 0)} on hand · {Number(balance.reserved || 0)} reserved</small></span>
+            </Box>
+          ))}
+          {!data.inventoryBalances?.length ? <Typography color="text.secondary">Ledger balances will appear after the first dual-written inventory operation.</Typography> : null}
+        </Stack> : null}
+        {workspace === 'movements' ? <TableContainer sx={{ mt: 2 }}>
+          <Table size="small">
+            <TableHead><TableRow><TableCell>Date</TableCell><TableCell>Product</TableCell><TableCell>Type</TableCell><TableCell>Location</TableCell><TableCell align="right">Quantity</TableCell></TableRow></TableHead>
+            <TableBody>
+              {(data.inventoryMovements || []).map((movement) => <TableRow key={movement.id}><TableCell>{String(movement.occurredAt || movement.createdAt || '').slice(0, 10)}</TableCell><TableCell>{movement.product?.name || '-'}</TableCell><TableCell><Chip size="small" label={movement.type} /></TableCell><TableCell>{movement.location?.name || '-'}</TableCell><TableCell align="right">{movement.direction === 'OUT' ? '-' : '+'}{Number(movement.quantity || 0)}</TableCell></TableRow>)}
+              {!data.inventoryMovements?.length ? <TableRow><TableCell colSpan={5} align="center">No ledger movements yet</TableCell></TableRow> : null}
+            </TableBody>
+          </Table>
+        </TableContainer> : null}
+        {workspace === 'locations' ? <Stack spacing={1} sx={{ mt: 2 }}>
+          <Box>
+            <Button variant="outlined" startIcon={<AddRoundedIcon />} onClick={() => setLocationDraft({ name: '', type: 'SELLABLE' })}>
+              Add location
+            </Button>
+          </Box>
+          {(data.inventoryLocations || []).map((location) => <Box key={location.id} className="purchase-line"><span><b>{location.name}</b><small>{location.type}</small></span><Chip size="small" label={location.isActive === false ? 'Inactive' : 'Active'} color={location.isActive === false ? 'default' : 'success'} /></Box>)}
+          {!data.inventoryLocations?.length ? <Typography color="text.secondary">No inventory locations configured.</Typography> : null}
+        </Stack> : null}
+        {workspace === 'counts' ? <Stack spacing={1} sx={{ mt: 2 }}>
+          {rows.map((row) => (
+            <Box key={`count-${row.productId}-${row.variantId || 'default'}-${row.locationId || 'main'}`} className="purchase-line">
+              <span>
+                <b>{row.productName} · {row.variantName}</b>
+                <small>{row.locationName || 'Main'} · Ledger on-hand {row.adjustedQty}</small>
+              </span>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!row.ledgerMode}
+                onClick={() => setCountTarget({ stock: row, countedQuantity: row.adjustedQty, reason: '' })}
+              >
+                Enter count
+              </Button>
+            </Box>
+          ))}
+          {!rows.length ? <Typography color="text.secondary">No inventory balances to count.</Typography> : null}
+        </Stack> : null}
+        {workspace === 'lots' ? <TableContainer sx={{ mt: 2 }}>
+          <Table size="small"><TableHead><TableRow><TableCell>Lot</TableCell><TableCell>Product</TableCell><TableCell>Location</TableCell><TableCell>Expiry</TableCell><TableCell align="right">Quantity</TableCell></TableRow></TableHead><TableBody>
+            {(data.inventoryLots || []).map((lot) => <TableRow key={lot.id}><TableCell>{lot.lotNumber}</TableCell><TableCell>{lot.product?.name || '-'}</TableCell><TableCell>{lot.location?.name || '-'}</TableCell><TableCell>{lot.expiresAt ? String(lot.expiresAt).slice(0, 10) : 'No expiry'}</TableCell><TableCell align="right">{Number(lot.quantity || 0)}</TableCell></TableRow>)}
+            {!data.inventoryLots?.length ? <TableRow><TableCell colSpan={5} align="center">No tracked lots</TableCell></TableRow> : null}
+          </TableBody></Table>
+        </TableContainer> : null}
+        {workspace === 'serials' ? <TableContainer sx={{ mt: 2 }}>
+          <Table size="small"><TableHead><TableRow><TableCell>Serial</TableCell><TableCell>IMEI</TableCell><TableCell>Product</TableCell><TableCell>Location</TableCell><TableCell>Status</TableCell><TableCell>Inspection</TableCell></TableRow></TableHead><TableBody>
+            {(data.inventorySerials || []).map((serial) => <TableRow key={serial.id}><TableCell>{serial.serial}</TableCell><TableCell>{serial.imei || '-'}</TableCell><TableCell>{serial.product?.name || '-'}</TableCell><TableCell>{serial.location?.name || '-'}</TableCell><TableCell><Chip size="small" label={serial.status} /></TableCell><TableCell>{['RETURNED', 'QUARANTINED'].includes(serial.status) ? <Button size="small" onClick={() => setSerialDisposition({ serial, disposition: 'RESTOCK', reason: '', idempotencyKey: crypto.randomUUID() })}>Inspect</Button> : '-'}</TableCell></TableRow>)}
+            {!data.inventorySerials?.length ? <TableRow><TableCell colSpan={6} align="center">No tracked serials</TableCell></TableRow> : null}
+          </TableBody></Table>
+        </TableContainer> : null}
+        {workspace === 'warranties' ? <Stack spacing={2} sx={{ mt: 2 }}>
+          <Box>
+            <Button
+              variant="contained"
+              onClick={() => setWarrantyWorkflow({
+                mode: 'create',
+                serialId: data.inventorySerials?.find((serial) => ['SOLD', 'RETURNED'].includes(serial.status))?.id || '',
+                startsAt: getToday(),
+                endsAt: '',
+                notes: '',
+              })}
+            >
+              Add warranty
+            </Button>
+          </Box>
+          <TableContainer>
+            <Table size="small">
+              <TableHead><TableRow><TableCell>Serial</TableCell><TableCell>Product</TableCell><TableCell>Coverage</TableCell><TableCell>Status</TableCell><TableCell>Actions</TableCell></TableRow></TableHead>
+              <TableBody>
+                {(data.warranties || []).map((warranty) => (
+                  <TableRow key={warranty.id}>
+                    <TableCell>{warranty.serial?.serial || '-'}</TableCell>
+                    <TableCell>{warranty.serial?.product?.name || '-'}</TableCell>
+                    <TableCell>{String(warranty.startsAt).slice(0, 10)} – {String(warranty.endsAt).slice(0, 10)}</TableCell>
+                    <TableCell><Chip size="small" label={warranty.status} color={warranty.status === 'ACTIVE' ? 'success' : warranty.status === 'CLAIMED' ? 'warning' : 'default'} /></TableCell>
+                    <TableCell>
+                      <Stack direction="row" gap={1}>
+                        {warranty.status === 'ACTIVE' ? <Button size="small" onClick={() => setWarrantyWorkflow({ mode: 'status', warranty, status: 'CLAIMED', notes: '' })}>Claim</Button> : null}
+                        {warranty.status === 'CLAIMED' ? <Button size="small" onClick={() => setWarrantyWorkflow({ mode: 'status', warranty, status: 'RESOLVED', notes: '' })}>Resolve</Button> : null}
+                        {['ACTIVE', 'CLAIMED'].includes(warranty.status) ? <Button size="small" color="error" onClick={() => setWarrantyWorkflow({ mode: 'status', warranty, status: 'VOID', notes: '' })}>Void</Button> : null}
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!data.warranties?.length ? <TableRow><TableCell colSpan={5} align="center">No warranty records</TableCell></TableRow> : null}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Stack> : null}
+      </SectionCard>
+
       <Box className="home-main-grid">
         <SectionCard title="Reorder recommendations" subtitle="Suggested quantities use current availability and recent sold quantity.">
           <Stack spacing={1}>
             {reorderRows.slice(0, 8).map((row) => (
               <Box key={`reorder-${row.id}`} className="purchase-line">
                 <span><b>{row.productName}</b><small>{row.variantName} · {row.available} available</small></span>
-                <Chip label={`Order ${row.suggested}`} color={row.available <= 0 ? 'error' : 'warning'} size="small" />
+                <Chip
+                  label={`Order ${row.suggested}`}
+                  color={row.available <= 0 ? 'error' : 'warning'}
+                  variant="outlined"
+                  size="small"
+                  sx={row.available <= 0 ? undefined : { color: '#7a4f00', borderColor: '#9a6700' }}
+                />
               </Box>
             ))}
             {!reorderRows.length ? <Typography color="text.secondary">All products are above the threshold of {lowStockThreshold}.</Typography> : null}
@@ -455,7 +718,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
 
       <Box className="mobile-data-list">
         {rows.map((row) => (
-          <Paper key={`${row.date}-${row.variantId || row.productName}-${row.unitCost}`} variant="outlined" className="mobile-data-card">
+          <Paper key={`${row.date}-${row.variantId || row.productName}-${row.unitCost}-${row.locationId || ''}`} variant="outlined" className="mobile-data-card">
             <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 2 }}>
               <Box>
                 <Typography fontWeight={900}>{row.productName}</Typography>
@@ -473,7 +736,9 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
             </Box>
             <Stack direction="row" gap={1}>
               <Button fullWidth variant="outlined" onClick={() => setAdjustTarget(row)}>Adjust</Button>
-              <Button fullWidth color="error" variant="outlined" onClick={() => deleteStock(row)}>Delete</Button>
+              {row.ledgerMode && data.inventoryLocations?.length > 1
+                ? <Button fullWidth variant="outlined" onClick={() => openTransfer(row)}>Transfer</Button>
+                : null}
             </Stack>
           </Paper>
         ))}
@@ -498,7 +763,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
           </TableHead>
           <TableBody>
             {rows.map((row, index) => (
-              <TableRow key={`${row.date}-${row.variantId || row.productName}-${row.unitCost}`}>
+              <TableRow key={`${row.date}-${row.variantId || row.productName}-${row.unitCost}-${row.locationId || ''}`}>
                 <TableCell>{index + 1}</TableCell>
                 <TableCell>{row.date}</TableCell>
                 <TableCell>{row.productName}</TableCell>
@@ -513,9 +778,9 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
                 <TableCell>
                   <Box className="table-actions">
                     <Button size="small" variant="outlined" onClick={() => setAdjustTarget(row)}>Adjust</Button>
-                    <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlineRoundedIcon />} onClick={() => deleteStock(row)}>
-                      Delete
-                    </Button>
+                    {row.ledgerMode && data.inventoryLocations?.length > 1
+                      ? <Button size="small" variant="outlined" onClick={() => openTransfer(row)}>Transfer</Button>
+                      : null}
                   </Box>
                 </TableCell>
               </TableRow>
@@ -534,7 +799,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
         <DialogContent dividers>
           {!data.products.length ? (
             <Alert severity="info" sx={{ mb: 2 }}>
-              Create a product in App Settings before adding stock.
+              Create a product from the Products page before adding stock.
             </Alert>
           ) : null}
           <Box className="form-grid" sx={{ pt: 1 }}>
@@ -565,11 +830,16 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
             <TextField className="span-4" type="number" label="Sale Price" value={stockForm.salePrice} onChange={(event) => setStockForm((current) => ({ ...current, salePrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
             <TextField className="span-6" type="number" label="Quantity to add" value={stockForm.quantity} onChange={(event) => setStockForm((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
             <TextField className="span-6" type="number" label="Delivery Cost" value={stockForm.deli} onChange={(event) => setStockForm((current) => ({ ...current, deli: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+            {['LOT', 'EXPIRY'].includes(selectedProduct?.trackingMode) ? <>
+              <TextField required className="span-6" label="Lot number" value={stockForm.lotNumber} onChange={(event) => setStockForm((current) => ({ ...current, lotNumber: event.target.value }))} />
+              <TextField required={selectedProduct?.trackingMode === 'EXPIRY'} className="span-6" type="date" label="Expiry date" value={stockForm.expiresAt} onChange={(event) => setStockForm((current) => ({ ...current, expiresAt: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
+            </> : null}
+            {selectedProduct?.trackingMode === 'SERIAL' ? <TextField required className="span-12" multiline minRows={4} label="Serial / IMEI values" helperText="Enter one unique serial per line. The count must equal the receiving quantity." value={stockForm.serials} onChange={(event) => setStockForm((current) => ({ ...current, serials: event.target.value }))} /> : null}
           </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setStockDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="success" onClick={saveStock} disabled={!data.products.length}>Save Stock</Button>
+          <Button variant="contained" onClick={saveStock} disabled={!data.products.length}>Save Stock</Button>
         </DialogActions>
       </Dialog>
 
@@ -591,14 +861,163 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
         </DialogActions>
       </Dialog>
 
-      <ConfirmDialog
-        open={Boolean(confirmAction)}
-        title={confirmAction?.title || 'Confirm action'}
-        message={confirmAction?.message || ''}
-        busy={confirmBusy}
-        onCancel={() => setConfirmAction(null)}
-        onConfirm={executeConfirmedAction}
-      />
+      <Dialog open={Boolean(transferTarget)} onClose={() => setTransferTarget(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Transfer inventory</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Alert severity="info">
+              {transferTarget?.stock?.productName || 'Product'} from {transferTarget?.stock?.locationName || 'source location'}
+            </Alert>
+            <FormControl fullWidth>
+              <InputLabel>Target location</InputLabel>
+              <Select
+                label="Target location"
+                value={transferTarget?.targetLocationId || ''}
+                onChange={(event) => setTransferTarget((current) => ({ ...current, targetLocationId: event.target.value }))}
+              >
+                {(data.inventoryLocations || [])
+                  .filter((location) => location.isActive !== false && String(location.id) !== String(transferTarget?.stock?.locationId))
+                  .map((location) => <MenuItem key={location.id} value={location.id}>{location.name} · {location.type}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <TextField
+              type="number"
+              label="Quantity"
+              value={transferTarget?.quantity || ''}
+              onChange={(event) => setTransferTarget((current) => ({ ...current, quantity: event.target.value }))}
+              slotProps={{ htmlInput: { min: 0.001, step: 0.001 } }}
+            />
+            <TextField
+              required
+              label="Reason"
+              value={transferTarget?.reason || ''}
+              onChange={(event) => setTransferTarget((current) => ({ ...current, reason: event.target.value }))}
+              multiline
+              minRows={3}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTransferTarget(null)} disabled={confirmBusy}>Cancel</Button>
+          <Button variant="contained" onClick={saveTransfer} disabled={confirmBusy}>
+            {confirmBusy ? 'Transferring...' : 'Confirm transfer'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(countTarget)} onClose={() => setCountTarget(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Reconcile physical count</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Alert severity="info">
+              Ledger on-hand: {countTarget?.stock?.adjustedQty ?? 0} · {countTarget?.stock?.locationName || 'Main'}
+            </Alert>
+            <TextField
+              type="number"
+              label="Counted quantity"
+              value={countTarget?.countedQuantity ?? ''}
+              onChange={(event) => setCountTarget((current) => ({ ...current, countedQuantity: event.target.value }))}
+              slotProps={{ htmlInput: { min: 0, step: 0.001 } }}
+            />
+            <TextField
+              required
+              label="Count reason / note"
+              value={countTarget?.reason || ''}
+              onChange={(event) => setCountTarget((current) => ({ ...current, reason: event.target.value }))}
+              multiline
+              minRows={3}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCountTarget(null)} disabled={confirmBusy}>Cancel</Button>
+          <Button variant="contained" onClick={saveCount} disabled={confirmBusy}>
+            {confirmBusy ? 'Reconciling...' : 'Confirm count'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(locationDraft)} onClose={() => setLocationDraft(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Add inventory location</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              required
+              label="Location name"
+              value={locationDraft?.name || ''}
+              onChange={(event) => setLocationDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+            <TextField
+              select
+              label="Location type"
+              value={locationDraft?.type || 'SELLABLE'}
+              onChange={(event) => setLocationDraft((current) => ({ ...current, type: event.target.value }))}
+            >
+              <MenuItem value="SELLABLE">Sellable</MenuItem>
+              <MenuItem value="QUARANTINE">Quarantine</MenuItem>
+              <MenuItem value="DAMAGED">Damaged</MenuItem>
+              <MenuItem value="TRANSIT">Transit</MenuItem>
+            </TextField>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLocationDraft(null)} disabled={confirmBusy}>Cancel</Button>
+          <Button variant="contained" onClick={saveLocation} disabled={confirmBusy}>
+            {confirmBusy ? 'Creating...' : 'Create location'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(warrantyWorkflow)} onClose={() => setWarrantyWorkflow(null)} fullWidth maxWidth="sm">
+        <DialogTitle>{warrantyWorkflow?.mode === 'create' ? 'Create warranty' : `${warrantyWorkflow?.status || ''} warranty`}</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            {warrantyWorkflow?.mode === 'create' ? <>
+              <FormControl fullWidth>
+                <InputLabel>Sold serial / IMEI</InputLabel>
+                <Select label="Sold serial / IMEI" value={warrantyWorkflow.serialId} onChange={(event) => setWarrantyWorkflow((current) => ({ ...current, serialId: event.target.value }))}>
+                  {(data.inventorySerials || []).filter((serial) => ['SOLD', 'RETURNED'].includes(serial.status)).map((serial) => (
+                    <MenuItem key={serial.id} value={serial.id}>{serial.serial}{serial.imei ? ` / ${serial.imei}` : ''} · {serial.product?.name || ''}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField type="date" label="Starts at" value={warrantyWorkflow.startsAt} onChange={(event) => setWarrantyWorkflow((current) => ({ ...current, startsAt: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
+              <TextField type="date" label="Ends at" value={warrantyWorkflow.endsAt} onChange={(event) => setWarrantyWorkflow((current) => ({ ...current, endsAt: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
+            </> : (
+              <Alert severity="info">Warranty lifecycle changes do not change the serial inventory status.</Alert>
+            )}
+            <TextField required multiline minRows={3} label="Notes / reason" value={warrantyWorkflow?.notes || ''} onChange={(event) => setWarrantyWorkflow((current) => ({ ...current, notes: event.target.value }))} />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setWarrantyWorkflow(null)} disabled={confirmBusy}>Cancel</Button>
+          <Button variant="contained" onClick={saveWarrantyWorkflow} disabled={confirmBusy}>{confirmBusy ? 'Saving...' : 'Confirm'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(serialDisposition)} onClose={() => setSerialDisposition(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Inspect returned serial</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Alert severity="warning">
+              {serialDisposition?.serial.serial} remains unavailable for sale until this inspection is confirmed.
+            </Alert>
+            <FormControl fullWidth>
+              <InputLabel>Disposition</InputLabel>
+              <Select label="Disposition" value={serialDisposition?.disposition || 'RESTOCK'} onChange={(event) => setSerialDisposition((current) => ({ ...current, disposition: event.target.value }))}>
+                <MenuItem value="RESTOCK">Passed inspection — return to sellable stock</MenuItem>
+                <MenuItem value="SUPPLIER_RETURN">Return to supplier</MenuItem>
+              </Select>
+            </FormControl>
+            <TextField required multiline minRows={3} label="Inspection result / reason" value={serialDisposition?.reason || ''} onChange={(event) => setSerialDisposition((current) => ({ ...current, reason: event.target.value }))} />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSerialDisposition(null)} disabled={confirmBusy}>Cancel</Button>
+          <Button variant="contained" onClick={saveSerialDisposition} disabled={confirmBusy}>{confirmBusy ? 'Saving...' : 'Confirm disposition'}</Button>
+        </DialogActions>
+      </Dialog>
+
     </Box>
   )
 }

@@ -39,6 +39,23 @@ model Shop {
   suppliers   Supplier[]
   purchases   Purchase[]
   setting     ShopSetting?
+  templateKey String            @default("GENERAL_STORE")
+  capabilities Json             @default("{}")
+  capabilityStates Json         @default("{}")
+  onboardingCompleted Boolean   @default(false)
+  ledgerEnabled Boolean         @default(false)
+  ledgerCutoverAt DateTime?
+  inventoryReadMode String      @default("LEGACY")
+  units       UnitOfMeasure[]
+  locations   InventoryLocation[]
+  movements   InventoryMovement[]
+  balances    InventoryBalance[]
+  reservations InventoryReservation[]
+  lots        InventoryLot[]
+  serials     InventorySerial[]
+  warrantyRecords WarrantyRecord[]
+  customerPriceGroups CustomerPriceGroup[]
+  customerReturns CustomerReturn[]
 
   @@index([ownerId])
 }
@@ -59,6 +76,8 @@ model ShopSetting {
   lowStockDefault    Int      @default(5)
   currencyCode       String   @default("MMK")
   dateFormat         String   @default("yyyy-MM-dd")
+  locale             String   @default("en-MM")
+  timeZone           String   @default("Asia/Yangon")
   receiptFooter      String   @default("Thank you for shopping with us.")
   notifyLowStock     Boolean  @default(true)
   notifyPayments     Boolean  @default(true)
@@ -80,8 +99,11 @@ model Customer {
   updatedAt DateTime @updatedAt
   shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   orders    Order[]
+  priceGroupId String?
+  priceGroup CustomerPriceGroup? @relation(fields: [priceGroupId], references: [id], onDelete: SetNull)
 
   @@index([shopId])
+  @@index([priceGroupId])
 }
 
 model Category {
@@ -116,6 +138,20 @@ model Product {
   inventory     InventoryBatch[]
   orderItems    OrderItem[]
   purchaseItems PurchaseItem[]
+  capabilities Json             @default("{}")
+  trackingMode  String           @default("NONE")
+  quantityPrecision Int          @default(0)
+  version       Int              @default(1)
+  units         ProductUnit[]
+  balances      InventoryBalance[]
+  movements     InventoryMovement[]
+  reservations  InventoryReservation[]
+  lots          InventoryLot[]
+  serials       InventorySerial[]
+  recipe        Recipe?
+  recipeComponents RecipeComponent[] @relation("RecipeIngredient")
+  priceTiers    PriceTier[]
+  customerReturns CustomerReturn[]
 
   @@unique([shopId, sku])
   @@index([shopId])
@@ -135,6 +171,7 @@ model ProductVariant {
   variantSignature String?
   isActive         Boolean          @default(true)
   archivedAt       DateTime?
+  isDefault        Boolean          @default(false)
   productId        String
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
@@ -142,6 +179,12 @@ model ProductVariant {
   inventory        InventoryBatch[]
   orderItems       OrderItem[]
   purchaseItems    PurchaseItem[]
+  balances         InventoryBalance[]
+  movements        InventoryMovement[]
+  reservations     InventoryReservation[]
+  lots             InventoryLot[]
+  serials           InventorySerial[]
+  priceTiers        PriceTier[]
 
   @@unique([productId, sku])
   @@unique([productId, variantSignature])
@@ -154,6 +197,7 @@ model InventoryBatch {
   productId        String
   variantId        String?
   quantity         Int
+  baseQuantity     Decimal?              @db.Decimal(18, 3)
   reservedQuantity Int                   @default(0)
   unitCost         Int
   receivedAt       DateTime              @default(now())
@@ -167,6 +211,8 @@ model InventoryBatch {
   allocations      OrderItemAllocation[]
   purchaseReceipts PurchaseReceipt[]
   purchaseReturns  PurchaseReturn[]
+  movements         InventoryMovement[]
+  lots              InventoryLot[]
 
   @@index([shopId])
   @@index([productId])
@@ -217,6 +263,7 @@ model Purchase {
 
   @@unique([shopId, purchaseNumber])
   @@index([shopId])
+  @@index([shopId, status, updatedAt])
   @@index([supplierId])
   @@index([status])
 }
@@ -231,6 +278,10 @@ model PurchaseItem {
   receivedQuantity Int               @default(0)
   unitCost         Int
   lineTotal        Int
+  unitId           String?
+  enteredQuantity  Decimal?          @db.Decimal(18, 3)
+  conversionFactor Decimal?          @db.Decimal(18, 6)
+  baseQuantity     Decimal?          @db.Decimal(18, 3)
   purchase         Purchase          @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
   product          Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant          ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: SetNull)
@@ -247,6 +298,8 @@ model PurchaseReceipt {
   purchaseItemId   String
   inventoryBatchId String
   quantity         Int
+  idempotencyKey   String?
+  note             String?
   receivedAt       DateTime       @default(now())
   purchase         Purchase       @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
   purchaseItem     PurchaseItem   @relation(fields: [purchaseItemId], references: [id], onDelete: Cascade)
@@ -254,6 +307,7 @@ model PurchaseReceipt {
 
   @@index([purchaseId])
   @@index([purchaseItemId])
+  @@unique([purchaseId, purchaseItemId, idempotencyKey])
 }
 
 model PurchasePayment {
@@ -264,6 +318,8 @@ model PurchasePayment {
   reference  String?
   notes      String?
   paidAt     DateTime @default(now())
+  reversedAt DateTime?
+  reversalReason String?
   createdAt  DateTime @default(now())
   purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
 
@@ -327,12 +383,14 @@ model Order {
   customer          Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items             OrderItem[]
   payments          Payment[]
+  returns           CustomerReturn[]
 
   @@unique([shopId, orderNumber])
   @@index([shopId])
   @@index([customerId])
   @@index([fulfillmentStatus])
   @@index([paymentStatus])
+  @@index([shopId, completedAt])
 }
 
 model OrderItem {
@@ -348,15 +406,27 @@ model OrderItem {
   discount      Int                   @default(0)
   deductionType String                @default("discount")
   lineTotal     Int
+  unitId        String?
+  enteredQuantity Decimal?            @db.Decimal(18, 3)
+  conversionFactor Decimal?           @db.Decimal(18, 6)
+  baseQuantity  Decimal?              @db.Decimal(18, 3)
+  recognizedAt DateTime?
+  appliedTierId String?
+  pricingSnapshot Json?
   createdAt     DateTime              @default(now())
   order         Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product       Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant       ProductVariant?       @relation(fields: [variantId], references: [id], onDelete: SetNull)
   allocations   OrderItemAllocation[]
+  returns       CustomerReturn[]
+  serialAllocations OrderItemSerialAllocation[]
+  modifierSelections OrderItemModifierSelection[]
+  appliedTier   PriceTier?            @relation(fields: [appliedTierId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
   @@index([productId])
   @@index([variantId])
+  @@index([appliedTierId])
 }
 
 model OrderItemAllocation {
@@ -432,4 +502,348 @@ model AuditLog {
   @@index([actorId])
   @@index([entity])
   @@index([createdAt])
+}
+
+model OrderItemSerialAllocation {
+  id          String          @id @default(cuid())
+  orderItemId String
+  serialId    String
+  createdAt   DateTime        @default(now())
+  orderItem   OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  serial      InventorySerial @relation(fields: [serialId], references: [id], onDelete: Restrict)
+
+  @@unique([orderItemId, serialId])
+  @@unique([serialId])
+  @@index([orderItemId])
+}
+
+model ReleaseFeature {
+  key       String   @id
+  enabled   Boolean  @default(false)
+  public    Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+model UnitOfMeasure {
+  id        String   @id @default(cuid())
+  shopId    String
+  name      String
+  symbol    String
+  precision Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  products  ProductUnit[]
+  movements InventoryMovement[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+model ProductUnit {
+  id               String   @id @default(cuid())
+  productId        String
+  unitId           String
+  conversionFactor Decimal  @db.Decimal(18, 6)
+  isBase           Boolean  @default(false)
+  canSell          Boolean  @default(true)
+  canPurchase      Boolean  @default(true)
+  minimumOrderQty  Decimal? @db.Decimal(18, 3)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  unit             UnitOfMeasure @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  priceTiers       PriceTier[]
+
+  @@unique([productId, unitId])
+  @@index([unitId])
+}
+
+model InventoryLocation {
+  id        String   @id @default(cuid())
+  shopId    String
+  name      String
+  type      String   @default("SELLABLE")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  balances  InventoryBalance[]
+  movements InventoryMovement[]
+  reservations InventoryReservation[]
+  lots      InventoryLot[]
+  serials   InventorySerial[]
+
+  @@unique([shopId, name])
+  @@index([shopId])
+}
+
+model InventoryBalance {
+  id         String   @id @default(cuid())
+  shopId     String
+  productId  String
+  variantId  String?
+  locationId String
+  onHand     Decimal  @default(0) @db.Decimal(18, 3)
+  reserved   Decimal  @default(0) @db.Decimal(18, 3)
+  version    Int      @default(1)
+  updatedAt  DateTime @updatedAt
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  location   InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@unique([shopId, productId, variantId, locationId])
+  @@index([shopId, locationId])
+}
+
+model InventoryMovement {
+  id             String   @id @default(cuid())
+  shopId         String
+  productId      String
+  variantId      String?
+  locationId     String
+  unitId         String?
+  inventoryBatchId String?
+  lotId          String?
+  serialId       String?
+  type           String
+  direction      String
+  baseQuantity   Decimal  @db.Decimal(18, 3)
+  enteredQuantity Decimal @db.Decimal(18, 3)
+  conversionFactor Decimal @default(1) @db.Decimal(18, 6)
+  unitCost       Int?
+  sourceType     String
+  sourceId       String
+  idempotencyKey String?
+  reason         String?
+  occurredAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  location       InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  unit           UnitOfMeasure? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  inventoryBatch InventoryBatch? @relation(fields: [inventoryBatchId], references: [id], onDelete: SetNull)
+  lot            InventoryLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  serial         InventorySerial? @relation(fields: [serialId], references: [id], onDelete: SetNull)
+
+  @@unique([shopId, idempotencyKey])
+  @@index([shopId, occurredAt])
+  @@index([productId, variantId, locationId])
+  @@index([sourceType, sourceId])
+}
+
+model InventoryReservation {
+  id         String   @id @default(cuid())
+  shopId     String
+  productId  String
+  variantId  String?
+  locationId String
+  sourceType String
+  sourceId   String
+  quantity   Decimal  @db.Decimal(18, 3)
+  status     String   @default("ACTIVE")
+  createdAt  DateTime @default(now())
+  releasedAt DateTime?
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  location   InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@unique([shopId, sourceType, sourceId, productId, variantId, locationId])
+  @@index([shopId, status])
+}
+
+model InventoryLot {
+  id               String    @id @default(cuid())
+  shopId           String
+  productId        String
+  variantId        String?
+  locationId       String
+  inventoryBatchId String?
+  lotNumber        String
+  manufacturedAt   DateTime?
+  expiresAt        DateTime?
+  receivedAt       DateTime  @default(now())
+  quantity         Decimal   @db.Decimal(18, 3)
+  unitCost         Int
+  status           String    @default("ACTIVE")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product          Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  location         InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  inventoryBatch   InventoryBatch? @relation(fields: [inventoryBatchId], references: [id], onDelete: SetNull)
+  movements        InventoryMovement[]
+
+  @@unique([shopId, lotNumber])
+  @@index([shopId, expiresAt])
+  @@index([productId, variantId, locationId])
+  @@index([shopId, status, expiresAt])
+}
+
+model InventorySerial {
+  id         String   @id @default(cuid())
+  shopId     String
+  productId  String
+  variantId  String?
+  locationId String
+  serial     String
+  imei       String?
+  status     String   @default("IN_STOCK")
+  soldAt     DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  location   InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  movements  InventoryMovement[]
+  warranties WarrantyRecord[]
+  orderAllocations OrderItemSerialAllocation[]
+
+  @@unique([shopId, serial])
+  @@unique([shopId, imei])
+  @@index([productId, status])
+  @@index([shopId, status])
+}
+
+model WarrantyRecord {
+  id        String   @id @default(cuid())
+  shopId    String
+  serialId  String
+  orderId   String?
+  startsAt  DateTime
+  endsAt    DateTime
+  status    String   @default("ACTIVE")
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  serial    InventorySerial @relation(fields: [serialId], references: [id], onDelete: Restrict)
+
+  @@index([shopId, status])
+  @@index([serialId])
+}
+
+model Recipe {
+  id        String   @id @default(cuid())
+  productId String   @unique
+  yieldQuantity Decimal @default(1) @db.Decimal(18, 3)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  components RecipeComponent[]
+  modifierGroups ModifierGroup[]
+}
+
+model RecipeComponent {
+  id          String   @id @default(cuid())
+  recipeId    String
+  ingredientProductId String
+  quantity    Decimal  @db.Decimal(18, 3)
+  recipe      Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient Product  @relation("RecipeIngredient", fields: [ingredientProductId], references: [id], onDelete: Restrict)
+
+  @@unique([recipeId, ingredientProductId])
+}
+
+model ModifierGroup {
+  id        String   @id @default(cuid())
+  recipeId  String
+  name      String
+  required  Boolean  @default(false)
+  minSelect Int      @default(0)
+  maxSelect Int      @default(1)
+  recipe    Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  options   ModifierOption[]
+
+  @@index([recipeId])
+}
+
+model ModifierOption {
+  id              String   @id @default(cuid())
+  modifierGroupId String
+  name            String
+  priceDelta      Int      @default(0)
+  ingredientDelta Json     @default("[]")
+  isActive        Boolean  @default(true)
+  group           ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  orderSelections OrderItemModifierSelection[]
+
+  @@index([modifierGroupId])
+}
+
+model OrderItemModifierSelection {
+  id               String   @id @default(cuid())
+  orderItemId      String
+  modifierOptionId String?
+  groupName        String
+  optionName       String
+  priceDelta       Int      @default(0)
+  ingredientDelta  Json     @default("[]")
+  createdAt        DateTime @default(now())
+  orderItem        OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  modifierOption   ModifierOption? @relation(fields: [modifierOptionId], references: [id], onDelete: SetNull)
+
+  @@unique([orderItemId, modifierOptionId])
+  @@index([orderItemId])
+}
+
+model CustomerPriceGroup {
+  id        String   @id @default(cuid())
+  shopId    String
+  name      String
+  isActive  Boolean  @default(true)
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customers Customer[]
+  tiers     PriceTier[]
+
+  @@unique([shopId, name])
+}
+
+model PriceTier {
+  id             String   @id @default(cuid())
+  productId      String
+  variantId      String?
+  productUnitId  String?
+  priceGroupId   String?
+  minimumQuantity Decimal @db.Decimal(18, 3)
+  unitPrice      Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  productUnit    ProductUnit? @relation(fields: [productUnitId], references: [id], onDelete: Cascade)
+  priceGroup     CustomerPriceGroup? @relation(fields: [priceGroupId], references: [id], onDelete: Cascade)
+  orderItems     OrderItem[]
+
+  @@index([productId, variantId])
+  @@index([priceGroupId])
+}
+
+model CustomerReturn {
+  id          String   @id @default(cuid())
+  shopId      String
+  orderId     String
+  orderItemId String
+  productId   String
+  variantId   String?
+  quantity    Decimal  @db.Decimal(18, 3)
+  condition   String
+  reason      String
+  idempotencyKey String?
+  createdAt   DateTime @default(now())
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([shopId, createdAt])
+  @@index([orderId])
+  @@index([orderItemId])
+  @@unique([shopId, idempotencyKey])
 }

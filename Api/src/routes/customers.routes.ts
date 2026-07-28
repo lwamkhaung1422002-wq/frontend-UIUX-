@@ -22,6 +22,13 @@ const customerSchema = z.object({
 });
 
 const updateCustomerSchema = customerSchema.partial();
+const listQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  sort: z.enum(["createdAt", "name"]).default("createdAt"),
+  direction: z.enum(["asc", "desc"]).default("desc"),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().refine((value) => [25, 50, 100].includes(value)).default(25),
+});
 
 customersRouter.use(requireAuth);
 
@@ -29,15 +36,25 @@ customersRouter.get("/:shopId/customers", async (request, response, next) => {
   try {
     const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
+    const query = listQuerySchema.parse(request.query);
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const customers = await prisma.customer.findMany({
-      where: { shopId },
-      orderBy: { createdAt: "desc" },
-    });
+    const where = { shopId, ...(query.search ? { OR: [
+      { name: { contains: query.search, mode: "insensitive" as const } },
+      { phone: { contains: query.search, mode: "insensitive" as const } },
+      { email: { contains: query.search, mode: "insensitive" as const } },
+    ] } : {}) };
+    const [customers, total] = await prisma.$transaction([
+      prisma.customer.findMany({ where, orderBy: { [query.sort]: query.direction }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+      prisma.customer.count({ where }),
+    ]);
 
-    response.status(200).json({ customers });
+    response.status(200).json({
+      customers,
+      totalCount: total,
+      pagination: { page: query.page, pageSize: query.pageSize, total },
+    });
   } catch (error) {
     next(error);
   }

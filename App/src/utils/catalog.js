@@ -16,6 +16,8 @@ export const defaultCatalogSettings = {
   lowStockDefault: 5,
   currencyCode: 'MMK',
   dateFormat: 'yyyy-MM-dd',
+  locale: 'en-MM',
+  timeZone: 'Asia/Yangon',
   receiptFooter: 'Thank you for shopping with us.',
   notifyLowStock: true,
   notifyPayments: true,

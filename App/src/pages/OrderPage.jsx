@@ -52,6 +52,10 @@ function initialLine(data) {
     optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
     quantity: 1,
     unitPrice: variant?.price ?? product?.price ?? '',
+    serialIds: [],
+    lotId: '',
+    lotOverrideReason: '',
+    modifierOptionIds: [],
   }
 }
 
@@ -85,6 +89,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
   const { data } = useData()
   const { notify } = useFeedback()
   const settings = useMemo(() => data.catalogSettings || {}, [data.catalogSettings])
+  const restaurantMode = data.storeConfiguration?.effectiveCapabilities?.includes('restaurant.recipes')
   const paymentMethods = useMemo(() => activePaymentMethods(settings), [settings])
   const defaultMethod = paymentMethods[0]?.name || 'Cash'
   const [orderType, setOrderType] = useState('online')
@@ -113,6 +118,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
     : defaultMethod
 
   const selectedProduct = data.products.find((product) => String(product.id) === String(lineDraft.productId))
+  const selectedRecipe = (data.recipes || []).find((recipe) => recipe.productId === selectedProduct?.id)
   const optionTree = normalizeOptionTree(selectedProduct?.optionTree)
   const selectedOptionPath = optionPathFromValueIds(optionTree, lineDraft.optionValueIds)
   const selectedVariant = selectedProduct?.variants?.find((variant) => String(variant.id) === String(lineDraft.variantId))
@@ -121,6 +127,18 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
   const allOptionsSelected = !hasOptions || optionTree.levels.every((_, index) => lineDraft.optionValueIds[index])
   const selectedVariantId = selectedVariant?.id || lineDraft.variantId
   const representativeStock = stockForVariant(data.stocks, lineDraft.productId, selectedVariantId)
+  const alreadySelectedSerialIds = new Set(items.flatMap((item) => item.serialIds || []))
+  const availableSerials = (data.inventorySerials || []).filter((serial) =>
+    serial.status === 'IN_STOCK'
+    && String(serial.productId) === String(lineDraft.productId)
+    && (!selectedVariantId || String(serial.variantId || '') === String(selectedVariantId))
+    && (!alreadySelectedSerialIds.has(serial.id) || lineDraft.serialIds?.includes(serial.id)))
+  const availableLots = (data.inventoryLots || []).filter((lot) =>
+    lot.status === 'ACTIVE'
+    && String(lot.productId) === String(lineDraft.productId)
+    && (!selectedVariantId || String(lot.variantId || '') === String(selectedVariantId))
+    && (!lot.expiresAt || new Date(lot.expiresAt) > new Date())
+    && Number(lot.quantity || 0) > 0)
   const availableMap = useMemo(() => getAvailableByVariant(data.stocks, data.orders), [data.orders, data.stocks])
   const available = Number(availableMap[stockLookupKey(selectedProduct, selectedVariantId)] || 0)
   const totals = useMemo(() => calculateOrderTotals(items, orderDiscount, 0), [items, orderDiscount])
@@ -135,6 +153,16 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
     const handle = window.setTimeout(() => setLineDraft(initialLine(data)), 0)
     return () => window.clearTimeout(handle)
   }, [data, lineDraft.productId])
+
+  useEffect(() => {
+    if (!restaurantMode) return
+    const handle = window.setTimeout(() => {
+      setOrderType('online')
+      setPreorder(false)
+      setSource((current) => ['Delivery', 'Pickup'].includes(current) ? current : 'Delivery')
+    }, 0)
+    return () => window.clearTimeout(handle)
+  }, [restaurantMode])
 
   useEffect(() => {
     const warnUnsaved = (event) => {
@@ -195,6 +223,11 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       variantId: '',
       optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
       unitPrice: variant?.price ?? product?.price ?? '',
+      quantity: 1,
+      serialIds: [],
+      lotId: '',
+      lotOverrideReason: '',
+      modifierOptionIds: [],
     }))
   }
 
@@ -211,6 +244,9 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       variantId: variant?.id || '',
       optionValueIds: nextValueIds,
       unitPrice: variant?.price ?? selectedProduct?.price ?? current.unitPrice,
+      serialIds: [],
+      lotId: '',
+      lotOverrideReason: '',
     }))
   }
 
@@ -238,6 +274,22 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       notify('Choose a product, every option, and valid quantity.', 'warning')
       return
     }
+    if (selectedProduct.trackingMode === 'SERIAL' && lineDraft.serialIds.length !== quantity) {
+      notify(`Select exactly ${quantity} in-stock serial number(s).`, 'warning')
+      return
+    }
+    if (lineDraft.lotId && !lineDraft.lotOverrideReason.trim()) {
+      notify('Explain why this lot should override the default FEFO selection.', 'warning')
+      return
+    }
+    for (const group of selectedRecipe?.modifierGroups || []) {
+      const selectedCount = group.options.filter((option) => lineDraft.modifierOptionIds.includes(option.id)).length
+      const minimum = Math.max(group.required ? 1 : 0, Number(group.minSelect || 0))
+      if (selectedCount < minimum || selectedCount > Number(group.maxSelect || 1)) {
+        notify(`${group.name} requires between ${minimum} and ${group.maxSelect} selection(s).`, 'warning')
+        return
+      }
+    }
     let resolvedVariant
     try {
       resolvedVariant = await resolveLineVariant()
@@ -252,6 +304,11 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       return
     }
     const stock = representativeStock || {}
+    const selectedModifiers = (selectedRecipe?.modifierGroups || []).flatMap((group) =>
+      group.options.filter((option) => lineDraft.modifierOptionIds.includes(option.id))
+        .map((option) => ({ id: option.id, name: option.name, priceDelta: Number(option.priceDelta || 0) })),
+    )
+    const modifierPrice = selectedModifiers.reduce((sum, option) => sum + option.priceDelta, 0)
     const next = {
       id: crypto.randomUUID(),
       productId: selectedProduct.id,
@@ -262,11 +319,17 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
       variantName: resolvedVariant ? variantDisplayName(resolvedVariant) : 'Default',
       optionPath: resolvedVariant?.optionPath || [],
       quantity,
-      unitPrice,
+      baseUnitPrice: unitPrice,
+      unitPrice: unitPrice + modifierPrice,
       unitCost: Number(resolvedVariant?.cost ?? selectedProduct.cost ?? stock.unitCost ?? 0),
       discount: 0,
       deductionType: 'discount',
       allocations: [],
+      serialIds: selectedProduct.trackingMode === 'SERIAL' ? lineDraft.serialIds : [],
+      lotId: selectedProduct.trackingMode === 'LOT' ? lineDraft.lotId : '',
+      lotOverrideReason: selectedProduct.trackingMode === 'LOT' ? lineDraft.lotOverrideReason.trim() : '',
+      modifierOptionIds: selectedModifiers.map((option) => option.id),
+      modifiers: selectedModifiers,
     }
     setItems((current) => [...current, { ...next, lineTotal: lineTotal(next) }])
     setLineDraft((current) => ({
@@ -329,7 +392,7 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
           items: preparedItems,
           date,
           ...finalTotals,
-          fulfillmentStatus: preorder ? 'preorder' : 'reserved',
+          fulfillmentStatus: restaurantMode ? 'new' : preorder ? 'preorder' : 'reserved',
           paymentStatus: 'unpaid',
           source: orderType === 'online' ? source : 'In-Store',
           remark,
@@ -377,10 +440,12 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
             <Typography variant="h6" className="workflow-step" data-step="1">
               Sale type
             </Typography>
-            <ToggleButtonGroup value={orderType} exclusive fullWidth onChange={(_, value) => value && setOrderType(value)} sx={{ mt: 2 }}>
-              <ToggleButton value="online">Online Order</ToggleButton>
-              <ToggleButton value="in-store">In-Store Sale</ToggleButton>
-            </ToggleButtonGroup>
+            {restaurantMode ? <Alert severity="info" sx={{ mt: 2 }}>Online Restaurant supports delivery and pickup only. Dine-in and table workflows are intentionally unavailable.</Alert> : (
+              <ToggleButtonGroup value={orderType} exclusive fullWidth onChange={(_, value) => value && setOrderType(value)} sx={{ mt: 2 }}>
+                <ToggleButton value="online">Online Order</ToggleButton>
+                <ToggleButton value="in-store">In-Store Sale</ToggleButton>
+              </ToggleButtonGroup>
+            )}
           </SectionCard>
 
           {orderType === 'online' ? (
@@ -394,9 +459,9 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
                 <TextField className="span-4" type="date" label="Order date" value={date} onChange={(event) => setDate(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
                 <TextField className="span-4" label="City" value={customer.city} onChange={(event) => setCustomer((current) => ({ ...current, city: event.target.value }))} />
                 <FormControl className="span-4">
-                  <InputLabel>Source</InputLabel>
-                  <Select label="Source" value={source} onChange={(event) => setSource(event.target.value)}>
-                    {SOURCE_OPTIONS.map((option) => (
+                  <InputLabel id="order-source-label">Source</InputLabel>
+                  <Select labelId="order-source-label" label="Source" value={source} onChange={(event) => setSource(event.target.value)}>
+                    {(restaurantMode ? ['Delivery', 'Pickup'] : SOURCE_OPTIONS).map((option) => (
                       <MenuItem key={option} value={option}>{option}</MenuItem>
                     ))}
                   </Select>
@@ -427,15 +492,16 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
             </Stack>
             <Box className="form-grid" sx={{ mt: 2 }}>
               <FormControl className="span-12">
-                <InputLabel>Product</InputLabel>
-                <Select label="Product" value={lineDraft.productId} onChange={(event) => updateLineProduct(event.target.value)}>
+                <InputLabel id="order-product-label">Product</InputLabel>
+                <Select labelId="order-product-label" label="Product" value={lineDraft.productId} onChange={(event) => updateLineProduct(event.target.value)}>
                   {data.products.map((product) => <MenuItem key={product.id} value={product.id}>{product.name}</MenuItem>)}
                 </Select>
               </FormControl>
               {hasOptions ? optionTree.levels.map((level, index) => (
                 <FormControl key={level.id} className="span-4">
-                  <InputLabel>{level.label}</InputLabel>
+                  <InputLabel id={`order-option-${level.id}-label`}>{level.label}</InputLabel>
                   <Select
+                    labelId={`order-option-${level.id}-label`}
                     label={level.label}
                     value={lineDraft.optionValueIds[index] || ''}
                     onChange={(event) => updateLineOptionValue(index, event.target.value)}
@@ -448,6 +514,96 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
               )) : null}
               <TextField className="span-4" type="number" label="Quantity" value={lineDraft.quantity} onChange={(event) => setLineDraft((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
               <TextField className="span-4" type="number" label="Unit price" value={lineDraft.unitPrice} onChange={(event) => setLineDraft((current) => ({ ...current, unitPrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+              {selectedProduct?.trackingMode === 'SERIAL' ? (
+                <FormControl className="span-12">
+                  <InputLabel id="sale-serials-label">Serials / IMEIs</InputLabel>
+                  <Select
+                    labelId="sale-serials-label"
+                    multiple
+                    label="Serials / IMEIs"
+                    value={lineDraft.serialIds}
+                    onChange={(event) => {
+                      const serialIds = event.target.value
+                      setLineDraft((current) => ({ ...current, serialIds, quantity: serialIds.length || 1 }))
+                    }}
+                    renderValue={(selected) => selected.map((id) => {
+                      const serial = availableSerials.find((entry) => entry.id === id)
+                      return serial?.imei ? `${serial.serial} / ${serial.imei}` : serial?.serial || id
+                    }).join(', ')}
+                  >
+                    {availableSerials.map((serial) => (
+                      <MenuItem key={serial.id} value={serial.id}>
+                        <Checkbox checked={lineDraft.serialIds.includes(serial.id)} />
+                        {serial.serial}{serial.imei ? ` / IMEI ${serial.imei}` : ''}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                    Select the exact devices being sold. Quantity follows the selection.
+                  </Typography>
+                </FormControl>
+              ) : null}
+              {selectedProduct?.trackingMode === 'LOT' ? (
+                <>
+                  <FormControl className="span-12">
+                    <InputLabel id="order-lot-label">Lot allocation</InputLabel>
+                    <Select
+                      labelId="order-lot-label"
+                      label="Lot allocation"
+                      value={lineDraft.lotId}
+                      onChange={(event) => setLineDraft((current) => ({
+                        ...current, lotId: event.target.value,
+                        lotOverrideReason: event.target.value ? current.lotOverrideReason : '',
+                      }))}
+                    >
+                      <MenuItem value="">Automatic FEFO (recommended)</MenuItem>
+                      {availableLots.map((lot) => (
+                        <MenuItem key={lot.id} value={lot.id}>
+                          {lot.lotNumber} · expires {lot.expiresAt ? String(lot.expiresAt).slice(0, 10) : 'never'} · {Number(lot.quantity)} available
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  {lineDraft.lotId ? (
+                    <TextField
+                      required
+                      className="span-12"
+                      label="Manual lot override reason"
+                      value={lineDraft.lotOverrideReason}
+                      onChange={(event) => setLineDraft((current) => ({ ...current, lotOverrideReason: event.target.value }))}
+                      helperText="The store owner and reason are recorded in the immutable audit trail."
+                    />
+                  ) : null}
+                </>
+              ) : null}
+              {(selectedRecipe?.modifierGroups || []).map((group) => (
+                <FormControl key={group.id} className="span-12">
+                  <InputLabel id={`order-modifier-${group.id}-label`}>{group.name}</InputLabel>
+                  <Select
+                    labelId={`order-modifier-${group.id}-label`}
+                    multiple
+                    label={group.name}
+                    value={lineDraft.modifierOptionIds.filter((id) => group.options.some((option) => option.id === id))}
+                    onChange={(event) => {
+                      const groupIds = new Set(group.options.map((option) => option.id))
+                      const retained = lineDraft.modifierOptionIds.filter((id) => !groupIds.has(id))
+                      const selected = event.target.value.filter((id) => groupIds.has(id))
+                      setLineDraft((current) => ({ ...current, modifierOptionIds: [...retained, ...selected] }))
+                    }}
+                    renderValue={(ids) => group.options.filter((option) => ids.includes(option.id)).map((option) => option.name).join(', ')}
+                  >
+                    {group.options.map((option) => (
+                      <MenuItem key={option.id} value={option.id}>
+                        <Checkbox checked={lineDraft.modifierOptionIds.includes(option.id)} />
+                        {option.name}{option.priceDelta ? ` (+${formatKs(option.priceDelta)})` : ''}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  <Typography variant="caption" color="text.secondary">
+                    Choose {Math.max(group.required ? 1 : 0, Number(group.minSelect || 0))}–{group.maxSelect}
+                  </Typography>
+                </FormControl>
+              ))}
               <Stack className="span-12" direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
                 <Typography color={available > 3 ? 'success.main' : 'warning.main'}>Available: {available}</Typography>
                 <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={addItem}>Add item</Button>
@@ -464,6 +620,12 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
                     <Typography variant="body2" color="text.secondary">
                       {item.variantName} - {item.quantity} x {formatKs(item.unitPrice)}
                     </Typography>
+                    {item.serialIds?.length ? (
+                      <Typography variant="caption" color="text.secondary">
+                        {item.serialIds.map((id) => data.inventorySerials?.find((serial) => serial.id === id)?.serial || id).join(', ')}
+                      </Typography>
+                    ) : null}
+                    {item.modifiers?.length ? <Typography variant="caption" color="text.secondary">{item.modifiers.map((entry) => entry.name).join(', ')}</Typography> : null}
                   </Box>
                   <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
                     <Typography fontWeight={800}>{formatKs(item.lineTotal)}</Typography>
@@ -496,8 +658,8 @@ export default function OrderPage({ navigate, refresh, requireAuth }) {
             {payNow ? (
               <Stack spacing={1.5}>
                 <FormControl>
-                  <InputLabel>Payment method</InputLabel>
-                  <Select label="Payment method" value={selectedPaymentMethod} onChange={(event) => setPayment((current) => ({ ...current, method: event.target.value, billNumber: '', transactionId: '' }))}>
+                  <InputLabel id="order-payment-method-label">Payment method</InputLabel>
+                  <Select labelId="order-payment-method-label" label="Payment method" value={selectedPaymentMethod} onChange={(event) => setPayment((current) => ({ ...current, method: event.target.value, billNumber: '', transactionId: '' }))}>
                     {paymentMethods.map((method) => <MenuItem key={method.id} value={method.name}>{method.name}</MenuItem>)}
                   </Select>
                 </FormControl>

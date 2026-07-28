@@ -29,6 +29,16 @@ export const emptyData = {
   suppliers: [],
   purchases: [],
   dashboard: null,
+  storeConfiguration: null,
+  units: [],
+    inventoryBalances: [],
+    inventoryMovements: [],
+    inventoryLocations: [],
+    inventoryLots: [],
+    inventorySerials: [],
+    warranties: [],
+    recipes: [],
+    priceGroups: [],
 }
 
 function shopIdFrom(uid) {
@@ -55,7 +65,7 @@ function mapProduct(product) {
   return {
     ...product,
     optionTree: normalizeOptionTree(product.optionTree),
-    variants: (product.variants || []).map((variant) => ({
+    variants: (product.variants || []).filter((variant) => !variant.isDefault).map((variant) => ({
       ...variant,
       optionPath: normalizeOptionPath(variant.optionPath),
       displayName: variantDisplayName(variant),
@@ -83,6 +93,38 @@ function mapStock(batch) {
     quantity: Number(batch.quantity || 0),
     reservedQuantity: Number(batch.reservedQuantity || 0),
     note: batch.note || '',
+  }
+}
+
+function mapLedgerStock(balance, legacyBatches = []) {
+  const matchingBatch = legacyBatches.find(
+    (batch) => String(batch.productId) === String(balance.productId)
+      && String(batch.variantId || '') === String(balance.variantId || ''),
+  )
+  const variant = balance.variant || matchingBatch?.variant || null
+  const product = balance.product || matchingBatch?.product || {}
+  return {
+    id: String(matchingBatch?.id || balance.id),
+    ledgerBalanceId: String(balance.id),
+    ledgerVersion: Number(balance.version || 0),
+    locationId: balance.locationId,
+    locationName: balance.location?.name || '',
+    ledgerMode: true,
+    productId: balance.productId,
+    variantId: balance.variantId,
+    variantName: variantDisplayName(variant),
+    optionPath: normalizeOptionPath(variant?.optionPath),
+    date: dateOnly(balance.updatedAt || balance.createdAt),
+    deli: 0,
+    size: variantSize(variant),
+    color: variantColor(variant),
+    type: product.name || '-',
+    unitCost: Number(matchingBatch?.unitCost ?? product.cost ?? 0),
+    salePrice: Number(variant?.price ?? product.price ?? 0),
+    price: Number(variant?.price ?? product.price ?? 0),
+    quantity: Number(balance.onHand || 0),
+    reservedQuantity: Number(balance.reserved || 0),
+    note: balance.location?.name ? `Location: ${balance.location.name}` : '',
   }
 }
 
@@ -131,13 +173,14 @@ function mapOrder(order, payments = []) {
       id: String(item.id),
       productId: item.productId,
       variantId: item.variantId,
+      trackingMode: item.product?.trackingMode || 'NONE',
       type: item.productName || item.product?.name || '-',
       size: variantSize(item.variant),
       color: variantColor(item.variant),
       variantName: variantDisplayName(item.variant),
       optionPath: normalizeOptionPath(item.variant?.optionPath),
       quantity: Number(item.quantity || 0),
-      unitPrice: Number(item.unitPrice || 0),
+      unitPrice: Number(item.baseUnitPrice ?? item.unitPrice ?? 0),
       unitCost: Number(item.unitCost || 0),
       discount: Number(item.discount || 0),
       deductionType: item.deductionType === 'advance-payment' ? 'advance-payment' : 'discount',
@@ -147,8 +190,20 @@ function mapOrder(order, payments = []) {
         quantity: Number(allocation.quantity || 0),
         unitCost: Number(allocation.unitCost || 0),
       })),
+      serials: (item.serialAllocations || []).map((allocation) => ({
+        id: allocation.serialId || allocation.serial?.id,
+        serial: allocation.serial?.serial || allocation.serialId,
+        imei: allocation.serial?.imei || '',
+        status: allocation.serial?.status || '',
+      })),
+      modifiers: (item.modifierSelections || []).map((selection) => ({
+        id: selection.modifierOptionId || selection.id,
+        name: selection.optionName,
+        groupName: selection.groupName,
+        priceDelta: Number(selection.priceDelta || 0),
+      })),
     })),
-    date: dateOnly(order.createdAt),
+    date: dateOnly(order.completedAt || order.items?.find((item) => item.recognizedAt)?.recognizedAt || order.createdAt),
     subtotal: Number(order.subtotal || 0),
     discount: Number(order.discount || 0),
     deliveryFee: Number(order.deliveryFee || 0),
@@ -163,6 +218,7 @@ function mapOrder(order, payments = []) {
     paymentId: payment?.id || null,
     refundId: order.refundId || refund?.id || null,
     createdAt: order.createdAt,
+    completedAt: order.completedAt,
     updatedAt: order.updatedAt,
     received: order.paymentStatus === 'paid',
     paid: order.paymentStatus !== 'unpaid',
@@ -219,6 +275,16 @@ async function loadUserData(uid) {
     settingsResult,
     suppliersResult,
     purchasesResult,
+    configurationResult,
+    unitsResult,
+    balancesResult,
+    movementsResult,
+    locationsResult,
+    lotsResult,
+    serialsResult,
+    warrantiesResult,
+    recipesResult,
+    priceGroupsResult,
   ] = await Promise.all([
     api.categories(shopId),
     api.products(shopId),
@@ -232,11 +298,25 @@ async function loadUserData(uid) {
     api.shopSettings(shopId).catch(() => ({ settings: normalizeCatalogSettings() })),
     api.suppliers(shopId).catch(() => ({ suppliers: [] })),
     api.purchases(shopId).catch(() => ({ purchases: [] })),
+    api.storeConfiguration(shopId).catch(() => ({ configuration: null })),
+    api.units(shopId).catch(() => ({ units: [] })),
+    api.inventoryBalances(shopId).catch(() => ({ balances: [] })),
+    api.inventoryMovements(shopId).catch(() => ({ movements: [] })),
+    api.inventoryLocations(shopId).catch(() => ({ locations: [] })),
+    api.inventoryLots(shopId).catch(() => ({ lots: [] })),
+    api.inventorySerials(shopId).catch(() => ({ serials: [] })),
+    api.warranties(shopId).catch(() => ({ warranties: [] })),
+    api.recipes(shopId).catch(() => ({ recipes: [] })),
+    api.priceGroups(shopId).catch(() => ({ priceGroups: [] })),
   ])
 
   const payments = (paymentsResult.payments || []).map(mapPayment)
   const orders = normalizeOrders((ordersResult.orders || []).map((order) => mapOrder(order, payments)))
-  const stocks = (inventoryResult.inventory || []).map(mapStock)
+  const legacyInventory = inventoryResult.inventory || []
+  const ledgerReadEnabled = configurationResult.configuration?.inventoryReadMode === 'LEDGER'
+  const stocks = ledgerReadEnabled
+    ? (balancesResult.balances || []).map((balance) => mapLedgerStock(balance, legacyInventory))
+    : legacyInventory.map(mapStock)
   const expenses = (expensesResult.expenses || []).map(mapExpense)
   const adjustments = (adjustmentsResult.adjustments || []).map(mapAdjustment)
   const products = (productsResult.products || []).map(mapProduct)
@@ -278,6 +358,16 @@ async function loadUserData(uid) {
     dashboard: dashboardResult.summary || dashboardResult,
     suppliers: suppliersResult.suppliers || [],
     purchases: purchasesResult.purchases || [],
+    storeConfiguration: configurationResult.configuration || null,
+    units: unitsResult.units || [],
+    inventoryBalances: balancesResult.balances || [],
+    inventoryMovements: movementsResult.movements || [],
+    inventoryLocations: locationsResult.locations || [],
+    inventoryLots: lotsResult.lots || [],
+    inventorySerials: serialsResult.serials || [],
+    warranties: warrantiesResult.warranties || [],
+    recipes: recipesResult.recipes || [],
+    priceGroups: priceGroupsResult.priceGroups || [],
   }
 }
 
@@ -397,6 +487,10 @@ export async function savePaymentMethods(uid, paymentMethods) {
 }
 
 export async function createProductDocument(uid, product) {
+  const requestedTrackingMode = product.trackingMode || 'NONE'
+  const capabilities = Array.isArray(product.capabilities)
+    ? Object.fromEntries(product.capabilities.map((capability) => [capability, true]))
+    : product.capabilities
   return api.createProduct(shopIdFrom(uid), {
     name: product.name,
     sku: product.sku,
@@ -404,6 +498,14 @@ export async function createProductDocument(uid, product) {
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
     optionTree: normalizeOptionTree(product.optionTree),
+    categoryId: product.categoryId || undefined,
+    trackingMode: requestedTrackingMode === 'EXPIRY' ? 'LOT' : requestedTrackingMode,
+    quantityPrecision: requestedTrackingMode === 'SERIAL' ? 0 : Number(product.quantityPrecision || 0),
+    capabilities: {
+      ...(capabilities || {}),
+      ...(requestedTrackingMode === 'EXPIRY' ? { 'inventory.lots': true, 'inventory.expiry': true } : {}),
+    },
+    units: product.units,
   })
 }
 
@@ -417,20 +519,37 @@ export const createPurchaseDocument = (uid, purchase) =>
   api.createPurchase(shopIdFrom(uid), purchase)
 export const sendPurchaseDocument = (uid, purchaseId) =>
   api.sendPurchase(shopIdFrom(uid), purchaseId)
-export const receivePurchaseDocument = (uid, purchaseId, receipt) =>
-  api.receivePurchase(shopIdFrom(uid), purchaseId, receipt)
+export const receivePurchaseDocument = (uid, purchaseId, receipt, idempotencyKey) =>
+  api.receivePurchase(shopIdFrom(uid), purchaseId, receipt, idempotencyKey)
 export const payPurchaseDocument = (uid, purchaseId, payment) =>
   api.payPurchase(shopIdFrom(uid), purchaseId, payment)
+export const reversePurchasePaymentDocument = (uid, purchaseId, paymentId, payload) =>
+  api.reversePurchasePayment(shopIdFrom(uid), purchaseId, paymentId, payload)
 export const returnPurchaseDocument = (uid, purchaseId, payload) =>
   api.returnPurchase(shopIdFrom(uid), purchaseId, payload)
 
 export async function updateProductDocument(uid, productId, product) {
+  const requestedTrackingMode = product.trackingMode
+  const capabilities = Array.isArray(product.capabilities)
+    ? Object.fromEntries(product.capabilities.map((capability) => [capability, true]))
+    : product.capabilities
   return api.updateProduct(shopIdFrom(uid), productId, {
     name: product.name,
+    sku: product.sku,
+    description: product.description,
     price: Number(product.price || 0),
     cost: Number(product.cost || 0),
+    categoryId: product.categoryId || undefined,
     isActive: product.isActive,
     optionTree: normalizeOptionTree(product.optionTree),
+    ...(requestedTrackingMode ? {
+      trackingMode: requestedTrackingMode === 'EXPIRY' ? 'LOT' : requestedTrackingMode,
+      quantityPrecision: requestedTrackingMode === 'SERIAL' ? 0 : Number(product.quantityPrecision || 0),
+      capabilities: {
+        ...(capabilities || {}),
+        ...(requestedTrackingMode === 'EXPIRY' ? { 'inventory.lots': true, 'inventory.expiry': true } : {}),
+      },
+    } : {}),
   })
 }
 
@@ -477,12 +596,17 @@ export async function createOrderAtomic(uid, order, stocks, _existingOrders, pay
       unitPrice: Number(item.unitPrice || 0),
       discount: Number(item.discount || 0),
       deductionType: item.deductionType || 'discount',
+      ...(item.serialIds?.length ? { serialIds: item.serialIds } : {}),
+      ...(item.lotId ? { lotId: item.lotId, lotOverrideReason: item.lotOverrideReason } : {}),
+      ...(item.modifierOptionIds?.length ? { modifierOptionIds: item.modifierOptionIds } : {}),
     })
   }
 
   const result = await api.createOrder(shopId, {
     customer: order.orderType === 'in-store' ? undefined : order.customer,
-    fulfillmentStatus: order.fulfillmentStatus === 'preorder' ? 'preorder' : 'reserved',
+    fulfillmentStatus: ['new', 'confirmed', 'preparing', 'ready', 'preorder'].includes(order.fulfillmentStatus)
+      ? order.fulfillmentStatus
+      : 'reserved',
     discount: Number(order.discount || 0),
     deliveryFee: Number(order.deliveryFee || 0),
     source: order.source,
@@ -555,6 +679,10 @@ export async function refundPaymentAtomic(uid, orderId, details) {
   })
 }
 
+export async function returnOrderProducts(uid, orderId, payload, idempotencyKey) {
+  return api.returnOrderProducts(shopIdFrom(uid), orderId, payload, idempotencyKey)
+}
+
 export async function createStockBatch(uid, stock) {
   const shopId = shopIdFrom(uid)
   const product = stock.productId ? { id: stock.productId } : await ensureProduct(shopId, stock)
@@ -582,12 +710,32 @@ export async function deleteStockBatch(uid, stock) {
   return api.deleteInventory(shopIdFrom(uid), stock.id)
 }
 
-export async function adjustStockBatch(uid, stockId, adjustment) {
-  return api.adjustInventory(shopIdFrom(uid), stockId, {
+export async function adjustStockBatch(uid, stock, adjustment) {
+  if (stock.ledgerMode && stock.ledgerBalanceIds?.[0]) {
+    return api.adjustInventoryOperation(shopIdFrom(uid), {
+      balanceId: stock.ledgerBalanceIds[0],
+      expectedVersion: Number(stock.ledgerVersions?.[0] || 0),
+      action: adjustment.action === 'SUB' ? 'REMOVE' : adjustment.action,
+      quantity: String(adjustment.quantity || adjustment.qty || 0),
+      reason: adjustment.reason,
+      unitCost: Number(stock.unitCost || 0),
+    }, crypto.randomUUID())
+  }
+  return api.adjustInventory(shopIdFrom(uid), stock.ids?.[0] || stock.id, {
     action: adjustment.action,
     quantity: Number(adjustment.quantity || adjustment.qty || 0),
     reason: adjustment.reason,
   })
+}
+
+export async function transferStockBalance(uid, stock, transfer) {
+  return api.transferInventoryOperation(shopIdFrom(uid), {
+    sourceBalanceId: stock.ledgerBalanceIds[0],
+    expectedVersion: Number(stock.ledgerVersions?.[0] || 0),
+    targetLocationId: transfer.targetLocationId,
+    quantity: String(transfer.quantity || 0),
+    reason: transfer.reason,
+  }, transfer.idempotencyKey || crypto.randomUUID())
 }
 
 export async function createExpenseDocument(uid, expense) {

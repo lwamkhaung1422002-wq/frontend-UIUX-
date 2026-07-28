@@ -319,8 +319,8 @@ export default function BalancePage({ refresh, requireAuth }) {
             onChange={(event) => updateExpenseForm('amount', event.target.value)}
           />
           <FormControl className="span-3">
-            <InputLabel>Type</InputLabel>
-            <Select label="Type" value={expenseForm.type} onChange={(event) => updateExpenseForm('type', event.target.value)}>
+            <InputLabel id="expense-type-label">Type</InputLabel>
+            <Select labelId="expense-type-label" label="Type" value={expenseForm.type} onChange={(event) => updateExpenseForm('type', event.target.value)}>
               {typeOptions.map((type) => (
                 <MenuItem key={type} value={type}>
                   {type}
@@ -329,8 +329,8 @@ export default function BalancePage({ refresh, requireAuth }) {
             </Select>
           </FormControl>
           <FormControl className="span-3">
-            <InputLabel>Method</InputLabel>
-            <Select label="Method" value={expenseForm.method} onChange={(event) => updateExpenseForm('method', event.target.value)}>
+            <InputLabel id="expense-method-label">Method</InputLabel>
+            <Select labelId="expense-method-label" label="Method" value={expenseForm.method} onChange={(event) => updateExpenseForm('method', event.target.value)}>
               {(expenseMethods.length ? expenseMethods : activePaymentMethods(data.catalogSettings)).map((method) => (
                 <MenuItem key={method.id} value={method.name}>
                   {method.name}

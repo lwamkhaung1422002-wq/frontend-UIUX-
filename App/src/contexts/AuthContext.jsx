@@ -108,6 +108,15 @@ export function AuthProvider({ children }) {
     setUser(previewUser)
   }, [])
 
+  const selectShop = useCallback((shopId) => {
+    setUser((current) => {
+      const nextShop = current?.shops?.find((entry) => entry.id === shopId)
+      if (!nextShop) return current
+      storeShopId(nextShop.id)
+      return { ...current, shop: nextShop }
+    })
+  }, [])
+
   const value = useMemo(
     () => ({
       user,
@@ -116,9 +125,10 @@ export function AuthProvider({ children }) {
       login,
       register,
       logout,
+      selectShop,
       refreshSession: restore,
     }),
-    [user, loading, login, register, logout, restore],
+    [user, loading, login, register, logout, selectShop, restore],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

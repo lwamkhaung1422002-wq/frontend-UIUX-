@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
+import { assertCapability } from "../lib/store-capabilities.js";
 import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
@@ -11,6 +12,17 @@ export const productsRouter = Router();
 
 const paramsSchema = z.object({
   shopId: z.string().min(1),
+});
+const listQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  status: z.enum(["active", "inactive", "all"]).default("active"),
+  category: z.string().trim().optional(),
+  capability: z.string().trim().optional(),
+  location: z.string().trim().optional(),
+  sort: z.enum(["createdAt", "name", "price"]).default("createdAt"),
+  direction: z.enum(["asc", "desc"]).default("desc"),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().refine((value) => [25, 50, 100].includes(value)).default(25),
 });
 
 const moneySchema = z.coerce.number().int().nonnegative();
@@ -53,6 +65,17 @@ const productSchema = z.object({
   categoryId: z.string().trim().optional(),
   optionTree: optionTreeSchema.optional(),
   isActive: z.boolean().optional(),
+  capabilities: z.record(z.string(), z.boolean()).optional(),
+  trackingMode: z.enum(["NONE", "LOT", "SERIAL"]).optional(),
+  quantityPrecision: z.coerce.number().int().min(0).max(3).optional(),
+  units: z.array(z.object({
+    unitId: z.string().min(1),
+    conversionFactor: z.coerce.number().positive(),
+    isBase: z.boolean().optional(),
+    canSell: z.boolean().optional(),
+    canPurchase: z.boolean().optional(),
+    minimumOrderQty: z.coerce.number().positive().optional(),
+  })).optional(),
 });
 
 const updateProductSchema = productSchema.partial();
@@ -104,6 +127,12 @@ async function assertProductBelongsToShop(productId: string, shopId: string) {
 function badRequest(message: string): Error {
   const error = new Error(message);
   error.name = "BadRequestError";
+  return error;
+}
+
+function notFound(message: string): Error {
+  const error = new Error(message);
+  error.name = "NotFoundError";
   return error;
 }
 
@@ -223,19 +252,83 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
   try {
     const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
+    const query = listQuerySchema.parse(request.query);
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const products = await prisma.product.findMany({
-      where: { shopId, isActive: true },
+    const where = {
+      shopId,
+      ...(query.status === "all" ? {} : { isActive: query.status === "active" }),
+      ...(query.category ? { categoryId: query.category } : {}),
+      ...(query.capability ? { capabilities: { path: [query.capability], equals: true } } : {}),
+      ...(query.location ? { balances: { some: { locationId: query.location } } } : {}),
+      ...(query.search ? { OR: [
+        { name: { contains: query.search, mode: "insensitive" as const } },
+        { sku: { contains: query.search, mode: "insensitive" as const } },
+      ] } : {}),
+    };
+    const [products, total] = await prisma.$transaction([prisma.product.findMany({
+      where,
       include: {
         category: true,
         variants: true,
+        units: { include: { unit: true } },
+        priceTiers: true,
       },
-      orderBy: { createdAt: "desc" },
-    });
+      orderBy: { [query.sort]: query.direction },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }), prisma.product.count({ where })]);
 
-    response.status(200).json({ products });
+    response.status(200).json({
+      products,
+      totalCount: total,
+      pagination: { page: query.page, pageSize: query.pageSize, total },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+productsRouter.get("/:shopId/variants", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = paramsSchema.parse(request.params);
+    const query = listQuerySchema.parse(request.query);
+    await assertUserOwnsShop(authUser.id, shopId);
+
+    const where: Prisma.ProductVariantWhereInput = {
+      product: {
+        shopId,
+        ...(query.category ? { categoryId: query.category } : {}),
+        ...(query.capability ? { capabilities: { path: [query.capability], equals: true } } : {}),
+      },
+      ...(query.status === "all" ? {} : { isActive: query.status === "active" }),
+      ...(query.location ? { balances: { some: { locationId: query.location } } } : {}),
+      ...(query.search ? {
+        OR: [
+          { name: { contains: query.search, mode: "insensitive" } },
+          { sku: { contains: query.search, mode: "insensitive" } },
+          { product: { name: { contains: query.search, mode: "insensitive" } } },
+        ],
+      } : {}),
+    };
+    const variantSort = query.sort === "price" ? "price" : query.sort;
+    const [variants, totalCount] = await prisma.$transaction([
+      prisma.productVariant.findMany({
+        where,
+        include: { product: { include: { category: true } }, balances: true },
+        orderBy: { [variantSort]: query.direction },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      prisma.productVariant.count({ where }),
+    ]);
+    response.json({
+      variants,
+      totalCount,
+      pagination: { page: query.page, pageSize: query.pageSize, total: totalCount },
+    });
   } catch (error) {
     next(error);
   }
@@ -249,6 +342,8 @@ productsRouter.post("/:shopId/products", async (request, response, next) => {
 
     await assertUserOwnsShop(authUser.id, shopId);
     await assertCategoryBelongsToShop(input.categoryId, shopId);
+    if (input.trackingMode === "LOT") await assertCapability(prisma, shopId, "inventory.lots");
+    if (input.trackingMode === "SERIAL") await assertCapability(prisma, shopId, "inventory.serials");
 
     const data: Prisma.ProductUncheckedCreateInput = {
       name: input.name,
@@ -260,6 +355,9 @@ productsRouter.post("/:shopId/products", async (request, response, next) => {
       ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
       ...(input.optionTree !== undefined ? { optionTree: normalizeOptionTree(input.optionTree) } : {}),
       ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      ...(input.capabilities !== undefined ? { capabilities: input.capabilities } : {}),
+      ...(input.trackingMode !== undefined ? { trackingMode: input.trackingMode } : {}),
+      ...(input.quantityPrecision !== undefined ? { quantityPrecision: input.quantityPrecision } : {}),
     };
 
     const product = await prisma.$transaction(async (tx) => {
@@ -268,8 +366,23 @@ productsRouter.post("/:shopId/products", async (request, response, next) => {
         include: {
           category: true,
           variants: true,
+          units: { include: { unit: true } },
         },
       });
+      if (input.units?.length) {
+        if (input.units.filter((unit) => unit.isBase).length !== 1) throw badRequest("Exactly one base unit is required.");
+        for (const unit of input.units) {
+          const ownedUnit = await tx.unitOfMeasure.findFirst({ where: { id: unit.unitId, shopId, isActive: true } });
+          if (!ownedUnit) throw notFound("Unit not found.");
+          if (ownedUnit.precision === 0 && !Number.isInteger(unit.conversionFactor)) throw badRequest("Indivisible units require an integer conversion factor.");
+          await tx.productUnit.create({ data: {
+            productId: createdProduct.id, unitId: unit.unitId,
+            conversionFactor: String(unit.conversionFactor), isBase: unit.isBase ?? false,
+            canSell: unit.canSell ?? true, canPurchase: unit.canPurchase ?? true,
+            ...(unit.minimumOrderQty !== undefined ? { minimumOrderQty: String(unit.minimumOrderQty) } : {}),
+          } });
+        }
+      }
       await writeAuditLog(tx, {
         shopId,
         actorId: authUser.id,
@@ -307,6 +420,10 @@ productsRouter.patch("/:shopId/products/:productId", async (request, response, n
       ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
       ...(input.optionTree !== undefined ? { optionTree: normalizeOptionTree(input.optionTree) } : {}),
       ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      ...(input.capabilities !== undefined ? { capabilities: input.capabilities } : {}),
+      ...(input.trackingMode !== undefined ? { trackingMode: input.trackingMode } : {}),
+      ...(input.quantityPrecision !== undefined ? { quantityPrecision: input.quantityPrecision } : {}),
+      version: { increment: 1 },
     };
 
     const product = await prisma.$transaction(async (tx) => {

@@ -4,6 +4,10 @@ import {
   Button,
   Chip,
   Divider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Drawer,
   FormControl,
   IconButton,
@@ -33,7 +37,6 @@ import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
 import TaskAltRoundedIcon from '@mui/icons-material/TaskAltRounded'
-import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
@@ -49,6 +52,7 @@ import {
   cancelOrderAtomic,
   deleteOrderDocument,
   fulfillPreorderAtomic,
+  returnOrderProducts,
   setOrderFulfillmentStatus,
 } from '../services/shopApiService.js'
 import { formatKs, getToday } from '../utils/storage.js'
@@ -69,6 +73,13 @@ const savedViews = [
   { id: 'refunded', label: 'Refunded' },
   { id: 'this-month', label: 'This month' },
 ]
+const nextFulfillment = {
+  new: ['confirmed', 'Confirm'],
+  confirmed: ['preparing', 'Start preparing'],
+  preparing: ['ready', 'Mark ready'],
+  ready: ['completed', 'Complete'],
+  reserved: ['completed', 'Complete'],
+}
 
 function matchesPaymentFilter(order, value) {
   if (value === 'unpaid') {
@@ -120,6 +131,7 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
   const [cancelTarget, setCancelTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [detailsOrder, setDetailsOrder] = useState(null)
+  const [returnWorkflow, setReturnWorkflow] = useState(null)
   const [workingId, setWorkingId] = useState('')
 
   const orders = useMemo(() => normalizeOrders(data.orders), [data.orders])
@@ -178,8 +190,10 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
       await operation()
       await refresh?.()
       notify(successMessage)
+      return true
     } catch (error) {
       notify(error.message || 'The order could not be updated.', 'error')
+      return false
     } finally {
       setWorkingId('')
     }
@@ -188,12 +202,7 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
   const toggleCompleted = (order) =>
     run(
       order,
-      () =>
-        setOrderFulfillmentStatus(
-          user.uid,
-          order.id,
-          order.fulfillmentStatus === 'completed' ? 'reserved' : 'completed',
-        ),
+      () => setOrderFulfillmentStatus(user.uid, order.id, nextFulfillment[order.fulfillmentStatus]?.[0] || 'completed'),
       'Fulfillment status updated.',
     )
 
@@ -227,6 +236,42 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
     )
     if (detailsOrder?.id === order.id) setDetailsOrder(null)
     setDeleteTarget(null)
+  }
+
+  const submitProductReturn = async () => {
+    const workflow = returnWorkflow
+    if (!workflow || !workflow.orderItemId || Number(workflow.quantity) <= 0 || !workflow.reason.trim()) {
+      notify('Choose an item, enter a valid quantity, and provide a return reason.', 'warning')
+      return
+    }
+    const item = workflow.order.items.find((entry) => entry.id === workflow.orderItemId)
+    if (!item || Number(workflow.quantity) > Number(item.quantity)) {
+      notify('Return quantity cannot exceed the sold quantity.', 'warning')
+      return
+    }
+    if (item.trackingMode === 'SERIAL' && workflow.serialIds.length !== Number(workflow.quantity)) {
+      notify(`Select exactly ${workflow.quantity} sold serial number(s).`, 'warning')
+      return
+    }
+    const succeeded = await run(
+      workflow.order,
+      () => returnOrderProducts(user.uid, workflow.order.id, {
+        items: [{
+          orderItemId: workflow.orderItemId,
+          quantity: Number(workflow.quantity),
+          condition: workflow.condition,
+          reason: workflow.reason.trim(),
+          ...(item.trackingMode === 'SERIAL' ? { serialIds: workflow.serialIds } : {}),
+        }],
+      }, workflow.idempotencyKey),
+      workflow.condition === 'DAMAGED'
+        ? 'Product recorded in quarantine. No financial refund was created.'
+        : 'Product returned to sellable inventory. No financial refund was created.',
+    )
+    if (succeeded) {
+      setReturnWorkflow(null)
+      setDetailsOrder(null)
+    }
   }
 
   const printSales = async () => {
@@ -463,7 +508,76 @@ export default function SalesPage({ navigate, refresh, requireAuth }) {
         mobile={mobile}
         onClose={() => setDetailsOrder(null)}
         onPrint={() => detailsOrder && printReceipt(detailsOrder)}
+        onReturn={() => detailsOrder && setReturnWorkflow({
+          order: detailsOrder,
+          orderItemId: detailsOrder.items?.[0]?.id || '',
+          quantity: 1,
+          condition: 'SELLABLE',
+          reason: '',
+          serialIds: [],
+          idempotencyKey: crypto.randomUUID(),
+        })}
       />
+      <Dialog open={Boolean(returnWorkflow)} onClose={() => setReturnWorkflow(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Confirm physical product return</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            This changes inventory only. Create a separate refund if money must be returned.
+          </Typography>
+          <Stack spacing={2}>
+            <FormControl fullWidth>
+              <InputLabel>Sold item</InputLabel>
+              <Select
+                label="Sold item"
+                value={returnWorkflow?.orderItemId || ''}
+                onChange={(event) => setReturnWorkflow((current) => ({
+                  ...current, orderItemId: event.target.value, quantity: 1, serialIds: [],
+                }))}
+              >
+                {(returnWorkflow?.order.items || []).map((item) => (
+                  <MenuItem key={item.id} value={item.id}>{item.productName || item.type} · sold {item.quantity}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <TextField type="number" label="Return quantity" value={returnWorkflow?.quantity || 1} onChange={(event) => setReturnWorkflow((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1, step: 1 } }} />
+            {returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? (
+              <FormControl fullWidth>
+                <InputLabel id="return-serials-label">Returned serials / IMEIs</InputLabel>
+                <Select
+                  labelId="return-serials-label"
+                  multiple
+                  label="Returned serials / IMEIs"
+                  value={returnWorkflow.serialIds}
+                  onChange={(event) => {
+                    const serialIds = event.target.value
+                    setReturnWorkflow((current) => ({ ...current, serialIds, quantity: serialIds.length || 1 }))
+                  }}
+                >
+                  {(returnWorkflow.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.serials || [])
+                    .filter((serial) => serial.status === 'SOLD')
+                    .map((serial) => (
+                      <MenuItem key={serial.id} value={serial.id}>
+                        {serial.serial}{serial.imei ? ` / IMEI ${serial.imei}` : ''}
+                      </MenuItem>
+                    ))}
+                </Select>
+              </FormControl>
+            ) : null}
+            <FormControl fullWidth>
+              <InputLabel>Condition</InputLabel>
+              <Select label="Condition" value={returnWorkflow?.condition || 'SELLABLE'} onChange={(event) => setReturnWorkflow((current) => ({ ...current, condition: event.target.value }))}>
+                <MenuItem value="SELLABLE">Sellable — return to inventory</MenuItem>
+                <MenuItem value="DAMAGED">Damaged — send to quarantine</MenuItem>
+              </Select>
+            </FormControl>
+            <TextField required multiline minRows={2} label="Return reason" value={returnWorkflow?.reason || ''} onChange={(event) => setReturnWorkflow((current) => ({ ...current, reason: event.target.value }))} />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReturnWorkflow(null)}>Cancel</Button>
+          <Button variant="contained" disabled={Boolean(returnWorkflow && workingId === returnWorkflow.order.id)} onClick={submitProductReturn}>Confirm inventory return</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }
@@ -539,18 +653,16 @@ function MobileOrderCard({ order, busy, onPrint, onToggle, onFulfill, onCancel, 
           >
             Reserve stock
           </Button>
-        ) : active ? (
+        ) : active && nextFulfillment[order.fulfillmentStatus] ? (
           <Button
             size="small"
-            variant={order.fulfillmentStatus === 'completed' ? 'outlined' : 'contained'}
-            startIcon={
-              order.fulfillmentStatus === 'completed' ? <ReplayRoundedIcon /> : <TaskAltRoundedIcon />
-            }
+            variant="contained"
+            startIcon={<TaskAltRoundedIcon />}
             onClick={onToggle}
             disabled={busy}
             sx={{ flex: 1 }}
           >
-            {order.fulfillmentStatus === 'completed' ? 'Reopen' : 'Complete'}
+            {nextFulfillment[order.fulfillmentStatus][1]}
           </Button>
         ) : (
           <>
@@ -650,21 +762,17 @@ function DesktopOrderActions({ order, busy, onPrint, onToggle, onFulfill, onCanc
             </IconButton>
           </span>
         </Tooltip>
-      ) : !['cancelled'].includes(order.fulfillmentStatus) ? (
-        <Tooltip title={order.fulfillmentStatus === 'completed' ? 'Reopen order' : 'Mark complete'}>
+      ) : nextFulfillment[order.fulfillmentStatus] ? (
+        <Tooltip title={nextFulfillment[order.fulfillmentStatus][1]}>
           <span>
             <IconButton
               size="small"
-              color={order.fulfillmentStatus === 'completed' ? 'default' : 'success'}
-              aria-label={order.fulfillmentStatus === 'completed' ? 'Reopen order' : 'Mark complete'}
+              color="success"
+              aria-label={nextFulfillment[order.fulfillmentStatus][1]}
               onClick={onToggle}
               disabled={busy}
             >
-              {order.fulfillmentStatus === 'completed' ? (
-                <ReplayRoundedIcon fontSize="small" />
-              ) : (
-                <TaskAltRoundedIcon fontSize="small" />
-              )}
+              <TaskAltRoundedIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
@@ -713,7 +821,7 @@ function DetailField({ label, value }) {
   )
 }
 
-function OrderDetailsDrawer({ order, mobile, onClose, onPrint }) {
+function OrderDetailsDrawer({ order, mobile, onClose, onPrint, onReturn }) {
   return (
     <Drawer
       anchor="right"
@@ -758,6 +866,11 @@ function OrderDetailsDrawer({ order, mobile, onClose, onPrint }) {
             />
             {order.source ? <Chip size="small" variant="outlined" label={order.source} /> : null}
           </Stack>
+          {order.fulfillmentStatus === 'completed' ? (
+            <Button variant="outlined" sx={{ mt: 2 }} onClick={onReturn}>
+              Return physical product
+            </Button>
+          ) : null}
 
           <Divider sx={{ my: 3 }} />
 

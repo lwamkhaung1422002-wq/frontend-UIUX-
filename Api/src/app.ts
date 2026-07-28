@@ -18,6 +18,10 @@ import { productsRouter } from "./routes/products.routes.js";
 import { purchasesRouter } from "./routes/purchases.routes.js";
 import { shopSettingsRouter } from "./routes/shop-settings.routes.js";
 import { shopsRouter } from "./routes/shops.routes.js";
+import { storeConfigRouter } from "./routes/store-config.routes.js";
+import { capabilityInventoryRouter } from "./routes/capability-inventory.routes.js";
+import { advancedCapabilitiesRouter } from "./routes/advanced-capabilities.routes.js";
+import { requestContext } from "./middleware/request-context.middleware.js";
 
 export const app = express();
 
@@ -53,6 +57,7 @@ function forbidden(message: string): Error {
 }
 
 app.use(helmet());
+app.use(requestContext);
 app.use(pinoHttp());
 app.use(compression());
 app.use(
@@ -76,6 +81,9 @@ app.get("/", (_req, res) => {
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
 app.use("/shops", shopsRouter);
+app.use("/shops", storeConfigRouter);
+app.use("/shops", capabilityInventoryRouter);
+app.use("/shops", advancedCapabilitiesRouter);
 app.use("/shops", shopSettingsRouter);
 app.use("/shops", customersRouter);
 app.use("/shops", categoriesRouter);

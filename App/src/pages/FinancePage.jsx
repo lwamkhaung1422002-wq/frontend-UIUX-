@@ -309,8 +309,9 @@ export default function FinancePage({ refresh, requireAuth }) {
       <Paper variant="outlined" className="finance-toolbar data-toolbar">
         {mobile ? (
           <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-            <InputLabel>Payment status</InputLabel>
+            <InputLabel id="finance-payment-status-label">Payment status</InputLabel>
             <Select
+              labelId="finance-payment-status-label"
               label="Payment status"
               value={statusView}
               onChange={(event) => setStatusView(event.target.value)}
@@ -340,8 +341,8 @@ export default function FinancePage({ refresh, requireAuth }) {
         )}
         <Box className="form-grid">
           <FormControl className="span-3" size="small">
-            <InputLabel>Search Type</InputLabel>
-            <Select label="Search Type" value={searchType} onChange={(event) => setSearchType(event.target.value)}>
+            <InputLabel id="finance-search-type-label">Search Type</InputLabel>
+            <Select labelId="finance-search-type-label" label="Search Type" value={searchType} onChange={(event) => setSearchType(event.target.value)}>
               {searchTypes.map((type) => (
                 <MenuItem key={type.value} value={type.value}>
                   {type.label}
@@ -546,8 +547,9 @@ export default function FinancePage({ refresh, requireAuth }) {
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <FormControl>
-              <InputLabel>Method</InputLabel>
+              <InputLabel id="finance-payment-method-label">Method</InputLabel>
               <Select
+                labelId="finance-payment-method-label"
                 label="Method"
                 value={selectedReceiveMethod}
                 onChange={(event) =>
@@ -712,8 +714,9 @@ export default function FinancePage({ refresh, requireAuth }) {
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <FormControl>
-              <InputLabel>Method</InputLabel>
+              <InputLabel id="finance-refund-method-label">Method</InputLabel>
               <Select
+                labelId="finance-refund-method-label"
                 label="Method"
                 value={refundDraft.method}
                 onChange={(event) => setRefundDraft((current) => ({ ...current, method: event.target.value }))}

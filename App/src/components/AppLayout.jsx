@@ -71,10 +71,13 @@ export default function AppLayout({
   preview = false,
   userEmail,
   shopName = 'Shop Owner',
+  shops = [],
+  shopId,
+  onShopChange,
   data,
   children,
 }) {
-  const desktop = useMediaQuery('(min-width:768px)')
+  const desktop = useMediaQuery('(min-width:1024px)')
   const current = navItems.find((item) => item.key === page) || navItems[0]
   const [moreAnchor, setMoreAnchor] = useState(null)
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -82,6 +85,7 @@ export default function AppLayout({
   const [searchOpen, setSearchOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [notificationsAnchor, setNotificationsAnchor] = useState(null)
+  const [shopAnchor, setShopAnchor] = useState(null)
   const notifications = useMemo(() => {
     const threshold = Number(data?.catalogSettings?.lowStockDefault ?? 5)
     const lowStock = (data?.stocks || []).filter((stock) => Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0) <= threshold)
@@ -119,9 +123,10 @@ export default function AppLayout({
   const mobilePrimary = navItems.filter((item) =>
     ['home', 'sales', 'stock', 'order'].includes(item.key),
   )
+  const mobileMoreKeys = ['products', 'customers', 'suppliers', 'purchases', 'finance', 'balance', 'settings']
 
   const nav = (
-    <List sx={{ px: 1.5 }}>
+    <List component="nav" aria-label="Primary navigation" sx={{ px: 1.5 }}>
       {navItems.map((item) => (
         <ListItemButton
           key={item.key}
@@ -172,6 +177,43 @@ export default function AppLayout({
               <MenuRoundedIcon />
             </IconButton>
           ) : null}
+          {!preview && shops.length > 1 ? (
+            <>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<StoreRoundedIcon />}
+                aria-label={`Switch store. Current store: ${shopName}`}
+                aria-haspopup="menu"
+                onClick={(event) => setShopAnchor(event.currentTarget)}
+                sx={{ minWidth: { xs: 42, sm: 150 }, maxWidth: 220, px: { xs: 1, sm: 1.5 } }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'block' }, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {shopName}
+                </Box>
+              </Button>
+              <Menu
+                anchorEl={shopAnchor}
+                open={Boolean(shopAnchor)}
+                onClose={() => setShopAnchor(null)}
+                MenuListProps={{ 'aria-label': 'Choose store' }}
+              >
+                {shops.map((entry) => (
+                  <MenuItem
+                    key={entry.id}
+                    selected={entry.id === shopId}
+                    onClick={() => {
+                      onShopChange?.(entry.id)
+                      setShopAnchor(null)
+                      setMobileOpen(false)
+                    }}
+                  >
+                    {entry.name}
+                  </MenuItem>
+                ))}
+              </Menu>
+            </>
+          ) : null}
           <Box sx={{ flexGrow: 1, minWidth: 0 }}>
             <Typography variant="h6" noWrap sx={{ lineHeight: 1.2 }}>
               {current.label}
@@ -201,6 +243,13 @@ export default function AppLayout({
               <Badge badgeContent={notifications.length} color="error"><NotificationsNoneRoundedIcon /></Badge>
             </IconButton>
           </Tooltip>
+          {!desktop ? (
+            <Tooltip title="Search">
+              <IconButton aria-label="Open global search" onClick={() => setCommandOpen(true)}>
+                <SearchRoundedIcon />
+              </IconButton>
+            </Tooltip>
+          ) : null}
           {!preview && userEmail ? (
             <Typography
               variant="body2"
@@ -311,7 +360,7 @@ export default function AppLayout({
           {mobilePrimary.map((item) => (
             <BottomNavigationAction
               key={item.key}
-              label={item.label}
+              label={item.key === 'order' ? 'POS' : item.label}
               value={item.key}
               icon={item.icon}
               onMouseEnter={() => preloadRoute(item.key)}
@@ -321,7 +370,7 @@ export default function AppLayout({
           ))}
           <BottomNavigationAction
             label="More"
-            value={['finance', 'balance', 'settings'].includes(page) ? page : 'more'}
+            value={mobileMoreKeys.includes(page) ? page : 'more'}
             icon={<MoreHorizRoundedIcon />}
             onClick={(event) => setMoreAnchor(event.currentTarget)}
           />
@@ -336,7 +385,7 @@ export default function AppLayout({
         transformOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
         {navItems
-          .filter((item) => ['finance', 'balance', 'settings'].includes(item.key))
+          .filter((item) => mobileMoreKeys.includes(item.key))
           .map((item) => (
             <MenuItem
               key={item.key}

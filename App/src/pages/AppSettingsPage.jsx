@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Box,
@@ -25,6 +25,7 @@ import StatusChip from '../components/StatusChip.jsx'
 import { useAuth } from '../contexts/AuthContext.jsx'
 import { useData } from '../contexts/DataContext.jsx'
 import { useFeedback } from '../contexts/FeedbackContext.jsx'
+import { api, getStoredShopId } from '../services/api.js'
 import {
   createProductDocument,
   deleteProductDocument,
@@ -73,16 +74,38 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
   const [methodDraft, setMethodDraft] = useState(paymentDraft)
   const [paymentMethods, setPaymentMethods] = useState(() => settings.paymentMethods)
   const [saving, setSaving] = useState(false)
+  const legacyCatalogEditorEnabled = false
+  const [templates, setTemplates] = useState([])
+  const [templateKey, setTemplateKey] = useState(data.storeConfiguration?.templateKey || 'GENERAL_STORE')
   const [preferenceDraft, setPreferenceDraft] = useState(() => ({
     lowStockDefault: settings.lowStockDefault,
     currencyCode: settings.currencyCode,
     dateFormat: settings.dateFormat,
+    locale: settings.locale,
+    timeZone: settings.timeZone,
     receiptFooter: settings.receiptFooter,
     notifyLowStock: settings.notifyLowStock,
     notifyPayments: settings.notifyPayments,
   }))
 
   const tree = normalizeOptionTree(productDraft.optionTree)
+
+  useEffect(() => {
+    if (user.preview) return undefined
+    api.storeTemplates().then((result) => setTemplates(result.templates || [])).catch(() => setTemplates([]))
+    return undefined
+  }, [user.preview])
+  const saveTemplate = async () => {
+    if (requireAuth?.('change store template')) return
+    setSaving(true)
+    try {
+      await api.updateStoreConfiguration(getStoredShopId() || user.uid, { templateKey, completeOnboarding: true })
+      await refresh()
+      notify('Store template and effective capabilities updated.')
+    } catch (error) {
+      notify(error.message || 'Store template could not be updated.', 'error')
+    } finally { setSaving(false) }
+  }
 
   const loadProduct = (product) => {
     const normalized = {
@@ -355,8 +378,33 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
 
   return (
     <Box className="page-stack">
-      <PageHeader title="App Settings" subtitle="Manage products, stock options, and payment methods." />
+      <PageHeader title="App Settings" subtitle="Manage store capabilities, defaults, formatting and payment methods." />
 
+      <SectionCard title="Store template and capabilities" subtitle="Changing templates preserves existing products and tracked operational data.">
+        <Stack spacing={2}>
+          <FormControl fullWidth>
+            <InputLabel id="store-template-label">Store template</InputLabel>
+            <Select labelId="store-template-label" label="Store template" value={templateKey} onChange={(event) => setTemplateKey(event.target.value)}>
+              {templates.map((template) => <MenuItem key={template.key} value={template.key}>{template.label}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            {(templates.find((template) => template.key === templateKey)?.publicCapabilities || []).map((capability) => (
+              <Chip
+                key={capability}
+                label={capability.replaceAll('.', ' · ')}
+                variant="outlined"
+                sx={{ color: '#1b5e20', borderColor: '#2e7d32' }}
+              />
+            ))}
+          </Box>
+          <Alert severity="info">Only public release-ready capabilities appear here. Existing lots, serials, recipes and transaction history are never deleted by a template change.</Alert>
+          <Button variant="contained" startIcon={<SaveRoundedIcon />} disabled={saving || templateKey === data.storeConfiguration?.templateKey} onClick={saveTemplate}>Apply template</Button>
+        </Stack>
+      </SectionCard>
+
+      {/* Legacy optionTree editing remains in code for compatibility, but product ownership is now exclusively the Products workspace. */}
+      {legacyCatalogEditorEnabled ? <>
       <SectionCard
         title="Stock Settings"
         subtitle="Add up to 3 option groups for each product. Variants are created when stock is added or sold."
@@ -463,6 +511,7 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
           ) : null}
         </Stack>
       </SectionCard>
+      </> : null}
 
       <SectionCard title="Payment Method Settings" subtitle="Create, reorder, activate, or remove payment methods.">
         <Box className="form-grid" sx={{ mt: 2 }}>
@@ -473,8 +522,9 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
             onChange={(event) => setMethodDraft((current) => ({ ...current, name: event.target.value }))}
           />
           <FormControl className="span-4">
-            <InputLabel>Payment behavior</InputLabel>
+            <InputLabel id="new-payment-behavior-label">Payment behavior</InputLabel>
             <Select
+              labelId="new-payment-behavior-label"
               label="Payment behavior"
               value={methodDraft.type}
               onChange={(event) => setMethodDraft((current) => ({ ...current, type: event.target.value }))}
@@ -498,8 +548,9 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
                   size="small"
                 />
                 <FormControl size="small" sx={{ minWidth: 160 }}>
-                  <InputLabel>Behavior</InputLabel>
+                  <InputLabel id={`payment-behavior-${method.id}-label`}>Behavior</InputLabel>
                   <Select
+                    labelId={`payment-behavior-${method.id}-label`}
                     label="Behavior"
                     value={method.type}
                     onChange={(event) => updatePaymentMethod(method.id, { type: event.target.value })}
@@ -509,8 +560,9 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
                   </Select>
                 </FormControl>
                 <FormControl size="small" sx={{ minWidth: 140 }}>
-                  <InputLabel>Status</InputLabel>
+                  <InputLabel id={`payment-status-${method.id}-label`}>Status</InputLabel>
                   <Select
+                    labelId={`payment-status-${method.id}-label`}
                     label="Status"
                     value={method.active ? 'active' : 'inactive'}
                     onChange={(event) => updatePaymentMethod(method.id, { active: event.target.value === 'active' })}
@@ -519,7 +571,11 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
                     <MenuItem value="inactive">Inactive</MenuItem>
                   </Select>
                 </FormControl>
-                <StatusChip status={method.active ? 'active' : 'inactive'} />
+                <StatusChip
+                  status={method.active ? 'active' : 'inactive'}
+                  variant="outlined"
+                  sx={method.active ? { color: '#1b5e20', borderColor: '#2e7d32' } : undefined}
+                />
               </Stack>
               <Stack direction="row" gap={0.5}>
                 <Button size="small" disabled={index === 0} onClick={() => movePaymentMethod(method.id, -1)}>Up</Button>
@@ -537,8 +593,10 @@ export default function AppSettingsPage({ refresh, requireAuth }) {
       <SectionCard title="Store preferences" subtitle="Inventory thresholds, receipts, formatting and notification preferences.">
         <Box className="form-grid">
           <TextField className="span-4" type="number" label="Default low-stock threshold" value={preferenceDraft.lowStockDefault} onChange={(event) => setPreferenceDraft((current) => ({ ...current, lowStockDefault: event.target.value }))} />
-          <FormControl className="span-4"><InputLabel>Currency</InputLabel><Select label="Currency" value={preferenceDraft.currencyCode} onChange={(event) => setPreferenceDraft((current) => ({ ...current, currencyCode: event.target.value }))}><MenuItem value="MMK">MMK</MenuItem><MenuItem value="USD">USD</MenuItem><MenuItem value="THB">THB</MenuItem></Select></FormControl>
-          <FormControl className="span-4"><InputLabel>Date format</InputLabel><Select label="Date format" value={preferenceDraft.dateFormat} onChange={(event) => setPreferenceDraft((current) => ({ ...current, dateFormat: event.target.value }))}><MenuItem value="yyyy-MM-dd">YYYY-MM-DD</MenuItem><MenuItem value="dd/MM/yyyy">DD/MM/YYYY</MenuItem><MenuItem value="MM/dd/yyyy">MM/DD/YYYY</MenuItem></Select></FormControl>
+          <FormControl className="span-4"><InputLabel id="preference-currency-label">Currency</InputLabel><Select labelId="preference-currency-label" label="Currency" value={preferenceDraft.currencyCode} onChange={(event) => setPreferenceDraft((current) => ({ ...current, currencyCode: event.target.value }))}><MenuItem value="MMK">MMK</MenuItem><MenuItem value="USD">USD</MenuItem><MenuItem value="THB">THB</MenuItem></Select></FormControl>
+          <FormControl className="span-4"><InputLabel id="preference-date-format-label">Date format</InputLabel><Select labelId="preference-date-format-label" label="Date format" value={preferenceDraft.dateFormat} onChange={(event) => setPreferenceDraft((current) => ({ ...current, dateFormat: event.target.value }))}><MenuItem value="yyyy-MM-dd">YYYY-MM-DD</MenuItem><MenuItem value="dd/MM/yyyy">DD/MM/YYYY</MenuItem><MenuItem value="MM/dd/yyyy">MM/DD/YYYY</MenuItem></Select></FormControl>
+          <FormControl className="span-4"><InputLabel id="preference-locale-label">Locale</InputLabel><Select labelId="preference-locale-label" label="Locale" value={preferenceDraft.locale} onChange={(event) => setPreferenceDraft((current) => ({ ...current, locale: event.target.value }))}><MenuItem value="en-MM">English (Myanmar)</MenuItem><MenuItem value="my-MM">Myanmar</MenuItem><MenuItem value="en-US">English (US)</MenuItem><MenuItem value="th-TH">Thai</MenuItem></Select></FormControl>
+          <FormControl className="span-4"><InputLabel id="preference-time-zone-label">Time zone</InputLabel><Select labelId="preference-time-zone-label" label="Time zone" value={preferenceDraft.timeZone} onChange={(event) => setPreferenceDraft((current) => ({ ...current, timeZone: event.target.value }))}><MenuItem value="Asia/Yangon">Asia/Yangon</MenuItem><MenuItem value="Asia/Bangkok">Asia/Bangkok</MenuItem><MenuItem value="UTC">UTC</MenuItem></Select></FormControl>
           <TextField className="span-12" label="Receipt footer" value={preferenceDraft.receiptFooter} onChange={(event) => setPreferenceDraft((current) => ({ ...current, receiptFooter: event.target.value }))} multiline minRows={2} />
           <Box className="span-12">
             <FormControlLabel control={<Switch checked={preferenceDraft.notifyLowStock} onChange={(event) => setPreferenceDraft((current) => ({ ...current, notifyLowStock: event.target.checked }))} />} label="Low-stock notifications" />
