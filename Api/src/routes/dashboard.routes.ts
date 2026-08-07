@@ -21,9 +21,12 @@ dashboardRouter.use(requireAuth);
 function dateRange(input: z.infer<typeof querySchema>) {
   if (!input.from && !input.to) return undefined;
 
+  const endOfDay = input.to ? new Date(input.to) : undefined;
+  endOfDay?.setHours(23, 59, 59, 999);
+
   return {
     ...(input.from ? { gte: input.from } : {}),
-    ...(input.to ? { lte: input.to } : {}),
+    ...(endOfDay ? { lte: endOfDay } : {}),
   };
 }
 
@@ -106,12 +109,14 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
     const recognitionRange = dateRange(query);
     const expenseSpentAt = dateRange(query);
 
-    const [orders, payments, expenses, customersCount, productsCount, lowStockBatches, purchases, balances] = await Promise.all([
+    const [orders, payments, expenses, customersCount, productsCount, categoriesCount, lowStockBatches, purchases, balances] = await Promise.all([
       prisma.order.findMany({
         where: { shopId },
         include: {
           items: true,
+          customer: true,
         },
+        orderBy: { createdAt: "desc" },
       }),
       prisma.payment.findMany({ where: { shopId } }),
       prisma.expense.findMany({
@@ -122,6 +127,7 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
       }),
       prisma.customer.count({ where: { shopId } }),
       prisma.product.count({ where: { shopId, isActive: true } }),
+      prisma.category.count({ where: { shopId } }),
       prisma.inventoryBatch.findMany({
         where: { shopId },
         include: {
@@ -129,7 +135,11 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
           variant: true,
         },
       }),
-      prisma.purchase.findMany({ where: { shopId }, include: { payments: true } }),
+      prisma.purchase.findMany({
+        where: { shopId },
+        include: { payments: true, supplier: true },
+        orderBy: { expectedAt: "asc" },
+      }),
       prisma.inventoryBalance.findMany({ where: { shopId }, include: { product: true } }),
     ]);
 
@@ -164,6 +174,7 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
     const inventoryValuation = balances.reduce((sum, balance) =>
       sum + Number(balance.onHand) * Number(balance.product.cost ?? 0), 0);
     const cashBalance = cashReceived - refunds - purchasePayments - operatingExpenses;
+    const stockUnits = balances.reduce((sum, balance) => sum + Math.max(0, Number(balance.onHand)), 0);
 
     const lowStock = lowStockBatches
       .map((batch) => ({
@@ -176,6 +187,29 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
       }))
       .filter((batch) => batch.availableQuantity <= 5)
       .sort((a, b) => a.availableQuantity - b.availableQuantity);
+
+    const recentSales = recognizedOrders
+      .sort((a, b) => (recognizedAt(b)?.getTime() ?? 0) - (recognizedAt(a)?.getTime() ?? 0))
+      .slice(0, 6)
+      .map((order) => ({
+        id: order.id,
+        invoiceNumber: order.orderNumber ?? order.id.slice(-6).toUpperCase(),
+        customerName: order.customer?.name ?? "လမ်းလျှောက်ဝယ်သူ",
+        amount: order.total,
+        paymentStatus: order.paymentStatus,
+        completedAt: recognizedAt(order),
+      }));
+
+    const upcomingPayables = purchases
+      .filter((purchase) => purchase.status !== "cancelled" && purchase.total > purchase.paidAmount)
+      .slice(0, 6)
+      .map((purchase) => ({
+        id: purchase.id,
+        supplierName: purchase.supplier.name,
+        amount: Math.max(0, purchase.total - purchase.paidAmount),
+        dueDate: purchase.expectedAt,
+        purchaseNumber: purchase.purchaseNumber,
+      }));
 
     response.status(200).json({
       summary: {
@@ -196,8 +230,12 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
         ordersCount: orders.length,
         customersCount,
         activeProductsCount: productsCount,
+        categoriesCount,
+        stockUnits,
       },
       lowStock,
+      recentSales,
+      upcomingPayables,
     });
   } catch (error) {
     next(error);

@@ -1,11 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { emptyData, refreshUserData } from '../services/shopApiService.js'
+import { emptyData, previewDemoData, refreshUserData } from '../services/shopApiService.js'
 import { useAuth } from './AuthContext.jsx'
 import { setStoreFormatPreferences } from '../utils/storage.js'
 
 const DataContext = createContext(null)
-const previewData = emptyData
+const previewData = previewDemoData
 
 export function DataProvider({ children }) {
   const { user } = useAuth()
@@ -26,6 +26,22 @@ export function DataProvider({ children }) {
     setData(nextData)
     return nextData
   }, [user])
+
+  const savePreviewSale = useCallback((sale) => {
+    if (!user?.preview) return
+    setData((current) => ({
+      ...current,
+      stocks: current.stocks.map((stock) => {
+        const line = sale.items.find((item) => item.productId === stock.productId)
+        return line ? { ...stock, quantity: Math.max(0, Number(stock.quantity || 0) - line.quantity) } : stock
+      }),
+      products: current.products.map((product) => {
+        const line = sale.items.find((item) => item.productId === product.id)
+        return line ? { ...product, quantity: Math.max(0, Number(product.quantity || 0) - line.quantity) } : product
+      }),
+      orders: [sale, ...current.orders],
+    }))
+  }, [user?.preview])
 
   useEffect(() => {
     setStoreFormatPreferences(data.catalogSettings)
@@ -65,8 +81,9 @@ export function DataProvider({ children }) {
       loading,
       error,
       refresh,
+      savePreviewSale,
     }),
-    [data, loading, error, refresh],
+    [data, loading, error, refresh, savePreviewSale],
   )
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>

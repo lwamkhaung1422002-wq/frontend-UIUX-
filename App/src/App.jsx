@@ -20,6 +20,7 @@ const ProductsPage = lazy(routeLoaders.products)
 const CustomersPage = lazy(routeLoaders.customers)
 const SuppliersPage = lazy(routeLoaders.suppliers)
 const PurchasesPage = lazy(routeLoaders.purchases)
+const PricingPage = lazy(routeLoaders.pricing)
 const LoginPage = lazy(() => import('./pages/LoginPage.jsx'))
 
 const pages = {
@@ -34,11 +35,14 @@ const pages = {
   customers: CustomersPage,
   suppliers: SuppliersPage,
   purchases: PurchasesPage,
+  pricing: PricingPage,
 }
 
-const theme = createTheme({
+function createAppTheme(mode) {
+  const isDark = mode === 'dark'
+  return createTheme({
   palette: {
-    mode: 'light',
+    mode,
     primary: {
       main: '#047857',
       dark: '#065f46',
@@ -55,14 +59,14 @@ const theme = createTheme({
       main: '#dc2626',
     },
     background: {
-      default: '#f8faf9',
-      paper: '#ffffff',
+      default: isDark ? '#0f1720' : '#f8faf9',
+      paper: isDark ? '#17222d' : '#ffffff',
     },
     text: {
-      primary: '#17211d',
-      secondary: '#66736d',
+      primary: isDark ? '#edf6f1' : '#17211d',
+      secondary: isDark ? '#aebdb5' : '#66736d',
     },
-    divider: '#e2e8e5',
+    divider: isDark ? '#31433a' : '#e2e8e5',
   },
   shape: {
     borderRadius: 10,
@@ -123,7 +127,7 @@ const theme = createTheme({
       styleOverrides: {
         root: {
           borderRadius: 8,
-          backgroundColor: '#fff',
+          backgroundColor: isDark ? '#17222d' : '#fff',
         },
       },
     },
@@ -143,7 +147,8 @@ const theme = createTheme({
       },
     },
   },
-})
+  })
+}
 
 function LoadingScreen() {
   return (
@@ -153,7 +158,7 @@ function LoadingScreen() {
   )
 }
 
-function AppGate() {
+function AppGate({ colorMode, onToggleColorMode }) {
   const { user, loading } = useAuth()
   const [showAuth, setShowAuth] = useState(false)
   const route = useHashRoute()
@@ -170,12 +175,12 @@ function AppGate() {
 
   return (
     <DataProvider key={user.shop?.id || user.uid}>
-      <ProtectedApp onGetStarted={() => setShowAuth(true)} />
+      <ProtectedApp onGetStarted={() => setShowAuth(true)} colorMode={colorMode} onToggleColorMode={onToggleColorMode} />
     </DataProvider>
   )
 }
 
-function ProtectedApp({ onGetStarted }) {
+function ProtectedApp({ onGetStarted, colorMode, onToggleColorMode }) {
   const { user, shop, logout, selectShop } = useAuth()
   const { data, loading: dataLoading, error: dataError, refresh } = useData()
   const route = useHashRoute()
@@ -190,10 +195,10 @@ function ProtectedApp({ onGetStarted }) {
     [],
   )
   const requireAuth = useCallback(() => {
-    if (!user.preview) return false
-    onGetStarted()
-    return true
-  }, [onGetStarted, user.preview])
+    // Preview mode is intentionally writable while the owner tests the POS.
+    // Authentication is re-enabled by replacing this temporary preview mode.
+    return false
+  }, [])
 
   useEffect(() => {
     // Sales is the most frequently visited workspace. Start loading it immediately, then warm every remaining route.
@@ -238,12 +243,9 @@ function ProtectedApp({ onGetStarted }) {
       shopId={shop?.id}
       onShopChange={selectShop}
       data={data}
+      colorMode={colorMode}
+      onToggleColorMode={onToggleColorMode}
     >
-      {user.preview ? (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Preview mode: changes are not saved. Create an account to manage a live store.
-        </Alert>
-      ) : null}
       {dataError ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           {dataError}
@@ -264,13 +266,30 @@ function ProtectedApp({ onGetStarted }) {
 }
 
 export default function App() {
+  const [colorMode, setColorMode] = useState(() => {
+    try {
+      return localStorage.getItem('pos:color-mode') === 'dark' ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
+  const theme = useMemo(() => createAppTheme(colorMode), [colorMode])
+  const toggleColorMode = useCallback(() => {
+    setColorMode((current) => (current === 'dark' ? 'light' : 'dark'))
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.dataset.colorMode = colorMode
+    try { localStorage.setItem('pos:color-mode', colorMode) } catch { /* storage is optional */ }
+  }, [colorMode])
+
   return (
     <AppErrorBoundary>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <FeedbackProvider>
           <AuthProvider>
-            <AppGate />
+            <AppGate colorMode={colorMode} onToggleColorMode={toggleColorMode} />
           </AuthProvider>
         </FeedbackProvider>
       </ThemeProvider>

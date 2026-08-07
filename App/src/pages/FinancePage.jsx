@@ -1,802 +1,118 @@
 import { useMemo, useState } from 'react'
 import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Divider,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Paper,
-  Select,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
-  Typography,
-  useMediaQuery,
+  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  FormControl, InputLabel, MenuItem, Paper, Select, Stack, Table, TableBody,
+  TableCell, TableContainer, TableHead, TableRow, TextField, ToggleButton,
+  ToggleButtonGroup, Typography, useMediaQuery,
 } from '@mui/material'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import PaidOutlinedIcon from '@mui/icons-material/PaidOutlined'
-import ReplayOutlinedIcon from '@mui/icons-material/ReplayOutlined'
-import MetricCard from '../components/MetricCard.jsx'
-import PageHeader from '../components/PageHeader.jsx'
-import SectionCard from '../components/SectionCard.jsx'
-import EmptyState from '../components/EmptyState.jsx'
-import StatusChip from '../components/StatusChip.jsx'
+import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import PaidRoundedIcon from '@mui/icons-material/PaidRounded'
 import { useAuth } from '../contexts/AuthContext.jsx'
 import { useData } from '../contexts/DataContext.jsx'
-import {
-  receiveCodSettlementAtomic,
-  receivePaymentAtomic,
-  refundPaymentAtomic,
-  voidCodSettlementAtomic,
-} from '../services/shopApiService.js'
-import {
-  buildFinanceState,
-  formatKs,
-  getReceivedByMethod,
-  getToday,
-} from '../utils/storage.js'
-import { activePaymentMethods, isCodPaymentMethod } from '../utils/catalog.js'
 import { useFeedback } from '../contexts/FeedbackContext.jsx'
-import useSessionState from '../hooks/useSessionState.js'
-import {
-  digitsOnly,
-  filterFinanceOrders,
-  validateCodSettlement,
-  validatePaymentDetails,
-} from '../domain/payments.js'
+import { activePaymentMethods } from '../utils/catalog.js'
+import { formatKs, getToday } from '../utils/storage.js'
+import { calculateFinancialSummary } from '../domain/finance.js'
+import { createExpenseDocument, payPurchaseDocument, receivePaymentAtomic } from '../services/shopApiService.js'
 
-const searchTypes = [
-  { value: 'all', label: 'All' },
-  { value: 'name', label: 'Customer' },
-  { value: 'phone', label: 'Phone' },
-  { value: 'tx', label: 'Transaction ID' },
-  { value: 'bill', label: 'Bill Number' },
-  { value: 'method', label: 'Payment Method' },
-]
+const money = (value) => formatKs(Number(value || 0))
+const day = (value) => String(value || '').slice(0, 10)
+const orderDate = (order) => day(order.completedAt || order.createdAt || order.date)
+const inRange = (value, from, to) => (!from || value >= from) && (!to || value <= to)
+const paymentDate = (payment) => day(payment.paidAt || payment.date || payment.createdAt)
+const isCredit = (order) => order.paymentStatus === 'unpaid' || Number(order.balanceDue || 0) > 0
+
+function Metric({ label, value, tone = '' }) {
+  return <Box className={`finance-summary-metric ${tone}`}><Typography>{label}</Typography><strong>{value}</strong></Box>
+}
+
+function typeLabel(type) {
+  return ({ sale: 'အရောင်းဝင်ငွေ', credit: 'အကြွေးလက်ခံငွေ', supplier: 'supplier ပေးချေမှု', expense: 'ကုန်ကျစရိတ်', refund: 'ပြန်အမ်းငွေ' })[type] || type
+}
 
 export default function FinancePage({ refresh, requireAuth }) {
-  const mobile = useMediaQuery('(max-width:767px)')
+  const mobile = useMediaQuery('(max-width:899px)')
   const { user } = useAuth()
   const { data } = useData()
   const { notify } = useFeedback()
-  const state = useMemo(() => buildFinanceState(data), [data])
-  const paymentMethods = useMemo(() => activePaymentMethods(data.catalogSettings), [data.catalogSettings])
-  const defaultCodMethod = paymentMethods.find((method) => method.type === 'cod')?.name || paymentMethods[0]?.name || 'COD'
-  const [searchView, setSearchView] = useSessionState('finance:search', {
-    type: 'all',
-    value: '',
-  })
-  const searchType = searchView.type
-  const search = searchView.value
-  const setSearchType = (value) =>
-    setSearchView((current) => ({ ...current, type: value }))
-  const setSearch = (value) =>
-    setSearchView((current) => ({ ...current, value }))
-  const [receiveOrder, setReceiveOrder] = useState(null)
-  const [selectedCodOrderIds, setSelectedCodOrderIds] = useState([])
-  const [codOrderSearch, setCodOrderSearch] = useState('')
-  const [refundOrder, setRefundOrder] = useState(null)
-  const [voidPayment, setVoidPayment] = useState(null)
-  const [voidReason, setVoidReason] = useState('')
-  const [detailOrder, setDetailOrder] = useState(null)
-  const [savedStatusView, setStatusView] = useSessionState('finance:status:v2', 'all')
-  const statusView = ['all', 'outstanding', 'received', 'refunded'].includes(savedStatusView)
-    ? savedStatusView
-    : 'all'
-  const [working, setWorking] = useState(false)
-  const [receiveDraft, setReceiveDraft] = useState({
-    method: defaultCodMethod,
-    billNumber: '',
-    transactionId: '',
-    amount: '',
-    date: getToday(),
-    note: '',
-  })
-  const [refundDraft, setRefundDraft] = useState({
-    method: '',
-    transactionId: '',
-    date: getToday(),
-    reason: '',
-  })
+  const [from, setFrom] = useState(getToday)
+  const [to, setTo] = useState(getToday)
+  const [type, setType] = useState('all')
+  const [expenseOpen, setExpenseOpen] = useState(false)
+  const [supplierPurchase, setSupplierPurchase] = useState(null)
+  const [creditOrder, setCreditOrder] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const methods = useMemo(() => activePaymentMethods(data.catalogSettings), [data.catalogSettings])
+  const defaultMethod = methods[0]?.name || 'ငွေသား'
+  const [expense, setExpense] = useState({ title: '', category: 'အခြားကုန်ကျစရိတ်', amount: '', method: defaultMethod, date: getToday(), note: '' })
+  const [supplierPayment, setSupplierPayment] = useState({ amount: '', method: defaultMethod, reference: '', paidAt: getToday(), notes: '' })
+  const [creditPayment, setCreditPayment] = useState({ amount: '', method: defaultMethod, transactionId: '', date: getToday(), note: '' })
 
-  const financeResults = useMemo(
-    () => filterFinanceOrders(state, search, searchType, statusView),
-    [search, searchType, state, statusView],
-  )
-  const searchCounts = financeResults.counts
-  const filteredOrders = financeResults.orders
+  const orders = useMemo(() => (data.orders || []).filter((order) => order.fulfillmentStatus !== 'cancelled'), [data.orders])
+  const periodOrders = useMemo(() => orders.filter((order) => inRange(orderDate(order), from, to)), [orders, from, to])
+  const periodExpenses = useMemo(() => (data.expenses || []).filter((item) => inRange(day(item.spentAt || item.date || item.createdAt), from, to)), [data.expenses, from, to])
+  const receivables = useMemo(() => orders.filter(isCredit), [orders])
+  const purchases = useMemo(() => (data.purchases || []).filter((purchase) => purchase.status !== 'cancelled'), [data.purchases])
+  const payables = useMemo(() => (data.purchases || []).filter((purchase) => purchase.status !== 'cancelled' && Number(purchase.total || 0) > Number(purchase.paidAmount || 0)), [data.purchases])
 
-  const methodBalance = getReceivedByMethod(state.payments, state.orderById)
-  const totalBalance = Object.values(methodBalance).reduce((sum, value) => sum + value, 0)
-  const selectedReceiveMethod = paymentMethods.some((method) => method.name === receiveDraft.method)
-    ? receiveDraft.method
-    : defaultCodMethod
-  const receiveIsCod = isCodPaymentMethod(selectedReceiveMethod, data.catalogSettings)
-  const receiveIsCash = String(selectedReceiveMethod || '').trim().toLowerCase() === 'cash'
-
-  const openReceive = (order) => {
-    setReceiveOrder(order)
-    setSelectedCodOrderIds([order.id])
-    setCodOrderSearch(order.customer.phone || '')
-    setReceiveDraft({
-      method: defaultCodMethod,
-      billNumber: '',
-      transactionId: '',
-      amount: order.balanceDue || order.total,
-      date: getToday(),
-      note: '',
+  const summary = useMemo(() => {
+    const financial = calculateFinancialSummary(periodOrders, periodExpenses)
+    const orderById = new Map(orders.map((order) => [String(order.id), order]))
+    let received = 0; let refunds = 0
+    ;(data.payments || []).forEach((payment) => {
+      if (!inRange(paymentDate(payment), from, to)) return
+      if (payment.type === 'refund') { refunds += Number(payment.amount || 0); return }
+      if (payment.type === 'payment' && orderById.has(String(payment.orderId))) received += Number(payment.amount || 0)
     })
-  }
+    const supplierPaid = purchases.flatMap((purchase) => purchase.payments || []).filter((payment) => !payment.reversedAt && inRange(paymentDate(payment), from, to)).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+    const expenses = periodExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+    return { ...financial, received, refunds, supplierPaid, expenses, cashOut: supplierPaid + expenses + refunds, cashMovement: received - supplierPaid - expenses - refunds,
+      receivable: receivables.reduce((sum, order) => sum + Number(order.balanceDue || order.total || 0), 0),
+      payable: payables.reduce((sum, purchase) => sum + Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), 0) }
+  }, [periodOrders, periodExpenses, data.payments, orders, purchases, payables, receivables, from, to])
 
-  const confirmReceive = async () => {
-    if (requireAuth?.('receive payment')) return
-    const receiveIsCod = isCodPaymentMethod(selectedReceiveMethod, data.catalogSettings)
-    const validationError = validatePaymentDetails({ ...receiveDraft, method: selectedReceiveMethod, settings: data.catalogSettings, isCod: receiveIsCod })
-    if (validationError) {
-      notify(validationError, 'warning')
-      return
-    }
-
-    const selectedOrders = state.outstandingOrders.filter((order) =>
-      selectedCodOrderIds.includes(order.id),
-    )
-    if (receiveIsCod) {
-      const allocations = selectedOrders.map((order) => ({
-        orderId: order.id,
-        customerName: order.customer.name,
-        phone: order.customer.phone,
-        amount: order.balanceDue || order.total,
-      }))
-      const settlementError = validateCodSettlement(allocations, { ...receiveDraft, method: selectedReceiveMethod, settings: data.catalogSettings, isCod: true })
-      if (settlementError) {
-        notify(settlementError, 'warning')
-        return
-      }
-    } else if (selectedCodOrderIds.length !== 1) {
-      notify('Non-COD payments can receive one order at a time.', 'warning')
-      return
-    }
-
-    setWorking(true)
-    try {
-      if (receiveIsCod) {
-        await receiveCodSettlementAtomic(
-          user.uid,
-          selectedOrders.map((order) => ({
-            orderId: order.id,
-            customerName: order.customer.name,
-            phone: order.customer.phone,
-            amount: order.balanceDue || order.total,
-          })),
-          { ...receiveDraft, method: selectedReceiveMethod, amount: Number(receiveDraft.amount) },
-        )
-      } else {
-        await receivePaymentAtomic(user.uid, receiveOrder.id, { ...receiveDraft, method: selectedReceiveMethod })
-      }
-      setReceiveOrder(null)
-      notify('Payment received and recorded atomically.')
-      refresh()
-    } catch (error) {
-      notify(error.message || 'Payment could not be recorded.', 'error')
-    } finally {
-      setWorking(false)
-    }
-  }
-
-  const openRefund = (order) => {
-    const payment = state.paymentById[order.paymentId]
-    if (!payment) return
-
-    setRefundOrder(order)
-    setRefundDraft({
-      method: payment.method,
-      transactionId: '',
-      date: getToday(),
-      reason: '',
+  const ledger = useMemo(() => {
+    const entries = []
+    periodOrders.forEach((order) => entries.push({ id: `sale-${order.id}`, type: isCredit(order) ? 'credit' : 'sale', date: orderDate(order), at: order.completedAt || order.createdAt, reference: `ဘောက်ချာ ${order.orderNumber || String(order.id).slice(-5)}`, method: order.paymentMethod || '-', income: isCredit(order) ? 0 : Number(order.total || 0), expense: 0, order }))
+    ;(data.payments || []).filter((payment) => inRange(paymentDate(payment), from, to)).forEach((payment) => {
+      const order = orders.find((item) => String(item.id) === String(payment.orderId))
+      if (!order) return
+      if (payment.type === 'refund') entries.push({ id: `refund-${payment.id}`, type: 'refund', date: paymentDate(payment), at: payment.paidAt || payment.createdAt, reference: `ဘောက်ချာ ${order.orderNumber || String(order.id).slice(-5)}`, method: payment.method || '-', income: 0, expense: Number(payment.amount || 0) })
+      else if (payment.type === 'payment' && isCredit(order)) entries.push({ id: `credit-${payment.id}`, type: 'credit', date: paymentDate(payment), at: payment.paidAt || payment.createdAt, reference: `ဘောက်ချာ ${order.orderNumber || String(order.id).slice(-5)}`, method: payment.method || '-', income: Number(payment.amount || 0), expense: 0 })
     })
+    purchases.forEach((purchase) => (purchase.payments || []).filter((payment) => !payment.reversedAt && inRange(paymentDate(payment), from, to)).forEach((payment) => entries.push({ id: `supplier-${payment.id}`, type: 'supplier', date: paymentDate(payment), at: payment.paidAt || payment.createdAt, reference: `${purchase.supplier?.name || 'Supplier'} · ${purchase.purchaseNumber || String(purchase.id).slice(-5)}`, method: payment.method || '-', income: 0, expense: Number(payment.amount || 0) })))
+    periodExpenses.forEach((item) => entries.push({ id: `expense-${item.id}`, type: 'expense', date: day(item.spentAt || item.date || item.createdAt), at: item.spentAt || item.createdAt, reference: item.title, method: item.method || '-', income: 0, expense: Number(item.amount || 0) }))
+    return entries.filter((entry) => type === 'all' || entry.type === type).sort((a, b) => new Date(b.at || b.date).getTime() - new Date(a.at || a.date).getTime())
+  }, [periodOrders, periodExpenses, data.payments, orders, purchases, from, to, type])
+
+  const saveExpense = async () => {
+    if (!expense.title.trim() || Number(expense.amount) <= 0) return notify('ကုန်ကျစရိတ်အမည်နှင့် ပမာဏမှန်ကန်စွာထည့်ပါ', 'warning')
+    if (requireAuth?.('create expense')) return
+    setSaving(true)
+    try { await createExpenseDocument(user.uid, expense); setExpenseOpen(false); setExpense({ title: '', category: 'အခြားကုန်ကျစရိတ်', amount: '', method: defaultMethod, date: getToday(), note: '' }); await refresh?.(); notify('ကုန်ကျစရိတ်ကို သိမ်းပြီးပါပြီ') } catch (error) { notify(error.message || 'ကုန်ကျစရိတ်မသိမ်းနိုင်ပါ', 'error') } finally { setSaving(false) }
   }
-
-  const openVoid = (order) => {
-    const payment = state.paymentById[order.paymentId]
-    if (payment?.scope !== 'cod-settlement') return
-    setVoidPayment(payment)
-    setVoidReason('')
+  const saveSupplierPayment = async () => {
+    const outstanding = Math.max(0, Number(supplierPurchase?.total || 0) - Number(supplierPurchase?.paidAmount || 0))
+    if (Number(supplierPayment.amount) <= 0 || Number(supplierPayment.amount) > outstanding) return notify('ပေးရန်ကျန်ငွေထက် ပို၍မပေးနိုင်ပါ', 'warning')
+    setSaving(true)
+    try { await payPurchaseDocument(user.uid, supplierPurchase.id, supplierPayment); setSupplierPurchase(null); await refresh?.(); notify('Supplier ပေးချေမှုကို သိမ်းပြီးပါပြီ') } catch (error) { notify(error.message || 'Supplier ပေးချေမှု မသိမ်းနိုင်ပါ', 'error') } finally { setSaving(false) }
   }
-
-  const confirmVoid = async () => {
-    if (requireAuth?.('void COD settlement')) return
-    setWorking(true)
-    try {
-      await voidCodSettlementAtomic(user.uid, voidPayment, voidReason)
-      setVoidPayment(null)
-      notify('COD settlement voided and linked orders returned to outstanding.')
-      refresh()
-    } catch (error) {
-      notify(error.message || 'COD settlement could not be voided.', 'error')
-    } finally {
-      setWorking(false)
-    }
+  const saveCreditPayment = async () => {
+    const outstanding = Number(creditOrder?.balanceDue || creditOrder?.total || 0)
+    if (Number(creditPayment.amount) <= 0 || Number(creditPayment.amount) > outstanding) return notify('ရရန်အကြွေးပမာဏကို စစ်ဆေးပါ', 'warning')
+    setSaving(true)
+    try { await receivePaymentAtomic(user.uid, creditOrder.id, creditPayment); setCreditOrder(null); await refresh?.(); notify('အကြွေးလက်ခံငွေကို သိမ်းပြီးပါပြီ') } catch (error) { notify(error.message || 'အကြွေးလက်ခံငွေ မသိမ်းနိုင်ပါ', 'error') } finally { setSaving(false) }
   }
+  const openSupplier = (purchase) => { setSupplierPurchase(purchase); setSupplierPayment({ amount: Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), method: defaultMethod, reference: '', paidAt: getToday(), notes: '' }) }
+  const openCredit = (order) => { setCreditOrder(order); setCreditPayment({ amount: Number(order.balanceDue || order.total || 0), method: defaultMethod, transactionId: '', date: getToday(), note: '' }) }
 
-  const confirmRefund = async () => {
-    if (requireAuth?.('refund payment')) return
-    if (!/^\d{6}$/.test(refundDraft.transactionId) || !refundDraft.date || !refundDraft.reason) {
-      notify('A 6-digit refund transaction ID, date, and reason are required.', 'warning')
-      return
-    }
-
-    const payment = state.paymentById[refundOrder.paymentId]
-    if (!payment) return
-
-    setWorking(true)
-    try {
-      await refundPaymentAtomic(user.uid, refundOrder.id, refundDraft)
-      setRefundOrder(null)
-      notify('Refund recorded without changing the original payment.')
-      refresh()
-    } catch (error) {
-      notify(error.message || 'Refund could not be recorded.', 'error')
-    } finally {
-      setWorking(false)
-    }
-  }
-
-  const detailPayment = detailOrder ? state.paymentById[detailOrder.paymentId] : null
-  const detailRefund = detailOrder?.refundId ? state.paymentById[detailOrder.refundId] : null
-  const allOrderCount = searchCounts.all
-  const statusLabel = (order) =>
-    order.paymentStatus === 'paid'
-      ? 'Received'
-      : order.paymentStatus === 'refunded'
-        ? 'Refunded'
-        : 'Outstanding'
-  const paymentReferenceText = (order) => {
-    const payment = state.paymentById[order.paymentId]
-    if (!payment) return ''
-    return isCodPaymentMethod(payment.method, data.catalogSettings)
-      ? `COD ${payment.billNumber || '-'} · TX ${payment.transactionId || '-'}`
-      : `${payment.method || 'Payment'} · ${payment.transactionId || '-'}`
-  }
-  const codCandidates = state.outstandingOrders.filter((order) => {
-    const term = codOrderSearch.trim().toLowerCase()
-    return (
-      !term ||
-      [order.customer.phone, order.customer.name, order.id].some((value) =>
-        String(value || '').toLowerCase().includes(term),
-      )
-    )
-  })
-  const selectedCodOrders = state.outstandingOrders.filter((order) =>
-    selectedCodOrderIds.includes(order.id),
-  )
-  const selectedCodTotal = selectedCodOrders.reduce((sum, order) => sum + Number(order.balanceDue || order.total || 0), 0)
-
-  return (
-    <Box className="page-stack finance-page">
-      <PageHeader
-        title="Finance / Payments"
-        subtitle="Receive paid orders, process refunds, and review payment balances."
-      />
-
-      <div className="metric-grid finance-metric-grid">
-        <MetricCard title="Orders Received" value={state.receivedOrders.length} tone="primary" />
-        <MetricCard title="Amount Received" value={formatKs(state.totals.received)} tone="success" />
-        <MetricCard title="Refunded" value={formatKs(state.totals.refunded)} tone="error" />
-        <MetricCard title="Outstanding" value={formatKs(state.totals.outstanding)} tone={state.totals.outstanding > 0 ? 'warning' : 'default'} />
-      </div>
-
-      {state.anomalies.length ? (
-        <Alert severity="warning">
-          {state.anomalies.length} historical payment record issue(s) need review. No production
-          records were changed automatically.
-        </Alert>
-      ) : null}
-
-      <Paper variant="outlined" className="finance-toolbar data-toolbar">
-        {mobile ? (
-          <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-            <InputLabel id="finance-payment-status-label">Payment status</InputLabel>
-            <Select
-              labelId="finance-payment-status-label"
-              label="Payment status"
-              value={statusView}
-              onChange={(event) => setStatusView(event.target.value)}
-            >
-              <MenuItem value="all">All ({allOrderCount})</MenuItem>
-              <MenuItem value="outstanding">Outstanding ({searchCounts.outstanding})</MenuItem>
-              <MenuItem value="received">Received ({searchCounts.received})</MenuItem>
-              <MenuItem value="refunded">Refunded ({searchCounts.refunded})</MenuItem>
-            </Select>
-          </FormControl>
-        ) : (
-          <ToggleButtonGroup
-            value={statusView}
-            exclusive
-            fullWidth
-            size="small"
-            onChange={(_, value) => value && setStatusView(value)}
-            sx={{ mb: 2 }}
-          >
-            <ToggleButton value="all">All ({allOrderCount})</ToggleButton>
-            <ToggleButton value="outstanding">
-              Outstanding ({searchCounts.outstanding})
-            </ToggleButton>
-            <ToggleButton value="received">Received ({searchCounts.received})</ToggleButton>
-            <ToggleButton value="refunded">Refunded ({searchCounts.refunded})</ToggleButton>
-          </ToggleButtonGroup>
-        )}
-        <Box className="form-grid">
-          <FormControl className="span-3" size="small">
-            <InputLabel id="finance-search-type-label">Search Type</InputLabel>
-            <Select labelId="finance-search-type-label" label="Search Type" value={searchType} onChange={(event) => setSearchType(event.target.value)}>
-              {searchTypes.map((type) => (
-                <MenuItem key={type.value} value={type.value}>
-                  {type.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <TextField
-            className="span-9"
-            label="Search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            size="small"
-          />
-        </Box>
-      </Paper>
-
-      {mobile ? (
-        <Box className="mobile-data-list finance-mobile-list">
-        {filteredOrders.map((order) => (
-          <Paper key={order.id} variant="outlined" className="mobile-data-card finance-mobile-card">
-            <Box className="finance-card-heading">
-              <Box sx={{ minWidth: 0 }}>
-                <Typography fontWeight={900} noWrap>
-                  {order.customer.name || 'Unnamed customer'}
-                </Typography>
-                <Typography variant="body2" color="text.secondary" noWrap>
-                  {order.customer.phone || 'No phone'} · {order.customer.city || 'No city'}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {order.date} · #{order.id.slice(0, 8)}
-                </Typography>
-              </Box>
-              <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
-                <Typography fontWeight={900} color="primary.main">
-                  {formatKs(order.paymentStatus === 'unpaid' ? order.balanceDue || order.total : order.total)}
-                </Typography>
-                <StatusChip
-                  status={order.paymentStatus === 'paid' ? 'received' : order.paymentStatus}
-                  label={statusLabel(order)}
-                  sx={{ mt: 0.5 }}
-                />
-              </Box>
-            </Box>
-            <Box className="finance-card-meta">
-              <Typography variant="caption" color="text.secondary">Source</Typography>
-              <Typography variant="body2" fontWeight={700}>{order.source || '-'}</Typography>
-              {paymentReferenceText(order) ? (
-                <>
-                  <Typography variant="caption" color="text.secondary">Payment</Typography>
-                  <Typography variant="body2" fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>
-                    {paymentReferenceText(order)}
-                  </Typography>
-                </>
-              ) : null}
-            </Box>
-            <Stack direction="row" gap={1} className="finance-card-actions">
-              <Button
-                variant="outlined"
-                startIcon={<InfoOutlinedIcon />}
-                onClick={() => setDetailOrder(order)}
-                sx={{ flex: 1 }}
-              >
-                Details
-              </Button>
-              {order.paymentStatus === 'paid' &&
-              !isCodPaymentMethod(state.paymentById[order.paymentId]?.method, data.catalogSettings) ? (
-                <Button
-                  variant="contained"
-                  color="error"
-                  startIcon={<ReplayOutlinedIcon />}
-                  onClick={() => openRefund(order)}
-                  sx={{ flex: 1 }}
-                >
-                  Refund
-                </Button>
-              ) : order.paymentStatus === 'paid' &&
-                state.paymentById[order.paymentId]?.scope === 'cod-settlement' ? (
-                <Button
-                  variant="outlined"
-                  color="warning"
-                  onClick={() => openVoid(order)}
-                  sx={{ flex: 1 }}
-                >
-                  Void
-                </Button>
-              ) : order.paymentStatus === 'unpaid' ? (
-                <Button
-                  variant="contained"
-                  color="success"
-                  startIcon={<PaidOutlinedIcon />}
-                  onClick={() => openReceive(order)}
-                  sx={{ flex: 1 }}
-                >
-                  Receive
-                </Button>
-              ) : null}
-            </Stack>
-          </Paper>
-        ))}
-        {!filteredOrders.length ? (
-          <EmptyState
-            compact
-            title={`No ${statusView} orders`}
-            message="Try another status or clear the search."
-          />
-        ) : null}
-        </Box>
-      ) : (
-        <TableContainer component={Paper} variant="outlined" className="desktop-data-table finance-table">
-        <Table size="small" stickyHeader>
-          <TableHead>
-            <TableRow>
-              <TableCell>Date / ID</TableCell>
-              <TableCell>Customer</TableCell>
-              <TableCell>Source</TableCell>
-              <TableCell>Payment reference</TableCell>
-              <TableCell align="right">Amount</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {filteredOrders.map((order) => (
-              <TableRow key={order.id}>
-                <TableCell>
-                  <Typography variant="body2">{order.date}</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    #{order.id.slice(0, 8)}
-                  </Typography>
-                </TableCell>
-                <TableCell>
-                  <Typography fontWeight={800}>
-                    {order.customer.name || 'Unnamed customer'}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {order.customer.phone || 'No phone'} · {order.customer.city || 'No city'}
-                  </Typography>
-                </TableCell>
-                <TableCell>{order.source || '-'}</TableCell>
-                <TableCell>{paymentReferenceText(order) || '-'}</TableCell>
-                <TableCell align="right">{formatKs(order.paymentStatus === 'unpaid' ? order.balanceDue || order.total : order.total)}</TableCell>
-                <TableCell>
-                  <StatusChip
-                    status={order.paymentStatus === 'paid' ? 'received' : order.paymentStatus}
-                    label={statusLabel(order)}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <Box className="table-actions">
-                    <Button size="small" variant="outlined" startIcon={<InfoOutlinedIcon />} onClick={() => setDetailOrder(order)}>
-                      Details
-                    </Button>
-                    {order.paymentStatus === 'paid' &&
-                    !isCodPaymentMethod(state.paymentById[order.paymentId]?.method, data.catalogSettings) ? (
-                      <Button size="small" variant="contained" color="error" startIcon={<ReplayOutlinedIcon />} onClick={() => openRefund(order)}>
-                        Refund
-                      </Button>
-                    ) : order.paymentStatus === 'paid' &&
-                      state.paymentById[order.paymentId]?.scope === 'cod-settlement' ? (
-                      <Button size="small" variant="outlined" color="warning" onClick={() => openVoid(order)}>
-                        Void
-                      </Button>
-                    ) : order.paymentStatus === 'unpaid' ? (
-                      <Button size="small" variant="contained" color="success" startIcon={<PaidOutlinedIcon />} onClick={() => openReceive(order)}>
-                        Receive
-                      </Button>
-                    ) : null}
-                  </Box>
-                </TableCell>
-              </TableRow>
-            ))}
-            {!filteredOrders.length ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  No {statusView} orders
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
-        </TableContainer>
-      )}
-
-      <SectionCard title="Payment Method Balance" subtitle="Received money grouped by method.">
-        <div className="metric-grid">
-          {Object.entries(methodBalance).map(([method, amount]) => (
-            <MetricCard key={method} title={method} value={formatKs(amount)} />
-          ))}
-          {!Object.keys(methodBalance).length ? (
-            <Typography color="text.secondary">No received payments yet.</Typography>
-          ) : null}
-        </div>
-        <Divider sx={{ my: 2 }} />
-        <Typography fontWeight={800}>Total Balance : {formatKs(totalBalance)}</Typography>
-      </SectionCard>
-
-      <Dialog open={Boolean(receiveOrder)} onClose={() => setReceiveOrder(null)} fullWidth maxWidth="md">
-        <DialogTitle>
-          {receiveIsCod ? 'Receive COD Settlement' : 'Receive Payment'}
-        </DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            <FormControl>
-              <InputLabel id="finance-payment-method-label">Method</InputLabel>
-              <Select
-                labelId="finance-payment-method-label"
-                label="Method"
-                value={selectedReceiveMethod}
-                onChange={(event) =>
-                  setReceiveDraft((current) => ({
-                    ...current,
-                    method: event.target.value,
-                    billNumber: '',
-                    transactionId: '',
-                    amount:
-                      isCodPaymentMethod(event.target.value, data.catalogSettings)
-                        ? selectedCodTotal
-                        : receiveOrder?.balanceDue || receiveOrder?.total || '',
-                  }))
-                }
-              >
-                {paymentMethods.map((method) => (
-                  <MenuItem key={method.id} value={method.name}>
-                    {method.name}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            {receiveIsCod ? (
-              <>
-                <Alert severity="info">
-                  Search by phone, customer, or order ID. One COD settlement may contain one or
-                  several outstanding orders.
-                </Alert>
-                <TextField
-                  label="Find outstanding orders"
-                  value={codOrderSearch}
-                  onChange={(event) => setCodOrderSearch(event.target.value)}
-                  placeholder="Phone number, customer, or order ID"
-                />
-                <Paper variant="outlined" className="cod-order-picker">
-                  {codCandidates.slice(0, 100).map((order) => {
-                    const checked = selectedCodOrderIds.includes(order.id)
-                    return (
-                      <Box
-                        key={order.id}
-                        className="cod-order-option"
-                        component="label"
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onChange={() => {
-                            setSelectedCodOrderIds((current) => {
-                              const nextIds = checked
-                                ? current.filter((id) => id !== order.id)
-                                : [...current, order.id].slice(0, 100)
-                              const nextTotal = state.outstandingOrders
-                                .filter((candidate) => nextIds.includes(candidate.id))
-                                .reduce((sum, candidate) => sum + Number(candidate.balanceDue || candidate.total || 0), 0)
-                              setReceiveDraft((draft) => ({ ...draft, amount: nextTotal }))
-                              return nextIds
-                            })
-                          }}
-                        />
-                        <Box sx={{ minWidth: 0, flex: 1 }}>
-                          <Typography fontWeight={800}>{order.customer.name}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {order.customer.phone} · {order.date} · #{order.id.slice(0, 8)}
-                          </Typography>
-                        </Box>
-                        <Typography fontWeight={800}>{formatKs(order.balanceDue || order.total)}</Typography>
-                      </Box>
-                    )
-                  })}
-                  {!codCandidates.length ? (
-                    <Box className="empty-state compact">
-                      <Typography>No matching outstanding orders</Typography>
-                    </Box>
-                  ) : null}
-                </Paper>
-                <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                  <Typography>{selectedCodOrders.length} order(s) selected</Typography>
-                  <Typography fontWeight={900}>{formatKs(selectedCodTotal)}</Typography>
-                </Stack>
-                <TextField
-                  type="number"
-                  label="Transferred total"
-                  value={receiveDraft.amount}
-                  onChange={(event) =>
-                    setReceiveDraft((current) => ({ ...current, amount: event.target.value }))
-                  }
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </>
-            ) : null}
-            {receiveIsCod ? (
-              <TextField
-                label="COD reference — last 6 digits"
-                value={receiveDraft.billNumber}
-                onChange={(event) => setReceiveDraft((current) => ({ ...current, billNumber: digitsOnly(event.target.value) }))}
-                slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 6 } }}
-              />
-            ) : null}
-            {!receiveIsCash ? (
-              <TextField
-                label="Transaction ID — last 6 digits"
-                value={receiveDraft.transactionId}
-                onChange={(event) => setReceiveDraft((current) => ({ ...current, transactionId: digitsOnly(event.target.value) }))}
-                slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 6 } }}
-              />
-            ) : null}
-            <TextField
-              type="date"
-              label="Date"
-              value={receiveDraft.date}
-              onChange={(event) => setReceiveDraft((current) => ({ ...current, date: event.target.value }))}
-              slotProps={{ inputLabel: { shrink: true } }}
-            />
-            <TextField
-              label="Payment note (optional)"
-              value={receiveDraft.note}
-              onChange={(event) => setReceiveDraft((current) => ({ ...current, note: event.target.value }))}
-              multiline
-              minRows={3}
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setReceiveOrder(null)}>Cancel</Button>
-          <Button variant="contained" color="success" onClick={confirmReceive} disabled={working}>
-            {working
-              ? 'Receiving…'
-              : receiveIsCod
-                ? `Receive ${selectedCodOrders.length} order(s)`
-                : `Receive ${formatKs(receiveOrder?.total)}`}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={Boolean(voidPayment)} onClose={() => setVoidPayment(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Void COD settlement?</DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={2}>
-            <Alert severity="warning">
-              All {voidPayment?.orderIds?.length || 0} linked orders will return to Outstanding.
-              The original settlement remains in the audit history.
-            </Alert>
-            <TextField
-              label="Void reason"
-              value={voidReason}
-              onChange={(event) => setVoidReason(event.target.value)}
-              multiline
-              minRows={3}
-              required
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setVoidPayment(null)}>Cancel</Button>
-          <Button color="warning" variant="contained" onClick={confirmVoid} disabled={working}>
-            {working ? 'Voiding…' : 'Void settlement'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={Boolean(refundOrder)} onClose={() => setRefundOrder(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Refund Payment</DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            <FormControl>
-              <InputLabel id="finance-refund-method-label">Method</InputLabel>
-              <Select
-                labelId="finance-refund-method-label"
-                label="Method"
-                value={refundDraft.method}
-                onChange={(event) => setRefundDraft((current) => ({ ...current, method: event.target.value }))}
-              >
-                <MenuItem value={refundDraft.method}>{refundDraft.method}</MenuItem>
-              </Select>
-            </FormControl>
-            <TextField
-              label="Refund Transaction ID"
-              value={refundDraft.transactionId}
-              onChange={(event) => setRefundDraft((current) => ({ ...current, transactionId: digitsOnly(event.target.value) }))}
-              slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 6 } }}
-            />
-            <TextField
-              type="date"
-              label="Date"
-              value={refundDraft.date}
-              onChange={(event) => setRefundDraft((current) => ({ ...current, date: event.target.value }))}
-              slotProps={{ inputLabel: { shrink: true } }}
-            />
-            <TextField
-              label="Refund reason"
-              value={refundDraft.reason}
-              onChange={(event) => setRefundDraft((current) => ({ ...current, reason: event.target.value }))}
-              multiline
-              minRows={3}
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRefundOrder(null)}>Cancel</Button>
-          <Button variant="contained" color="error" onClick={confirmRefund} disabled={working}>
-            {working ? 'Refunding…' : 'Confirm Refund'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={Boolean(detailOrder)} onClose={() => setDetailOrder(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Payment Details</DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={1}>
-            <Typography fontWeight={800}>Receive Details</Typography>
-            <Typography>Method: {detailPayment?.method || '-'}</Typography>
-            <Typography>Transaction ID: {detailPayment?.transactionId || '-'}</Typography>
-            <Typography>Bill Number: {detailPayment?.billNumber || '-'}</Typography>
-            <Typography>Date: {detailPayment?.date || '-'}</Typography>
-            <Typography>Note: {detailPayment?.note || '-'}</Typography>
-            {detailPayment?.scope === 'cod-settlement' ? (
-              <>
-                <Divider sx={{ my: 1 }} />
-                <Typography fontWeight={800}>
-                  COD settlement orders ({detailPayment.allocations?.length || 0})
-                </Typography>
-                {(detailPayment.allocations || []).map((allocation) => (
-                  <Paper key={allocation.orderId} variant="outlined" sx={{ p: 1.25 }}>
-                    <Typography fontWeight={700}>{allocation.customerName}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {allocation.phone} · #{String(allocation.orderId).slice(0, 8)}
-                    </Typography>
-                    <Typography variant="body2">{formatKs(allocation.amount)}</Typography>
-                  </Paper>
-                ))}
-              </>
-            ) : null}
-            {detailRefund ? (
-              <>
-                <Divider sx={{ my: 1 }} />
-                <Typography fontWeight={800}>Refund Details</Typography>
-                <Typography>Method: {detailRefund.method}</Typography>
-                <Typography>Transaction ID: {detailRefund.transactionId}</Typography>
-                <Typography>Date: {detailRefund.date}</Typography>
-                <Typography>Reason: {detailRefund.reason}</Typography>
-              </>
-            ) : null}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailOrder(null)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  )
+  return <Box className="page-stack finance-dashboard-page">
+    <Box className="finance-topbar"><Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} className="finance-date-range"><TextField type="date" size="small" label="မှ" value={from} onChange={(e) => setFrom(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} /><TextField type="date" size="small" label="ထိ" value={to} onChange={(e) => setTo(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} /></Stack><Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => setExpenseOpen(true)}>ကုန်ကျစရိတ်ထည့်မည်</Button></Box>
+    <Box className="finance-summary-grid"><Metric label="လက်ခံရရှိငွေ" value={money(summary.received)} tone="income" /><Metric label="ထွက်ငွေ" value={money(summary.cashOut)} tone="expense" /><Metric label="ငွေလက်ကျန်ပြောင်းလဲမှု" value={money(summary.cashMovement)} tone={summary.cashMovement >= 0 ? 'income' : 'expense'} /><Metric label="အသားတင်အမြတ်" value={money(summary.netProfit)} tone={summary.netProfit >= 0 ? 'income' : 'expense'} /><Metric label="ရရန်အကြွေး" value={money(summary.receivable)} tone="warning" /><Metric label="ပေးရန်ကုန်ကြွေး" value={money(summary.payable)} tone="warning" /></Box>
+    <Box className="finance-dues-grid"><Paper variant="outlined" className="finance-due-card"><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography fontWeight={900}>ရရန်အကြွေး</Typography><Typography color="text.secondary" variant="body2">{receivables.length} ဘောက်ချာ</Typography></Box><Typography fontWeight={900}>{money(summary.receivable)}</Typography></Stack><Divider sx={{ my: 1.25 }} />{receivables.slice(0, 4).map((order) => <Stack key={order.id} direction="row" justifyContent="space-between" alignItems="center" sx={{ py: .5 }}><Typography>ဘောက်ချာ {order.orderNumber || String(order.id).slice(-5)}</Typography><Button size="small" onClick={() => openCredit(order)}>လက်ခံမည်</Button></Stack>)}{!receivables.length ? <Typography color="text.secondary">ရရန်အကြွေးမရှိပါ</Typography> : null}</Paper><Paper variant="outlined" className="finance-due-card"><Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography fontWeight={900}>ပေးရန်ကုန်ကြွေး</Typography><Typography color="text.secondary" variant="body2">{payables.length} စာရင်း</Typography></Box><Typography fontWeight={900}>{money(summary.payable)}</Typography></Stack><Divider sx={{ my: 1.25 }} />{payables.slice(0, 4).map((purchase) => <Stack key={purchase.id} direction="row" justifyContent="space-between" alignItems="center" sx={{ py: .5 }}><Typography>{purchase.supplier?.name || 'Supplier'} · {purchase.purchaseNumber}</Typography><Button size="small" onClick={() => openSupplier(purchase)}>ပေးချေမည်</Button></Stack>)}{!payables.length ? <Typography color="text.secondary">ပေးရန်ကုန်ကြွေးမရှိပါ</Typography> : null}</Paper></Box>
+    <Paper variant="outlined" className="finance-ledger"><ToggleButtonGroup exclusive value={type} onChange={(_, next) => next && setType(next)} className="finance-ledger-filters" size="small"><ToggleButton value="all">အားလုံး</ToggleButton><ToggleButton value="sale">အရောင်း</ToggleButton><ToggleButton value="credit">အကြွေး</ToggleButton><ToggleButton value="supplier">Supplier</ToggleButton><ToggleButton value="expense">ကုန်ကျစရိတ်</ToggleButton><ToggleButton value="refund">ပြန်အမ်း</ToggleButton></ToggleButtonGroup>{mobile ? <Box className="finance-ledger-mobile">{ledger.map((entry) => <Box key={entry.id} className="finance-ledger-row"><Box><Typography fontWeight={800}>{typeLabel(entry.type)}</Typography><Typography variant="body2" color="text.secondary">{entry.date} · {entry.reference}</Typography><Typography variant="caption" color="text.secondary">{entry.method}</Typography></Box><Box textAlign="right">{entry.income ? <Typography className="finance-income">+ {money(entry.income)}</Typography> : null}{entry.expense ? <Typography className="finance-expense">− {money(entry.expense)}</Typography> : null}</Box></Box>)}{!ledger.length ? <Typography className="finance-empty">ရွေးထားသောနေ့အတွက် record မရှိသေးပါ</Typography> : null}</Box> : <TableContainer><Table size="small"><TableHead><TableRow><TableCell>ရက်စွဲ/အချိန်</TableCell><TableCell>အမျိုးအစား</TableCell><TableCell>Reference</TableCell><TableCell>နည်းလမ်း</TableCell><TableCell align="right">ဝင်ငွေ</TableCell><TableCell align="right">ထွက်ငွေ</TableCell></TableRow></TableHead><TableBody>{ledger.map((entry) => <TableRow key={entry.id}><TableCell>{entry.date}</TableCell><TableCell><Chip size="small" label={typeLabel(entry.type)} /></TableCell><TableCell>{entry.reference}</TableCell><TableCell>{entry.method}</TableCell><TableCell align="right" className="finance-income">{entry.income ? money(entry.income) : '-'}</TableCell><TableCell align="right" className="finance-expense">{entry.expense ? money(entry.expense) : '-'}</TableCell></TableRow>)}</TableBody></Table></TableContainer>}</Paper>
+    <Dialog open={expenseOpen} onClose={() => setExpenseOpen(false)} fullWidth maxWidth="sm"><DialogTitle>ကုန်ကျစရိတ်ထည့်ရန်</DialogTitle><DialogContent><Stack spacing={1.5} sx={{ pt: 1 }}><TextField label="ကုန်ကျစရိတ်အမည်" value={expense.title} onChange={(e) => setExpense({ ...expense, title: e.target.value })} /><TextField label="အမျိုးအစား" value={expense.category} onChange={(e) => setExpense({ ...expense, category: e.target.value })} /><TextField type="number" label="ပမာဏ" value={expense.amount} onChange={(e) => setExpense({ ...expense, amount: e.target.value })} /><FormControl><InputLabel>ငွေပေးချေမှုနည်းလမ်း</InputLabel><Select label="ငွေပေးချေမှုနည်းလမ်း" value={expense.method} onChange={(e) => setExpense({ ...expense, method: e.target.value })}>{methods.map((m) => <MenuItem key={m.id} value={m.name}>{m.name}</MenuItem>)}</Select></FormControl><TextField type="date" label="ရက်စွဲ" value={expense.date} onChange={(e) => setExpense({ ...expense, date: e.target.value })} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="မှတ်ချက်" value={expense.note} onChange={(e) => setExpense({ ...expense, note: e.target.value })} multiline minRows={2} /></Stack></DialogContent><DialogActions><Button onClick={() => setExpenseOpen(false)}>ပိတ်မည်</Button><Button variant="contained" onClick={saveExpense} disabled={saving}>သိမ်းမည်</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(supplierPurchase)} onClose={() => setSupplierPurchase(null)} fullWidth maxWidth="sm"><DialogTitle>Supplier ပေးချေမှု</DialogTitle><DialogContent><Stack spacing={1.5} sx={{ pt: 1 }}><Paper variant="outlined" sx={{ p: 1.5 }}><Typography fontWeight={800}>{supplierPurchase?.supplier?.name || 'Supplier'} · {supplierPurchase?.purchaseNumber}</Typography><Typography>ပေးရန်ကျန်ငွေ — {money(Math.max(0, Number(supplierPurchase?.total || 0) - Number(supplierPurchase?.paidAmount || 0)))}</Typography></Paper><TextField type="number" label="ပေးချေမည့်ပမာဏ" value={supplierPayment.amount} onChange={(e) => setSupplierPayment({ ...supplierPayment, amount: e.target.value })} /><FormControl><InputLabel>ငွေပေးချေမှုနည်းလမ်း</InputLabel><Select label="ငွေပေးချေမှုနည်းလမ်း" value={supplierPayment.method} onChange={(e) => setSupplierPayment({ ...supplierPayment, method: e.target.value })}>{methods.map((m) => <MenuItem key={m.id} value={m.name}>{m.name}</MenuItem>)}</Select></FormControl><TextField label="Reference" value={supplierPayment.reference} onChange={(e) => setSupplierPayment({ ...supplierPayment, reference: e.target.value })} /><TextField type="date" label="ရက်စွဲ" value={supplierPayment.paidAt} onChange={(e) => setSupplierPayment({ ...supplierPayment, paidAt: e.target.value })} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="မှတ်ချက်" value={supplierPayment.notes} onChange={(e) => setSupplierPayment({ ...supplierPayment, notes: e.target.value })} /></Stack></DialogContent><DialogActions><Button onClick={() => setSupplierPurchase(null)}>ပိတ်မည်</Button><Button variant="contained" onClick={saveSupplierPayment} disabled={saving}>ပေးချေမည်</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(creditOrder)} onClose={() => setCreditOrder(null)} fullWidth maxWidth="sm"><DialogTitle>အကြွေးလက်ခံရန်</DialogTitle><DialogContent><Stack spacing={1.5} sx={{ pt: 1 }}><Typography>ဘောက်ချာ {creditOrder?.orderNumber || String(creditOrder?.id || '').slice(-5)} · ကျန်ငွေ {money(creditOrder?.balanceDue || creditOrder?.total)}</Typography><TextField type="number" label="လက်ခံရရှိငွေ" value={creditPayment.amount} onChange={(e) => setCreditPayment({ ...creditPayment, amount: e.target.value })} /><FormControl><InputLabel>ငွေပေးချေမှုနည်းလမ်း</InputLabel><Select label="ငွေပေးချေမှုနည်းလမ်း" value={creditPayment.method} onChange={(e) => setCreditPayment({ ...creditPayment, method: e.target.value })}>{methods.map((m) => <MenuItem key={m.id} value={m.name}>{m.name}</MenuItem>)}</Select></FormControl><TextField label="Transaction ID" value={creditPayment.transactionId} onChange={(e) => setCreditPayment({ ...creditPayment, transactionId: e.target.value })} /><TextField type="date" label="ရက်စွဲ" value={creditPayment.date} onChange={(e) => setCreditPayment({ ...creditPayment, date: e.target.value })} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="မှတ်ချက်" value={creditPayment.note} onChange={(e) => setCreditPayment({ ...creditPayment, note: e.target.value })} /></Stack></DialogContent><DialogActions><Button onClick={() => setCreditOrder(null)}>ပိတ်မည်</Button><Button variant="contained" startIcon={<PaidRoundedIcon />} onClick={saveCreditPayment} disabled={saving}>လက်ခံမည်</Button></DialogActions></Dialog>
+  </Box>
 }

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
 import { recordInventoryMovement } from "../lib/inventory-domain.js";
+import { refreshProductWeightedCost } from "../lib/costing.js";
 import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
@@ -179,6 +180,7 @@ inventoryRouter.post("/:shopId/inventory", async (request, response, next) => {
         ...(input.note ? { reason: input.note } : {}),
         occurredAt: createdBatch.receivedAt,
       });
+      await refreshProductWeightedCost(tx, shopId, input.productId);
 
       return createdBatch;
     });
@@ -346,6 +348,7 @@ inventoryRouter.post(
             reason: input.reason,
           });
         }
+        await refreshProductWeightedCost(tx, shopId, batch.productId);
 
         return { inventoryBatch, adjustment };
       });

@@ -1,731 +1,236 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  Divider,
-  FormControl,
-  FormControlLabel,
-  IconButton,
-  InputLabel,
-  MenuItem,
-  Paper,
-  Select,
-  Stack,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
-  Typography,
-} from '@mui/material'
+import { Alert, Box, Button, Divider, IconButton, InputAdornment, MenuItem, Paper, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
-import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
-import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
+import RemoveRoundedIcon from '@mui/icons-material/RemoveRounded'
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import PageHeader from '../components/PageHeader.jsx'
-import SectionCard from '../components/SectionCard.jsx'
 import { useAuth } from '../contexts/AuthContext.jsx'
 import { useData } from '../contexts/DataContext.jsx'
 import { useFeedback } from '../contexts/FeedbackContext.jsx'
-import { allocateFifo, getAvailableByVariant } from '../domain/inventory.js'
-import { calculateOrderTotals, lineTotal } from '../domain/orders.js'
-import { digitsOnly, validatePaymentDetails } from '../domain/payments.js'
-import { createOrderAtomic, createVariantDocument } from '../services/shopApiService.js'
-import {
-  activePaymentMethods,
-  isCodPaymentMethod,
-  normalizeOptionTree,
-  optionPathFromValueIds,
-  optionPathSignature,
-  optionValuesForLevel,
-  valueIdsFromOptionPath,
-  variantDisplayName,
-} from '../utils/catalog.js'
-import { formatKs, getStockVariantKey, getToday, SOURCE_OPTIONS } from '../utils/storage.js'
+import { api } from '../services/api.js'
+import { formatKs, getToday } from '../utils/storage.js'
 
-function initialLine(data) {
-  const product = data.products[0]
-  const variant = (product?.variants || []).find((entry) => entry.isActive !== false)
-  const unit = (product?.units || []).find((entry) => entry.isBase && entry.canSell !== false) ||
-    (product?.units || []).find((entry) => entry.canSell !== false)
+const money = (value) => formatKs(Number(value || 0))
+
+function previewPromotionFor(product) {
+  try {
+    const records = JSON.parse(sessionStorage.getItem('pricing:demo-promotion-records:v2') || '[]')
+    const today = getToday()
+    const record = records.find((entry) => entry.sku === product.sku && entry.status === 'active' && entry.startsAt <= today && entry.endsAt >= today)
+    if (!record) return product.previewPromotion
+    return {
+      name: record.promotionName,
+      type: record.type === 'percent' ? 'PERCENTAGE' : 'FIXED_PRICE',
+      value: Number(record.value || 0), minQuantity: Number(record.minimumQuantity || 1),
+      startsAt: record.startsAt, endsAt: record.endsAt,
+      conditionLabel: 'စျေးနှုန်းနှင့် ပရိုမိုးရှင်းစာမျက်နှာတွင် သတ်မှတ်ထားသော အခြေအနေနှင့် ကိုက်ညီသည်',
+    }
+  } catch { return product.previewPromotion }
+}
+
+function resolvePreviewPrice(product, quantity) {
+  const promotion = previewPromotionFor(product)
+  const today = getToday()
+  const active = promotion && quantity >= Number(promotion.minQuantity || 1)
+    && (!promotion.startsAt || promotion.startsAt <= today)
+    && (!promotion.endsAt || promotion.endsAt >= today)
+  const regularUnitPrice = Number(product.price || 0)
+  let promotionDiscount = 0
+  if (active && promotion.type === 'PERCENTAGE') promotionDiscount = Math.round(regularUnitPrice * Number(promotion.value || 0) / 100)
+  if (active && promotion.type === 'FIXED_DISCOUNT') promotionDiscount = Math.min(regularUnitPrice, Number(promotion.value || 0))
+  if (active && promotion.type === 'FIXED_PRICE') promotionDiscount = Math.max(0, regularUnitPrice - Number(promotion.value || 0))
   return {
-    productId: product?.id || '',
-    variantId: variant?.id || '',
-    optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
-    quantity: 1,
-    unitId: unit?.unitId || '',
-    unitPrice: variant?.price ?? product?.price ?? '',
-    serialIds: [],
-    lotId: '',
-    lotOverrideReason: '',
-    modifierOptionIds: [],
+    regularUnitPrice,
+    promotionDiscount,
+    finalUnitPrice: regularUnitPrice - promotionDiscount,
+    promotionName: active ? promotion.name : '',
+    promotionCondition: active ? (promotion.conditionLabel || 'ပရိုမိုးရှင်းသတ်မှတ်ချက်နှင့် ကိုက်ညီသည်') : '',
   }
 }
 
-function stockForVariant(stocks, productId, variantId) {
-  return stocks.find(
-    (stock) =>
-      String(stock.productId) === String(productId) &&
-      String(stock.variantId || '') === String(variantId || ''),
-  )
-}
-
-function variantForPath(product, optionPath) {
-  const signature = optionPathSignature(optionPath)
-  return (product?.variants || []).find(
-    (variant) => variant.isActive !== false && optionPathSignature(variant.optionPath) === signature,
-  )
-}
-
-function stockLookupKey(product, variantId) {
-  return getStockVariantKey({
-    productId: product?.id,
-    variantId,
-    type: product?.name,
-    size: 'Default',
-    color: '-',
-  })
-}
-
-export default function OrderPage({ navigate, refresh, requireAuth }) {
+export default function OrderPage({ refresh, requireAuth }) {
   const { user } = useAuth()
-  const { data } = useData()
+  const { data, savePreviewSale } = useData()
   const { notify } = useFeedback()
-  const settings = useMemo(() => data.catalogSettings || {}, [data.catalogSettings])
-  const restaurantMode = data.storeConfiguration?.effectiveCapabilities?.includes('restaurant.recipes')
-  const paymentMethods = useMemo(() => activePaymentMethods(settings), [settings])
-  const defaultMethod = paymentMethods[0]?.name || 'Cash'
-  const [orderType, setOrderType] = useState('online')
-  const [customer, setCustomer] = useState({ name: '', phone: '', city: '', address: '' })
-  const [date, setDate] = useState(getToday)
-  const [source, setSource] = useState(SOURCE_OPTIONS[0] || 'Telegram')
-  const [remark, setRemark] = useState('')
-  const [preorder, setPreorder] = useState(false)
-  const [orderDiscount, setOrderDiscount] = useState(0)
-  const [lineDraft, setLineDraft] = useState(() => initialLine(data))
-  const [items, setItems] = useState([])
+  const shopId = user.shop?.id
+  const [search, setSearch] = useState('')
+  const [cart, setCart] = useState([])
+  const [method, setMethod] = useState('CASH')
+  const [received, setReceived] = useState('')
+  const [mobileName, setMobileName] = useState('KBZPay')
+  const [transactionId, setTransactionId] = useState('')
+  const [customerName, setCustomerName] = useState('')
+  const [nextInvoiceNumber, setNextInvoiceNumber] = useState('')
   const [saving, setSaving] = useState(false)
-  const [paymentMode, setPaymentMode] = useState('unpaid')
-  const [payment, setPayment] = useState({
-    method: defaultMethod,
-    amount: '',
-    billNumber: '',
-    transactionId: '',
-    date: getToday(),
-    note: '',
-  })
-  const heldCartKey = `greenmart:held-cart:${user.uid}`
-  const [hasHeldCart, setHasHeldCart] = useState(() => Boolean(localStorage.getItem(heldCartKey)))
-  const selectedPaymentMethod = paymentMethods.some((method) => method.name === payment.method)
-    ? payment.method
-    : defaultMethod
 
-  const selectedProduct = data.products.find((product) => String(product.id) === String(lineDraft.productId))
-  const selectedRecipe = (data.recipes || []).find((recipe) => recipe.productId === selectedProduct?.id)
-  const optionTree = normalizeOptionTree(selectedProduct?.optionTree)
-  const selectedOptionPath = optionPathFromValueIds(optionTree, lineDraft.optionValueIds)
-  const selectedVariant = selectedProduct?.variants?.find((variant) => String(variant.id) === String(lineDraft.variantId))
-    || variantForPath(selectedProduct, selectedOptionPath)
-  const hasOptions = optionTree.levels.length > 0
-  const allOptionsSelected = !hasOptions || optionTree.levels.every((_, index) => lineDraft.optionValueIds[index])
-  const selectedVariantId = selectedVariant?.id || lineDraft.variantId
-  const sellingUnits = (selectedProduct?.units || []).filter((entry) => entry.canSell !== false)
-  const selectedSellingUnit = sellingUnits.find((entry) => entry.unitId === lineDraft.unitId) ||
-    sellingUnits.find((entry) => entry.isBase) || sellingUnits[0]
-  const sellingConversionFactor = Number(selectedSellingUnit?.conversionFactor || 1)
-  const sellingQuantityStep = selectedSellingUnit?.unit?.precision > 0
-    ? 10 ** -selectedSellingUnit.unit.precision
-    : 1
-  const representativeStock = stockForVariant(data.stocks, lineDraft.productId, selectedVariantId)
-  const alreadySelectedSerialIds = new Set(items.flatMap((item) => item.serialIds || []))
-  const availableSerials = (data.inventorySerials || []).filter((serial) =>
-    serial.status === 'IN_STOCK'
-    && String(serial.productId) === String(lineDraft.productId)
-    && (!selectedVariantId || String(serial.variantId || '') === String(selectedVariantId))
-    && (!alreadySelectedSerialIds.has(serial.id) || lineDraft.serialIds?.includes(serial.id)))
-  const availableLots = (data.inventoryLots || []).filter((lot) =>
-    lot.status === 'ACTIVE'
-    && String(lot.productId) === String(lineDraft.productId)
-    && (!selectedVariantId || String(lot.variantId || '') === String(selectedVariantId))
-    && (!lot.expiresAt || new Date(lot.expiresAt) > new Date())
-    && Number(lot.quantity || 0) > 0)
-  const availableMap = useMemo(() => getAvailableByVariant(data.stocks, data.orders), [data.orders, data.stocks])
-  const available = Number(availableMap[stockLookupKey(selectedProduct, selectedVariantId)] || 0)
-  const totals = useMemo(() => calculateOrderTotals(items, orderDiscount, 0), [items, orderDiscount])
-  const payNow = orderType === 'in-store' || paymentMode === 'pay-now' || paymentMode === 'advanced-payment'
-  const advancedPayment = paymentMode === 'advanced-payment'
-  const paymentIsCod = orderType === 'online' && isCodPaymentMethod(selectedPaymentMethod, settings)
-  const paymentIsCash = String(selectedPaymentMethod || '').trim().toLowerCase() === 'cash'
-  const paymentAmount = advancedPayment ? Number(payment.amount || 0) : totals.total
+  const products = useMemo(() => (data.products || []).filter((product) => product.isActive !== false), [data.products])
+  const availableStockByProductId = useMemo(() => (data.stocks || []).reduce((totals, stock) => {
+    const productId = String(stock.productId || '')
+    if (!productId) return totals
+    totals.set(productId, (totals.get(productId) || 0) + Math.max(0, Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0)))
+    return totals
+  }, new Map()), [data.stocks])
+  const previewInvoiceCount = (data.orders || []).filter((order) => String(order.id).startsWith('preview-invoice-')).length
+  const invoiceNumber = user.preview
+    ? String(previewInvoiceCount + 1).padStart(5, '0')
+    : (nextInvoiceNumber || '...')
+  const subtotal = cart.reduce((sum, item) => sum + item.quantity * item.regularPrice, 0)
+  const promotionDiscount = cart.reduce((sum, item) => sum + item.quantity * item.promotionDiscount, 0)
+  const totalDiscount = promotionDiscount
+  const total = Math.max(0, subtotal - totalDiscount)
+  const change = Math.max(0, Number(received || 0) - total)
+  const matches = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return []
+    return products.filter((product) => `${product.sku || ''} ${product.name}`.toLowerCase().includes(term)).slice(0, 8)
+  }, [products, search])
 
   useEffect(() => {
-    if (lineDraft.productId || !data.products.length) return
-    const handle = window.setTimeout(() => setLineDraft(initialLine(data)), 0)
-    return () => window.clearTimeout(handle)
-  }, [data, lineDraft.productId])
+    if (user.preview || !shopId) return undefined
+    let active = true
+    api.nextOrderNumber(shopId)
+      .then((result) => { if (active) setNextInvoiceNumber(result.orderNumber || '') })
+      .catch(() => { if (active) setNextInvoiceNumber('') })
+    return () => { active = false }
+  }, [shopId, user.preview])
 
-  useEffect(() => {
-    if (!restaurantMode) return
-    const handle = window.setTimeout(() => {
-      setOrderType('online')
-      setPreorder(false)
-      setSource((current) => ['Delivery', 'Pickup'].includes(current) ? current : 'Delivery')
-    }, 0)
-    return () => window.clearTimeout(handle)
-  }, [restaurantMode])
+  const pricingFor = async (product, quantity) => user.preview
+    ? resolvePreviewPrice(product, quantity)
+    : (await api.resolvePrice(shopId, { productId: product.id, quantity, channel: 'POS' })).pricing
 
-  useEffect(() => {
-    const warnUnsaved = (event) => {
-      if (!items.length || saving) return
+  const addProduct = async (product) => {
+    const existing = cart.find((line) => line.productId === product.id)
+    const quantity = Number(existing?.quantity || 0) + 1
+    const availableQuantity = Number(availableStockByProductId.get(String(product.id)) || 0)
+    if (quantity > availableQuantity) {
+      notify('လက်ကျန် မလုံလောက်ပါ', 'warning')
+      return
+    }
+    try {
+      const price = await pricingFor(product, quantity)
+      const nextLine = {
+        productId: product.id, code: product.sku || '-', name: product.name, quantity,
+        regularPrice: Number(price.regularUnitPrice ?? product.price ?? 0),
+        unitPrice: Number(price.finalUnitPrice ?? product.price ?? 0),
+        promotionDiscount: Number(price.promotionDiscount || 0),
+        promotionName: price.promotionName || '', promotionCondition: price.promotionName ? `အနည်းဆုံး ${price.promotionMinimumQuantity || 1} မျိုး ရွေးသောအခါ ပရိုမိုးရှင်းလျှော့စျေး ရရှိသည်။` : '', availableQuantity, cost: Number(product.cost || 0),
+      }
+      setCart((current) => existing ? current.map((line) => line.productId === product.id ? nextLine : line) : [...current, nextLine])
+      setSearch('')
+    } catch (error) { notify(error.message || 'ပစ္စည်းစျေးနှုန်း မရှာနိုင်ပါ', 'error') }
+  }
+
+  const submitProduct = async (event) => {
+    event?.preventDefault()
+    const value = search.trim().toLowerCase()
+    if (!value) return
+    const product = products.find((entry) => `${entry.sku || ''} ${entry.name}`.toLowerCase().includes(value))
+    if (product) return addProduct(product)
+    notify('ကုန်ပစ္စည်း code သို့မဟုတ် အမည် မတွေ့ပါ', 'warning')
+  }
+
+  const updateQuantity = async (index, nextQuantity) => {
+    const line = cart[index]
+    if (!line) return
+    const quantity = Math.max(0, Number(nextQuantity || 0))
+    if (quantity <= 0) {
+      setCart((current) => current.filter((_, currentIndex) => currentIndex !== index))
+      return
+    }
+    if (quantity > Number(line.availableQuantity || 0)) {
+      notify('လက်ကျန် မလုံလောက်ပါ', 'warning')
+      return
+    }
+    const product = products.find((entry) => entry.id === line.productId)
+    if (!product) return
+    try {
+      const price = await pricingFor(product, quantity)
+      setCart((current) => current.map((item, currentIndex) => currentIndex === index ? {
+        ...item, quantity, regularPrice: Number(price.regularUnitPrice ?? product.price ?? 0),
+        unitPrice: Number(price.finalUnitPrice ?? product.price ?? 0), promotionDiscount: Number(price.promotionDiscount || 0),
+        promotionName: price.promotionName || '', promotionCondition: price.promotionName ? `အနည်းဆုံး ${price.promotionMinimumQuantity || 1} မျိုး ရွေးသောအခါ ပရိုမိုးရှင်းလျှော့စျေး ရရှိသည်။` : '',
+      } : item))
+    } catch (error) { notify(error.message || 'ပရိုမိုးရှင်းစျေးနှုန်း မရှာနိုင်ပါ', 'error') }
+  }
+
+  const changeQuantity = (index, delta) => updateQuantity(index, Number(cart[index]?.quantity || 0) + delta)
+
+  const handleQuantityKey = (event, index) => {
+    if (event.key === '+' || event.key === 'ArrowUp') {
       event.preventDefault()
-      event.returnValue = ''
+      changeQuantity(index, 1)
     }
-    window.addEventListener('beforeunload', warnUnsaved)
-    return () => window.removeEventListener('beforeunload', warnUnsaved)
-  }, [items.length, saving])
-
-  const holdCart = () => {
-    if (!items.length) {
-      notify('Add at least one item before holding the sale.', 'warning')
-      return
-    }
-    localStorage.setItem(heldCartKey, JSON.stringify({
-      version: 1, savedAt: new Date().toISOString(), orderType, customer, date, source, remark,
-      preorder, orderDiscount, items, paymentMode, payment,
-    }))
-    setHasHeldCart(true)
-    setItems([])
-    setCustomer({ name: '', phone: '', city: '', address: '' })
-    setRemark('')
-    notify('Sale held. You can resume it after a refresh.')
-  }
-
-  const resumeCart = () => {
-    try {
-      const held = JSON.parse(localStorage.getItem(heldCartKey) || 'null')
-      if (!held?.items?.length) throw new Error('Held sale is empty.')
-      setOrderType(held.orderType || 'online')
-      setCustomer(held.customer || { name: '', phone: '', city: '', address: '' })
-      setDate(held.date || getToday())
-      setSource(held.source || SOURCE_OPTIONS[0])
-      setRemark(held.remark || '')
-      setPreorder(Boolean(held.preorder))
-      setOrderDiscount(Number(held.orderDiscount || 0))
-      setItems(held.items)
-      setPaymentMode(held.paymentMode || 'unpaid')
-      setPayment((current) => ({ ...current, ...(held.payment || {}) }))
-      localStorage.removeItem(heldCartKey)
-      setHasHeldCart(false)
-      notify('Held sale resumed.')
-    } catch (error) {
-      localStorage.removeItem(heldCartKey)
-      setHasHeldCart(false)
-      notify(error.message || 'Held sale could not be restored.', 'error')
+    if (event.key === '-' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      changeQuantity(index, -1)
     }
   }
 
-  const updateLineProduct = (productId) => {
-    const product = data.products.find((entry) => String(entry.id) === String(productId))
-    const variant = (product?.variants || []).find((entry) => entry.isActive !== false)
-    const unit = (product?.units || []).find((entry) => entry.isBase && entry.canSell !== false) ||
-      (product?.units || []).find((entry) => entry.canSell !== false)
-    setLineDraft((current) => ({
-      ...current,
-      productId,
-      variantId: '',
-      optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
-      unitPrice: variant?.price ?? product?.price ?? '',
-      quantity: 1,
-      unitId: unit?.unitId || '',
-      serialIds: [],
-      lotId: '',
-      lotOverrideReason: '',
-      modifierOptionIds: [],
-    }))
-  }
-
-  const updateLineOptionValue = (levelIndex, valueId) => {
-    const nextValueIds = [
-      ...lineDraft.optionValueIds.slice(0, levelIndex),
-      valueId,
-      ...lineDraft.optionValueIds.slice(levelIndex + 1),
-    ]
-    const path = optionPathFromValueIds(optionTree, nextValueIds)
-    const variant = path.length === optionTree.levels.length ? variantForPath(selectedProduct, path) : null
-    setLineDraft((current) => ({
-      ...current,
-      variantId: variant?.id || '',
-      optionValueIds: nextValueIds,
-      unitPrice: variant?.price ?? selectedProduct?.price ?? current.unitPrice,
-      serialIds: [],
-      lotId: '',
-      lotOverrideReason: '',
-    }))
-  }
-
-  const resolveLineVariant = async () => {
-    if (!hasOptions) return null
-    const path = optionPathFromValueIds(optionTree, lineDraft.optionValueIds)
-    if (path.length !== optionTree.levels.length) {
-      throw new Error('Choose every option before adding the item.')
-    }
-    const existing = variantForPath(selectedProduct, path)
-    if (existing) return existing
-    const result = await createVariantDocument(user.uid, selectedProduct.id, {
-      name: path.map((entry) => entry.value).join(' / '),
-      price: Number(lineDraft.unitPrice || selectedProduct?.price || 0),
-      cost: Number(selectedProduct?.cost || 0),
-      optionPath: path,
-    })
-    return result.variant || result
-  }
-
-  const addItem = async () => {
-    const quantity = Number(lineDraft.quantity || 0)
-    const baseQuantity = quantity * sellingConversionFactor
-    const unitPrice = Number(lineDraft.unitPrice || selectedVariant?.price || selectedProduct?.price || 0)
-    if (!selectedProduct || !allOptionsSelected || quantity <= 0) {
-      notify('Choose a product, every option, and valid quantity.', 'warning')
-      return
-    }
-    if (selectedProduct.trackingMode === 'SERIAL' && lineDraft.serialIds.length !== quantity) {
-      notify(`Select exactly ${quantity} in-stock serial number(s).`, 'warning')
-      return
-    }
-    if (lineDraft.lotId && !lineDraft.lotOverrideReason.trim()) {
-      notify('Explain why this lot should override the default FEFO selection.', 'warning')
-      return
-    }
-    for (const group of selectedRecipe?.modifierGroups || []) {
-      const selectedCount = group.options.filter((option) => lineDraft.modifierOptionIds.includes(option.id)).length
-      const minimum = Math.max(group.required ? 1 : 0, Number(group.minSelect || 0))
-      if (selectedCount < minimum || selectedCount > Number(group.maxSelect || 1)) {
-        notify(`${group.name} requires between ${minimum} and ${group.maxSelect} selection(s).`, 'warning')
-        return
-      }
-    }
-    let resolvedVariant
-    try {
-      resolvedVariant = await resolveLineVariant()
-    } catch (error) {
-      notify(error.message || 'Selected option could not be prepared.', 'error')
-      return
-    }
-    const variantId = resolvedVariant?.id || ''
-    const nextAvailable = Number(availableMap[stockLookupKey(selectedProduct, variantId)] || 0)
-    if (!preorder && baseQuantity > nextAvailable) {
-      notify(`Only ${nextAvailable} item(s) are available.`, 'warning')
-      return
-    }
-    const stock = representativeStock || {}
-    const selectedModifiers = (selectedRecipe?.modifierGroups || []).flatMap((group) =>
-      group.options.filter((option) => lineDraft.modifierOptionIds.includes(option.id))
-        .map((option) => ({ id: option.id, name: option.name, priceDelta: Number(option.priceDelta || 0) })),
-    )
-    const modifierPrice = selectedModifiers.reduce((sum, option) => sum + option.priceDelta, 0)
-    const next = {
-      id: crypto.randomUUID(),
-      productId: selectedProduct.id,
-      variantId: resolvedVariant?.id,
-      type: selectedProduct.name,
-      size: resolvedVariant?.optionPath?.[0]?.value || resolvedVariant?.name || 'Default',
-      color: resolvedVariant?.optionPath?.[1]?.value || '-',
-      variantName: resolvedVariant ? variantDisplayName(resolvedVariant) : 'Default',
-      optionPath: resolvedVariant?.optionPath || [],
-      quantity,
-      unitId: selectedSellingUnit?.unitId,
-      unitName: selectedSellingUnit?.unit?.symbol || selectedSellingUnit?.unit?.name || '',
-      conversionFactor: sellingConversionFactor,
-      baseUnitPrice: unitPrice,
-      unitPrice: unitPrice + modifierPrice,
-      unitCost: Number(resolvedVariant?.cost ?? selectedProduct.cost ?? stock.unitCost ?? 0),
-      discount: 0,
-      deductionType: 'discount',
-      allocations: [],
-      serialIds: selectedProduct.trackingMode === 'SERIAL' ? lineDraft.serialIds : [],
-      lotId: selectedProduct.trackingMode === 'LOT' ? lineDraft.lotId : '',
-      lotOverrideReason: selectedProduct.trackingMode === 'LOT' ? lineDraft.lotOverrideReason.trim() : '',
-      modifierOptionIds: selectedModifiers.map((option) => option.id),
-      modifiers: selectedModifiers,
-    }
-    setItems((current) => [...current, { ...next, lineTotal: lineTotal(next) }])
-    setLineDraft((current) => ({
-      ...initialLine(data),
-      productId: current.productId,
-      variantId: current.variantId,
-      optionValueIds: current.optionValueIds,
-      unitId: current.unitId,
-      unitPrice: current.unitPrice,
-    }))
-  }
-
-  const submitOrder = async (event) => {
-    event.preventDefault()
+  const checkout = async () => {
     if (requireAuth?.('create sale')) return
-    if (orderType === 'online' && (!customer.name.trim() || !customer.phone.trim())) {
-      notify('Customer name and phone are required for online orders.', 'warning')
-      return
-    }
-    if (!items.length) {
-      notify('Add at least one item.', 'warning')
-      return
-    }
-    if (date > getToday()) {
-      notify('Future dates cannot be used.', 'warning')
-      return
-    }
-
-    let preparedItems = items
-    if (!preorder) {
-      const allocation = allocateFifo(data.stocks, data.orders, items)
-      if (!allocation.ok) {
-        notify('There is not enough stock for one selected variant.', 'error')
-        return
-      }
-      preparedItems = items.map((item) => {
-        const lineAllocation = allocation.allocations.find((entry) => entry.itemId === item.id)
-        return { ...item, allocations: lineAllocation.allocations, unitCost: lineAllocation.unitCost }
-      })
-    }
-
-    const finalTotals = calculateOrderTotals(preparedItems, orderDiscount, 0)
-    if (payNow) {
-      if (advancedPayment && (paymentAmount <= 0 || paymentAmount >= finalTotals.total)) {
-        notify('Advanced payment must be greater than 0 and less than the order total.', 'warning')
-        return
-      }
-      const paymentError = validatePaymentDetails({ ...payment, method: selectedPaymentMethod, settings, isCod: paymentIsCod })
-      if (paymentError) {
-        notify(paymentError, 'warning')
-        return
-      }
-    }
-
+    if (!cart.length) return notify('ကုန်ပစ္စည်း အနည်းဆုံးတစ်မျိုး ထည့်ပါ', 'warning')
+    if (method === 'CASH' && Number(received || 0) < total) return notify('လက်ခံရရှိငွေ မလုံလောက်ပါ', 'warning')
+    if (method === 'MOBILE' && !/^\d{8}$/.test(transactionId.trim())) return notify('Transaction number နောက်ဆုံး 8 လုံး ထည့်ပါ', 'warning')
+    if (method === 'CREDIT' && !customerName.trim()) return notify('အကြွေးဝယ်သူအမည် ထည့်ပါ', 'warning')
     setSaving(true)
     try {
-      await createOrderAtomic(
-        user.uid,
-        {
-          orderType,
-          customer: orderType === 'online' ? customer : undefined,
-          items: preparedItems,
-          date,
-          ...finalTotals,
-          fulfillmentStatus: restaurantMode ? 'new' : preorder ? 'preorder' : 'reserved',
-          paymentStatus: 'unpaid',
-          source: orderType === 'online' ? source : 'In-Store',
-          remark,
-        },
-        data.stocks,
-        data.orders,
-        payNow
-          ? {
-              ...payment,
-              method: selectedPaymentMethod,
-              scope: advancedPayment ? 'advanced-payment' : 'order-payment',
-              amount: advancedPayment ? paymentAmount : finalTotals.total,
-              note: advancedPayment ? `Advanced payment${payment.note ? ` - ${payment.note}` : ''}` : payment.note,
-              settings,
-              isCod: paymentIsCod,
-            }
-          : null,
-      )
-      notify(orderType === 'in-store' ? 'In-store sale completed.' : 'Online order created.')
-      localStorage.removeItem(heldCartKey)
-      await refresh?.()
-      navigate('sales')
-    } catch (error) {
-      notify(error.message || 'Sale could not be created.', 'error')
-    } finally {
-      setSaving(false)
-    }
+      let savedInvoiceNumber = invoiceNumber
+      if (user.preview) {
+        const now = new Date().toISOString()
+        savePreviewSale({
+          id: `preview-invoice-${invoiceNumber}`, orderNumber: invoiceNumber, date: getToday(), createdAt: now, completedAt: now,
+          customer: { name: method === 'CREDIT' ? customerName.trim() : 'လမ်းလျှောက်ဝယ်သူ' }, fulfillmentStatus: 'completed',
+          paymentStatus: method === 'CREDIT' ? 'unpaid' : 'paid', paidAmount: method === 'CREDIT' ? 0 : total, balanceDue: method === 'CREDIT' ? total : 0,
+          subtotal, discount: totalDiscount, deliveryFee: 0, total, paymentMethod: method === 'MOBILE' ? mobileName : method,
+          transactionId: method === 'MOBILE' ? transactionId.trim() : '', source: 'Preview POS',
+          items: cart.map((item) => ({ id: `${item.productId}-${invoiceNumber}`, productId: item.productId, type: item.name, quantity: item.quantity, unitPrice: item.unitPrice, regularUnitPrice: item.regularPrice, promotionName: item.promotionName, promotionDiscount: item.promotionDiscount, lineTotal: item.quantity * item.unitPrice })),
+        })
+      } else {
+        const created = await api.createOrder(shopId, { customer: method === 'CREDIT' ? { name: customerName.trim() } : undefined, fulfillmentStatus: 'reserved', source: 'POS', items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity, discount: 0 })) })
+        savedInvoiceNumber = created.order.orderNumber || invoiceNumber
+        if (method !== 'CREDIT') await api.receivePayment(shopId, created.order.id, { method: method === 'MOBILE' ? mobileName : 'ငွေသား', amount: total, ...(method === 'MOBILE' ? { transactionId: transactionId.trim() } : {}) })
+        await api.completeOrder(shopId, created.order.id, 'completed')
+        await refresh?.()
+      }
+      notify(`Invoice ${savedInvoiceNumber} ကို သိမ်းပြီးပါပြီ`)
+      setCart([]); setReceived(''); setTransactionId(''); setCustomerName('')
+      if (!user.preview) {
+        const next = await api.nextOrderNumber(shopId)
+        setNextInvoiceNumber(next.orderNumber || '')
+      }
+    } catch (error) { notify(error.message || 'အရောင်းကို မသိမ်းနိုင်ပါ', 'error') } finally { setSaving(false) }
   }
 
-  return (
-    <Box className="page-stack">
-      <PageHeader
-        title="Point of Sale"
-        subtitle="Create online orders or immediate in-store sales."
-        onBack={() => navigate('home')}
-        actions={<>
-          {hasHeldCart ? <Button startIcon={<RestoreRoundedIcon />} onClick={resumeCart}>Resume held sale</Button> : null}
-          <Button variant="outlined" startIcon={<SaveRoundedIcon />} disabled={!items.length} onClick={holdCart}>Hold sale</Button>
-        </>}
-      />
-
-      <Box component="form" onSubmit={submitOrder} className="order-workspace">
-        <Stack spacing={2}>
-          <SectionCard>
-            <Typography variant="h6" className="workflow-step" data-step="1">
-              Sale type
-            </Typography>
-            {restaurantMode ? <Alert severity="info" sx={{ mt: 2 }}>Online Restaurant supports delivery and pickup only. Dine-in and table workflows are intentionally unavailable.</Alert> : (
-              <ToggleButtonGroup value={orderType} exclusive fullWidth onChange={(_, value) => value && setOrderType(value)} sx={{ mt: 2 }}>
-                <ToggleButton value="online">Online Order</ToggleButton>
-                <ToggleButton value="in-store">In-Store Sale</ToggleButton>
-              </ToggleButtonGroup>
-            )}
-          </SectionCard>
-
-          {orderType === 'online' ? (
-            <SectionCard>
-              <Typography variant="h6" className="workflow-step" data-step="2">
-                Customer and delivery
-              </Typography>
-              <Box className="form-grid" sx={{ mt: 2 }}>
-                <TextField className="span-6" label="Customer name" value={customer.name} onChange={(event) => setCustomer((current) => ({ ...current, name: event.target.value }))} required />
-                <TextField className="span-6" label="Phone" value={customer.phone} onChange={(event) => setCustomer((current) => ({ ...current, phone: event.target.value }))} required />
-                <TextField className="span-4" type="date" label="Order date" value={date} onChange={(event) => setDate(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-                <TextField className="span-4" label="City" value={customer.city} onChange={(event) => setCustomer((current) => ({ ...current, city: event.target.value }))} />
-                <FormControl className="span-4">
-                  <InputLabel id="order-source-label">Source</InputLabel>
-                  <Select labelId="order-source-label" label="Source" value={source} onChange={(event) => setSource(event.target.value)}>
-                    {(restaurantMode ? ['Delivery', 'Pickup'] : SOURCE_OPTIONS).map((option) => (
-                      <MenuItem key={option} value={option}>{option}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <TextField className="span-12" label="Address" value={customer.address} onChange={(event) => setCustomer((current) => ({ ...current, address: event.target.value }))} multiline minRows={2} />
-              </Box>
-            </SectionCard>
-          ) : (
-            <SectionCard>
-              <Typography variant="h6" className="workflow-step" data-step="2">
-                In-store sale
-              </Typography>
-              <Alert severity="info" sx={{ mt: 2 }}>
-                Customer, delivery, deposit, and COD settlement details are not required for in-store sales.
-              </Alert>
-              <TextField sx={{ mt: 2 }} type="date" label="Sale date" value={date} onChange={(event) => setDate(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
-            </SectionCard>
-          )}
-
-          <SectionCard>
-            <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-              <Typography variant="h6" className="workflow-step" data-step="3">
-                Add products
-              </Typography>
-              {orderType === 'online' ? (
-                <FormControlLabel control={<Checkbox checked={preorder} onChange={(event) => setPreorder(event.target.checked)} />} label="Preorder" />
-              ) : null}
-            </Stack>
-            <Box className="form-grid" sx={{ mt: 2 }}>
-              <FormControl className="span-12">
-                <InputLabel id="order-product-label">Product</InputLabel>
-                <Select labelId="order-product-label" label="Product" value={lineDraft.productId} onChange={(event) => updateLineProduct(event.target.value)}>
-                  {data.products.map((product) => <MenuItem key={product.id} value={product.id}>{product.name}</MenuItem>)}
-                </Select>
-              </FormControl>
-              {hasOptions ? optionTree.levels.map((level, index) => (
-                <FormControl key={level.id} className="span-4">
-                  <InputLabel id={`order-option-${level.id}-label`}>{level.label}</InputLabel>
-                  <Select
-                    labelId={`order-option-${level.id}-label`}
-                    label={level.label}
-                    value={lineDraft.optionValueIds[index] || ''}
-                    onChange={(event) => updateLineOptionValue(index, event.target.value)}
-                  >
-                    {optionValuesForLevel(optionTree, index).map((value) => (
-                      <MenuItem key={value.id} value={value.id}>{value.label}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              )) : null}
-              {sellingUnits.length ? <FormControl className="span-4">
-                <InputLabel id="order-unit-label">Selling unit</InputLabel>
-                <Select labelId="order-unit-label" label="Selling unit" value={selectedSellingUnit?.unitId || ''} onChange={(event) => {
-                  const unit = sellingUnits.find((entry) => entry.unitId === event.target.value)
-                  const factor = Number(unit?.conversionFactor || 1)
-                  const basePrice = Number(selectedVariant?.price ?? selectedProduct?.price ?? 0)
-                  setLineDraft((current) => ({ ...current, unitId: event.target.value, unitPrice: basePrice * factor }))
-                }}>
-                  {sellingUnits.map((entry) => <MenuItem key={entry.unitId} value={entry.unitId}>{entry.unit?.name || entry.unit?.symbol || 'Unit'} × {Number(entry.conversionFactor || 1)} base</MenuItem>)}
-                </Select>
-              </FormControl> : null}
-              <TextField className="span-4" type="number" label="Quantity" value={lineDraft.quantity} onChange={(event) => setLineDraft((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: sellingQuantityStep, step: sellingQuantityStep } }} />
-              <TextField className="span-4" type="number" label="Unit price" value={lineDraft.unitPrice} onChange={(event) => setLineDraft((current) => ({ ...current, unitPrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
-              {selectedProduct?.trackingMode === 'SERIAL' ? (
-                <FormControl className="span-12">
-                  <InputLabel id="sale-serials-label">Serials / IMEIs</InputLabel>
-                  <Select
-                    labelId="sale-serials-label"
-                    multiple
-                    label="Serials / IMEIs"
-                    value={lineDraft.serialIds}
-                    onChange={(event) => {
-                      const serialIds = event.target.value
-                      setLineDraft((current) => ({ ...current, serialIds, quantity: serialIds.length || 1 }))
-                    }}
-                    renderValue={(selected) => selected.map((id) => {
-                      const serial = availableSerials.find((entry) => entry.id === id)
-                      return serial?.imei ? `${serial.serial} / ${serial.imei}` : serial?.serial || id
-                    }).join(', ')}
-                  >
-                    {availableSerials.map((serial) => (
-                      <MenuItem key={serial.id} value={serial.id}>
-                        <Checkbox checked={lineDraft.serialIds.includes(serial.id)} />
-                        {serial.serial}{serial.imei ? ` / IMEI ${serial.imei}` : ''}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                    Select the exact devices being sold. Quantity follows the selection.
-                  </Typography>
-                </FormControl>
-              ) : null}
-              {selectedProduct?.trackingMode === 'LOT' ? (
-                <>
-                  <FormControl className="span-12">
-                    <InputLabel id="order-lot-label">Lot allocation</InputLabel>
-                    <Select
-                      labelId="order-lot-label"
-                      label="Lot allocation"
-                      value={lineDraft.lotId}
-                      onChange={(event) => setLineDraft((current) => ({
-                        ...current, lotId: event.target.value,
-                        lotOverrideReason: event.target.value ? current.lotOverrideReason : '',
-                      }))}
-                    >
-                      <MenuItem value="">Automatic FEFO (recommended)</MenuItem>
-                      {availableLots.map((lot) => (
-                        <MenuItem key={lot.id} value={lot.id}>
-                          {lot.lotNumber} · expires {lot.expiresAt ? String(lot.expiresAt).slice(0, 10) : 'never'} · {Number(lot.quantity)} available
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                  {lineDraft.lotId ? (
-                    <TextField
-                      required
-                      className="span-12"
-                      label="Manual lot override reason"
-                      value={lineDraft.lotOverrideReason}
-                      onChange={(event) => setLineDraft((current) => ({ ...current, lotOverrideReason: event.target.value }))}
-                      helperText="The store owner and reason are recorded in the immutable audit trail."
-                    />
-                  ) : null}
-                </>
-              ) : null}
-              {(selectedRecipe?.modifierGroups || []).map((group) => (
-                <FormControl key={group.id} className="span-12">
-                  <InputLabel id={`order-modifier-${group.id}-label`}>{group.name}</InputLabel>
-                  <Select
-                    labelId={`order-modifier-${group.id}-label`}
-                    multiple
-                    label={group.name}
-                    value={lineDraft.modifierOptionIds.filter((id) => group.options.some((option) => option.id === id))}
-                    onChange={(event) => {
-                      const groupIds = new Set(group.options.map((option) => option.id))
-                      const retained = lineDraft.modifierOptionIds.filter((id) => !groupIds.has(id))
-                      const selected = event.target.value.filter((id) => groupIds.has(id))
-                      setLineDraft((current) => ({ ...current, modifierOptionIds: [...retained, ...selected] }))
-                    }}
-                    renderValue={(ids) => group.options.filter((option) => ids.includes(option.id)).map((option) => option.name).join(', ')}
-                  >
-                    {group.options.map((option) => (
-                      <MenuItem key={option.id} value={option.id}>
-                        <Checkbox checked={lineDraft.modifierOptionIds.includes(option.id)} />
-                        {option.name}{option.priceDelta ? ` (+${formatKs(option.priceDelta)})` : ''}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                  <Typography variant="caption" color="text.secondary">
-                    Choose {Math.max(group.required ? 1 : 0, Number(group.minSelect || 0))}–{group.maxSelect}
-                  </Typography>
-                </FormControl>
-              ))}
-              <Stack className="span-12" direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-                <Typography color={available > 3 ? 'success.main' : 'warning.main'}>Available: {available}</Typography>
-                <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={addItem}>Add item</Button>
-              </Stack>
-            </Box>
-          </SectionCard>
-
-          <SectionCard title="Items" subtitle="Review selected products before creating the sale.">
-            <Stack spacing={1.25} sx={{ mt: 2 }}>
-              {items.map((item) => (
-                <Box key={item.id} className="cart-line">
-                  <Box>
-                    <Typography fontWeight={800}>{item.type}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {item.variantName} - {item.quantity} x {formatKs(item.unitPrice)}
-                    </Typography>
-                    {item.serialIds?.length ? (
-                      <Typography variant="caption" color="text.secondary">
-                        {item.serialIds.map((id) => data.inventorySerials?.find((serial) => serial.id === id)?.serial || id).join(', ')}
-                      </Typography>
-                    ) : null}
-                    {item.modifiers?.length ? <Typography variant="caption" color="text.secondary">{item.modifiers.map((entry) => entry.name).join(', ')}</Typography> : null}
-                  </Box>
-                  <Stack direction="row" sx={{ alignItems: 'center', gap: 1 }}>
-                    <Typography fontWeight={800}>{formatKs(item.lineTotal)}</Typography>
-                    <IconButton color="error" onClick={() => setItems((current) => current.filter((entry) => entry.id !== item.id))}>
-                      <DeleteOutlineRoundedIcon />
-                    </IconButton>
-                  </Stack>
-                </Box>
-              ))}
-              {!items.length ? <Typography color="text.secondary">No items added yet.</Typography> : null}
-            </Stack>
-          </SectionCard>
-        </Stack>
-
-        <Paper variant="outlined" className="order-summary-card">
-          <Typography variant="h6" className="workflow-step" data-step="4">
-            Summary
-          </Typography>
-          <Stack spacing={1.5} sx={{ mt: 2 }}>
-            <Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography>Subtotal</Typography><Typography>{formatKs(totals.subtotal)}</Typography></Stack>
-            <TextField type="number" label="Order discount" value={orderDiscount} onChange={(event) => setOrderDiscount(event.target.value)} slotProps={{ htmlInput: { min: 0 } }} />
-            <TextField label={orderType === 'in-store' ? 'Note (optional)' : 'Remark'} value={remark} onChange={(event) => setRemark(event.target.value)} multiline minRows={2} />
-            {orderType === 'online' ? (
-              <ToggleButtonGroup value={paymentMode} exclusive fullWidth onChange={(_, value) => value && setPaymentMode(value)}>
-                <ToggleButton value="unpaid">Unpaid</ToggleButton>
-                <ToggleButton value="pay-now">Pay now</ToggleButton>
-                <ToggleButton value="advanced-payment">Advanced payment</ToggleButton>
-              </ToggleButtonGroup>
-            ) : null}
-            {payNow ? (
-              <Stack spacing={1.5}>
-                <FormControl>
-                  <InputLabel id="order-payment-method-label">Payment method</InputLabel>
-                  <Select labelId="order-payment-method-label" label="Payment method" value={selectedPaymentMethod} onChange={(event) => setPayment((current) => ({ ...current, method: event.target.value, billNumber: '', transactionId: '' }))}>
-                    {paymentMethods.map((method) => <MenuItem key={method.id} value={method.name}>{method.name}</MenuItem>)}
-                  </Select>
-                </FormControl>
-                {advancedPayment ? (
-                  <TextField
-                    type="number"
-                    label="Advanced payment amount"
-                    value={payment.amount}
-                    onChange={(event) => setPayment((current) => ({ ...current, amount: event.target.value }))}
-                    helperText={`Remaining balance: ${formatKs(Math.max(0, totals.total - paymentAmount))}`}
-                    slotProps={{ htmlInput: { min: 1, max: Math.max(1, totals.total - 1) } }}
-                  />
-                ) : null}
-                {paymentIsCod ? (
-                  <TextField label="COD reference - last 6 digits" value={payment.billNumber} onChange={(event) => setPayment((current) => ({ ...current, billNumber: digitsOnly(event.target.value) }))} slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 6 } }} />
-                ) : null}
-                {!paymentIsCash ? (
-                  <TextField label="Transaction ID - last 6 digits" value={payment.transactionId} onChange={(event) => setPayment((current) => ({ ...current, transactionId: digitsOnly(event.target.value) }))} slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 6 } }} />
-                ) : null}
-                <TextField type="date" label="Payment date" value={payment.date} onChange={(event) => setPayment((current) => ({ ...current, date: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
-                {paymentIsCash ? (
-                  <TextField label="Cash note (optional)" value={payment.note} onChange={(event) => setPayment((current) => ({ ...current, note: event.target.value }))} multiline minRows={2} />
-                ) : null}
-              </Stack>
-            ) : <Alert severity="info">This order will appear in Finance as outstanding.</Alert>}
-            <Divider />
-            <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <Typography fontWeight={900}>Total</Typography>
-              <Typography variant="h5" color="primary.main" fontWeight={900}>{formatKs(totals.total)}</Typography>
-            </Stack>
-            <Button type="submit" variant="contained" color="success" size="large" startIcon={<SaveRoundedIcon />} disabled={saving || !items.length}>
-              {saving ? 'Saving...' : orderType === 'in-store' ? `Complete sale ${formatKs(totals.total)}` : 'Create order'}
-            </Button>
-          </Stack>
-        </Paper>
+  return <Box className="page-stack pos-page">
+    <PageHeader title="အရောင်းစီမံခန့်ခွဲမှု" subtitle="ကုန်ပစ္စည်းရွေးပြီး ငွေရှင်းပါ" />
+    <Box className="pos-layout"><Paper className="pos-register" elevation={0}>
+      <Box component="form" onSubmit={submitProduct} className="pos-search">
+        <TextField fullWidth className="pos-product-search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submitProduct(event) } }} placeholder="ကုန်ပစ္စည်းအမည် သို့မဟုတ် code number ဖြင့်ရှာပါ" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment> } }} />
       </Box>
-    </Box>
-  )
+      {search ? <Paper variant="outlined" className="pos-results">{matches.map((product) => <Button key={product.id} onClick={() => addProduct(product)}><span>{product.sku} · {product.name}</span><strong>{money(product.price)}</strong></Button>)}</Paper> : null}
+      <Box className="pos-workspace">
+      <Box className="pos-cart-panel">
+      <Box className="pos-order-meta-row">
+        <Box className="pos-invoice" aria-label={`Invoice number ${invoiceNumber}`}><span>Invoice no.</span><strong>{invoiceNumber}</strong></Box>
+        <Box className="pos-cart-heading"><Typography variant="subtitle1" fontWeight={800}>ရွေးထားသောပစ္စည်းများ</Typography><Typography variant="body2" color="text.secondary">{cart.length} မျိုး</Typography></Box>
+      </Box>
+      <Stack divider={<Divider flexItem />}>{cart.map((item, index) => <Box className="pos-line" key={item.productId}>
+        <Box><Typography fontWeight={800}>{item.code} · {item.name}</Typography>{item.promotionDiscount > 0 ? <><Typography variant="caption" display="block" sx={{ textDecoration: 'line-through' }}>တစ်ခုလျှင် {money(item.regularPrice)}</Typography><Typography variant="caption" color="success.main">{item.promotionName} · လျှော့စျေး {money(item.promotionDiscount)}</Typography><Typography variant="caption" color="text.secondary" display="block">{item.promotionCondition}</Typography></> : <Typography variant="caption">တစ်ခုလျှင် {money(item.unitPrice)}</Typography>}<Typography className="pos-stock-available" variant="caption" display="block">လက်ကျန် {Number(item.availableQuantity || 0).toLocaleString('en-US')} မျိုး</Typography></Box>
+        <Stack direction="row" alignItems="center" spacing={1.25} className="pos-quantity-control"><IconButton aria-label="အရေအတွက်လျှော့ရန်" onClick={() => changeQuantity(index, -1)}><RemoveRoundedIcon fontSize="large" /></IconButton><TextField className="pos-quantity-input" type="number" value={item.quantity} onChange={(event) => updateQuantity(index, event.target.value)} onKeyDown={(event) => handleQuantityKey(event, index)} slotProps={{ htmlInput: { min: 0, max: item.availableQuantity, step: 1, inputMode: 'numeric', 'aria-label': `${item.name} အရေအတွက်` } }} /><Typography component="output" className="pos-quantity-value">{item.quantity}</Typography><IconButton aria-label="အရေအတွက်တိုးရန်" onClick={() => changeQuantity(index, 1)}><AddRoundedIcon fontSize="large" /></IconButton></Stack>
+        <Typography className="pos-line-total">{money(item.quantity * item.unitPrice)}</Typography>
+      </Box>)}</Stack>
+      {!cart.length ? <Alert severity="info" sx={{ mt: 2 }}>Code number သို့မဟုတ် ကုန်ပစ္စည်းအမည် ရိုက်ပြီး Enter နှိပ်ပါ</Alert> : null}
+      </Box>
+      <Box className="pos-checkout-panel">
+      <Box className="pos-total"><Typography>စုစုပေါင်း</Typography><strong>{money(subtotal)}</strong>{totalDiscount > 0 ? <><Typography>လျှော့စျေး</Typography><strong>− {money(totalDiscount)}</strong></> : null}<Typography variant="h6">ကျသင့်ငွေ ပေါင်း</Typography><Typography variant="h5">{money(total)}</Typography></Box>
+      <Divider sx={{ my: 2.5 }} /><Typography className="pos-payment-title">ငွေပေးချေမှု နည်းလမ်း</Typography>
+      <ToggleButtonGroup exclusive value={method} onChange={(_, value) => value && setMethod(value)} fullWidth sx={{ mt: 1 }}><ToggleButton value="CASH">ငွေသား</ToggleButton><ToggleButton value="MOBILE">Mobile Payment</ToggleButton><ToggleButton value="CREDIT">အကြွေး</ToggleButton></ToggleButtonGroup>
+      {method === 'CASH' ? <Box className="pos-payment-fields"><TextField type="number" label="လက်ခံရရှိငွေ" value={received} onChange={(event) => setReceived(event.target.value)} /><TextField label="ပြန်အမ်းငွေ" value={money(change)} InputProps={{ readOnly: true }} /></Box> : null}
+      {method === 'MOBILE' ? <Box className="pos-payment-fields"><TextField select label="Mobile Payment name" value={mobileName} onChange={(event) => setMobileName(event.target.value)}>{['KBZPay', 'AYAPay', 'WavePay'].map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}</TextField><TextField label="Transaction number နောက်ဆုံး 8 လုံး" value={transactionId} onChange={(event) => setTransactionId(event.target.value.replace(/\D/g, '').slice(-8))} /></Box> : null}
+      {method === 'CREDIT' ? <TextField fullWidth sx={{ mt: 2 }} label="ဝယ်သူအမည်" value={customerName} onChange={(event) => setCustomerName(event.target.value)} /> : null}
+      <Button sx={{ mt: 2 }} size="large" fullWidth variant="contained" disabled={saving || !cart.length} onClick={checkout}>{saving ? 'သိမ်းဆည်းနေသည်...' : 'ပြီးဆုံးပြီ'}</Button>
+      </Box>
+      </Box>
+    </Paper></Box>
+  </Box>
 }

@@ -67,6 +67,14 @@ export async function apiRequest(path, { method = 'GET', body, token = getStored
   return parseResponse(response)
 }
 
+export async function fetchBarcodeLabel(shopId, barcodeId) {
+  const response = await fetch(`${API_BASE_URL}/shops/${shopId}/barcodes/${barcodeId}/label.svg`, {
+    headers: { Authorization: `Bearer ${getStoredToken()}` },
+  })
+  if (!response.ok) throw new Error('Barcode label could not be generated.')
+  return response.text()
+}
+
 export const api = {
   register: (payload) => apiRequest('/auth/register', { method: 'POST', body: payload, token: null }),
   login: (payload) => apiRequest('/auth/login', { method: 'POST', body: payload, token: null }),
@@ -105,6 +113,19 @@ export const api = {
     apiRequest(`/shops/${shopId}/price-groups`, { method: 'POST', body: payload }),
   createPriceTier: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/price-tiers`, { method: 'POST', body: payload }),
+  pricingOverview: (shopId) => apiRequest(`/shops/${shopId}/pricing/overview`),
+  prices: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/prices?${query}`),
+  createPrice: (shopId, payload) => apiRequest(`/shops/${shopId}/prices`, { method: 'POST', body: payload }),
+  applyPriceRule: (shopId, payload) => apiRequest(`/shops/${shopId}/prices/bulk`, { method: 'POST', body: payload }),
+  resolvePrice: (shopId, payload) => apiRequest(`/shops/${shopId}/pricing/resolve`, { method: 'POST', body: payload }),
+  promotions: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/promotions?${query}`),
+  createPromotion: (shopId, payload) => apiRequest(`/shops/${shopId}/promotions`, { method: 'POST', body: payload }),
+  updatePromotion: (shopId, promotionId, payload) => apiRequest(`/shops/${shopId}/promotions/${promotionId}`, { method: 'PATCH', body: payload }),
+  barcodes: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/barcodes?${query}`),
+  lookupBarcode: (shopId, value, channel = 'ALL') => apiRequest(`/shops/${shopId}/barcode-lookup/${encodeURIComponent(value)}?channel=${encodeURIComponent(channel)}`),
+  createBarcode: (shopId, payload) => apiRequest(`/shops/${shopId}/barcodes`, { method: 'POST', body: payload }),
+  createInternalBarcode: (shopId, payload) => apiRequest(`/shops/${shopId}/barcodes/internal`, { method: 'POST', body: payload }),
+  retireBarcode: (shopId, barcodeId, payload) => apiRequest(`/shops/${shopId}/barcodes/${barcodeId}/retire`, { method: 'PATCH', body: payload }),
   receiveInventoryOperation: (shopId, payload, idempotencyKey) =>
     apiRequest(`/shops/${shopId}/inventory-operations/receive`, {
       method: 'POST',
@@ -128,7 +149,13 @@ export const api = {
   shopSettings: (shopId) => apiRequest(`/shops/${shopId}/settings`),
   updateShopSettings: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/settings`, { method: 'PATCH', body: payload }),
-  dashboard: (shopId) => apiRequest(`/shops/${shopId}/dashboard`),
+  dashboard: (shopId, { from, to } = {}) => {
+    const query = new URLSearchParams()
+    if (from) query.set('from', from)
+    if (to) query.set('to', to)
+    const suffix = query.size ? `?${query.toString()}` : ''
+    return apiRequest(`/shops/${shopId}/dashboard${suffix}`)
+  },
   categories: (shopId) => apiRequest(`/shops/${shopId}/categories`),
   createCategory: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/categories`, { method: 'POST', body: payload }),
@@ -161,6 +188,9 @@ export const api = {
     apiRequest(`/shops/${shopId}/suppliers`, { method: 'POST', body: payload }),
   updateSupplier: (shopId, supplierId, payload) =>
     apiRequest(`/shops/${shopId}/suppliers/${supplierId}`, { method: 'PATCH', body: payload }),
+  productSuppliers: (shopId) => apiRequest(`/shops/${shopId}/product-suppliers`),
+  saveProductSupplier: (shopId, payload) =>
+    apiRequest(`/shops/${shopId}/product-suppliers`, { method: 'POST', body: payload }),
   purchases: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/purchases?${query}`),
   createPurchase: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/purchases`, { method: 'POST', body: payload }),
@@ -177,9 +207,12 @@ export const api = {
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/payments/${paymentId}/reverse`, { method: 'POST', body: payload }),
   returnPurchase: (shopId, purchaseId, payload) =>
     apiRequest(`/shops/${shopId}/purchases/${purchaseId}/returns`, { method: 'POST', body: payload }),
+  cancelPurchase: (shopId, purchaseId, payload) =>
+    apiRequest(`/shops/${shopId}/purchases/${purchaseId}/cancel`, { method: 'POST', body: payload }),
   orders: (shopId, query = 'pageSize=100') => apiRequest(`/shops/${shopId}/orders?${query}`),
   createOrder: (shopId, payload) =>
     apiRequest(`/shops/${shopId}/orders`, { method: 'POST', body: payload }),
+  nextOrderNumber: (shopId) => apiRequest(`/shops/${shopId}/orders/next-number`),
   completeOrder: (shopId, orderId, fulfillmentStatus) =>
     apiRequest(`/shops/${shopId}/orders/${orderId}/status`, {
       method: 'PATCH',

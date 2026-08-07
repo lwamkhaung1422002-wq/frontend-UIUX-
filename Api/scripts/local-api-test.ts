@@ -725,6 +725,48 @@ async function main(): Promise<void> {
       },
     }), 2);
 
+    const barcodeValue = `GM-API-${stamp}`;
+    const barcodeCreated = await request(baseUrl, `/shops/${shopId}/barcodes`, {
+      method: "POST", token,
+      body: { value: barcodeValue, productId, kind: "MANUFACTURER", symbology: "CODE128", isPrimary: true },
+    });
+    assert.equal(barcodeCreated.barcode.normalizedValue, barcodeValue);
+    const barcodeLookup = await request(baseUrl, `/shops/${shopId}/barcode-lookup/${barcodeValue}`, { token });
+    assert.equal(barcodeLookup.known, true);
+    assert.equal(barcodeLookup.barcode.productId, productId);
+    await assert.rejects(request(baseUrl, `/shops/${shopId}/barcodes`, {
+      method: "POST", token,
+      body: { value: barcodeValue.toLowerCase(), productId, kind: "SUPPLIER" },
+    }), /already linked/i);
+    const labelResponse = await fetch(`${baseUrl}/shops/${shopId}/barcodes/${barcodeCreated.barcode.id}/label.svg`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(labelResponse.status, 200);
+    assert.match(await labelResponse.text(), /<svg/i);
+
+    await request(baseUrl, `/shops/${shopId}/prices`, {
+      method: "POST", token,
+      body: { productId, unitPrice: 8000, effectiveFrom: new Date(Date.now() - 60_000).toISOString(), reason: "Pricing API integration test" },
+    });
+    const promotionStart = new Date(Date.now() - 30_000);
+    const promotionEnd = new Date(Date.now() + 3_600_000);
+    const promotion = await request(baseUrl, `/shops/${shopId}/promotions`, {
+      method: "POST", token,
+      body: { name: `API promotion ${stamp}`, productId, type: "PERCENTAGE", value: 25, startsAt: promotionStart.toISOString(), endsAt: promotionEnd.toISOString(), state: "SCHEDULED", reason: "Pricing precedence test" },
+    });
+    assert.equal(promotion.promotion.productId, productId);
+    const resolvedPrice = await request(baseUrl, `/shops/${shopId}/pricing/resolve`, {
+      method: "POST", token, body: { productId, quantity: 1, channel: "ALL", manualDiscount: 100 },
+    });
+    assert.equal(resolvedPrice.pricing.regularUnitPrice, 8000);
+    assert.equal(resolvedPrice.pricing.promotionDiscount, 2000);
+    assert.equal(resolvedPrice.pricing.manualDiscount, 100);
+    assert.equal(resolvedPrice.pricing.finalUnitPrice, 5900);
+    await assert.rejects(request(baseUrl, `/shops/${shopId}/promotions`, {
+      method: "POST", token,
+      body: { name: `Overlapping API promotion ${stamp}`, productId, type: "PERCENTAGE", value: 10, startsAt: promotionStart.toISOString(), endsAt: promotionEnd.toISOString(), state: "SCHEDULED" },
+    }), /overlaps/i);
+
     const attacker = await request(baseUrl, "/auth/register", {
       method: "POST",
       body: {
@@ -749,6 +791,7 @@ async function main(): Promise<void> {
       method: "POST", token: attackerToken, body: {},
     }), denied);
     await assert.rejects(request(baseUrl, `/shops/${shopId}/reports/sales`, { token: attackerToken }), denied);
+    await assert.rejects(request(baseUrl, `/shops/${shopId}/barcode-lookup/${barcodeValue}`, { token: attackerToken }), denied);
 
     const wrongExisting = await rawRequest(baseUrl, "/auth/login", {
       method: "POST",
@@ -797,7 +840,10 @@ async function main(): Promise<void> {
         "dashboard",
     "purchase receive/payment/reversal/return audit trail",
     "idempotent purchase receiving",
-    "restaurant lifecycle reservation and atomic ingredient consumption",
+        "restaurant lifecycle reservation and atomic ingredient consumption",
+        "barcode lookup, uniqueness, printable SVG and cross-shop isolation",
+        "regular price, promotion and manual-discount precedence",
+        "promotion overlap rejection",
     "cross-owner product/inventory/order/purchase/report IDOR rejection",
       ],
     }, null, 2));

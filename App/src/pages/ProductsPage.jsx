@@ -1,431 +1,301 @@
-import { useMemo, useState } from 'react'
-import { Box, Button, Card, CardActions, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, IconButton, InputAdornment, InputLabel, MenuItem, Select, Step, StepLabel, Stepper, TextField, Typography, useMediaQuery } from '@mui/material'
-import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import AddRoundedIcon from '@mui/icons-material/AddRounded'
-import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Box,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  InputAdornment,
+  MenuItem,
+  TextField,
+  Typography,
+  Alert,
+  Autocomplete,
+} from '@mui/material'
+import AddCircleRoundedIcon from '@mui/icons-material/AddCircleRounded'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
-import { useData } from '../contexts/DataContext.jsx'
-import { useAuth } from '../contexts/AuthContext.jsx'
-import { useFeedback } from '../contexts/FeedbackContext.jsx'
-import PageHeader from '../components/PageHeader.jsx'
-import EmptyState from '../components/EmptyState.jsx'
-import { formatKs } from '../utils/storage.js'
-import { createProductDocument, updateProductDocument } from '../services/shopApiService.js'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
+import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
+import MoreHorizRoundedIcon from '@mui/icons-material/MoreHorizRounded'
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
+import SettingsSuggestRoundedIcon from '@mui/icons-material/SettingsSuggestRounded'
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
+import { useAppHeaderActions } from '../contexts/AppHeaderActionsContext.jsx'
 import useSessionState from '../hooks/useSessionState.js'
-import { api, getStoredShopId } from '../services/api.js'
 
-const emptyProduct = {
-  id: '', name: '', sku: '', price: 0, cost: 0, description: '', categoryId: '',
-  trackingMode: 'NONE', quantityPrecision: 0, baseUnitId: '', sellingUnitId: '',
-  sellingConversionFactor: 1, minimumOrderQty: 1, openingQuantity: 0,
-}
+const initialProducts = [
+  { id: 1, name: 'Jasmine အနံ့ဆီ', category: 'အလှကုန်', supplier: 'Pahtama Group', sku: '1001', price: 3500, cost: 2900, quantity: 68 },
+  { id: 2, name: 'Nivea Roll on', category: 'အလှကုန်', supplier: 'Pahtama Group', sku: '1002', price: 6500, cost: 5800, quantity: 29 },
+  { id: 3, name: 'Coca-Cola 330ml', category: 'အအေး', supplier: 'Unilever', sku: '1228', price: 1000, cost: 800, quantity: 20 },
+  { id: 4, name: 'ကွမ်းယာ', category: 'အထွေထွေ', supplier: 'Pahtama Group', sku: '1004', price: 5000, cost: 4300, quantity: 2 },
+]
 
-export default function ProductsPage({ navigate, refresh, requireAuth }) {
-  const { data } = useData()
-  const { user } = useAuth()
-  const { notify } = useFeedback()
-  const [query, setQuery] = useSessionState('products:query', '')
-  const [importRows, setImportRows] = useState([])
-  const [importErrors, setImportErrors] = useState([])
-  const [importing, setImporting] = useState(false)
+const emptyProductDraft = { name: '', category: '', supplier: '', sku: '', voucher: '', price: '', cost: '', quantity: '' }
+const emptyStockDraft = { product: null, category: '', supplier: '', voucher: '', quantity: '', purchasePrice: '', sellingPrice: '', receivedDate: '' }
+const money = (amount) => `${Number(amount || 0).toLocaleString('en-US')} ကျပ်`
+const nowLabel = () => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', hour12: true }).format(new Date())
+
+export default function ProductsPage() {
+  // Versioned key resets the old, mismatched browser demo state to this purchase-consistent set.
+  const [products, setProducts] = useSessionState('products:demo-items:v2', initialProducts)
+  const [categories, setCategories] = useSessionState('products:demo-categories', ['အလှကုန်', 'အအေး', 'အထွေထွေ'])
+  const [query, setQuery] = useState('')
+  const [category, setCategory] = useState('အားလုံး')
+  const [stockDraft, setStockDraft] = useState(null)
   const [productDraft, setProductDraft] = useState(null)
-  const [wizardStep, setWizardStep] = useState(0)
-  const [wholesalePricing, setWholesalePricing] = useState(null)
-  const [recipeDraft, setRecipeDraft] = useState(null)
-  const fullScreen = useMediaQuery('(max-width:600px)')
-  const products = useMemo(() => {
-    const term = query.trim().toLowerCase()
-    return (data.products || []).filter((product) =>
-      !term || [product.name, product.sku].some((value) => String(value || '').toLowerCase().includes(term)),
-    )
-  }, [data.products, query])
-  const availableByProduct = useMemo(() => (data.stocks || []).reduce((map, stock) => {
-    map[stock.productId] = (map[stock.productId] || 0) + Math.max(0, Number(stock.quantity || 0) - Number(stock.reservedQuantity || 0))
-    return map
-  }, {}), [data.stocks])
-  const downloadTemplate = () => {
-    const blob = new Blob(['name,sku,price,cost\nPremium Rice 5kg,RICE-5KG,25000,20000\n'], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = 'greenmart-product-import-template.csv'
-    anchor.click()
-    URL.revokeObjectURL(url)
+  const [quantityEditDraft, setQuantityEditDraft] = useState(null)
+  const [detail, setDetail] = useState(null)
+  const [recordProduct, setRecordProduct] = useState(null)
+  const [records, setRecords] = useSessionState('products:demo-records:v2', {
+    1: [
+      { type: 'လက်ခံခြင်း', supplier: 'Pahtama Group', quantity: 68, cost: 2900, price: 3500, time: '10/05/2026, 10:05 am', voucher: '125978' },
+    ],
+    2: [{ type: 'လက်ခံခြင်း', supplier: 'Pahtama Group', quantity: 29, cost: 5800, price: 6500, time: '10/05/2026, 10:05 am', voucher: '125978' }],
+    3: [{ type: 'လက်ခံခြင်း', supplier: 'Unilever', quantity: 20, cost: 800, price: 1000, time: '11/06/2026, 12:05 pm', voucher: '111548' }],
+    4: [{ type: 'လက်ခံခြင်း', supplier: 'Pahtama Group', quantity: 2, cost: 4300, price: 5000, time: '10/05/2026, 10:05 am', voucher: '125978' }],
+  })
+  const [categoryDraft, setCategoryDraft] = useState('')
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false)
+  const setAppHeaderActions = useAppHeaderActions()
+
+  const categoryOptions = useMemo(() => ['အားလုံး', ...categories], [categories])
+  const supplierOptions = useMemo(() => [...new Set([
+    ...products.map((product) => product.supplier),
+    ...Object.values(records).flat().map((record) => record.supplier),
+  ].filter(Boolean))].sort((left, right) => left.localeCompare(right)), [products, records])
+  const shownProducts = useMemo(() => products.filter((product) => {
+    const keyword = query.trim().toLowerCase()
+    return (!keyword || `${product.name} ${product.sku}`.toLowerCase().includes(keyword))
+      && (category === 'အားလုံး' || product.category === category)
+  }), [products, query, category])
+  const totalValue = products.reduce((total, product) => total + product.quantity * product.cost, 0)
+  const totalQuantity = products.reduce((total, product) => total + product.quantity, 0)
+  const duplicateProductName = productDraft?.name && products.some((product) => product.id !== productDraft.id && product.name.trim().toLowerCase() === productDraft.name.trim().toLowerCase())
+  const duplicateProductCode = productDraft?.sku && products.some((product) => product.id !== productDraft.id && product.sku === productDraft.sku)
+  const invalidProductCode = productDraft?.sku && !/^\d{4}$/.test(productDraft.sku)
+
+  const saveStock = () => {
+    if (!stockDraft?.product || Number(stockDraft.quantity) <= 0) return
+    setProducts((current) => current.map((product) => product.id === stockDraft.product.id ? {
+      ...product,
+      category: stockDraft.category || product.category,
+      supplier: stockDraft.supplier || product.supplier,
+      quantity: product.quantity + Number(stockDraft.quantity),
+      cost: Number(stockDraft.purchasePrice || product.cost),
+      price: Number(stockDraft.sellingPrice || product.price),
+    } : product))
+    setRecords((current) => ({ ...current, [stockDraft.product.id]: [{
+      type: 'လက်ခံခြင်း', voucher: stockDraft.voucher, quantity: Number(stockDraft.quantity), supplier: stockDraft.supplier || stockDraft.product.supplier, cost: Number(stockDraft.purchasePrice || stockDraft.product.cost), price: Number(stockDraft.sellingPrice || stockDraft.product.price), time: stockDraft.receivedDate,
+    }, ...(current[stockDraft.product.id] || [])] }))
+    setStockDraft(null)
   }
-  const readCsv = async (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    const lines = (await file.text()).split(/\r?\n/).filter(Boolean)
-    const headers = (lines.shift() || '').split(',').map((value) => value.trim().toLowerCase())
-    const required = ['name', 'sku', 'price', 'cost']
-    if (required.some((header) => !headers.includes(header))) {
-      setImportErrors(['CSV must contain name, sku, price, and cost columns.'])
-      setImportRows([])
-      return
-    }
-    const existingSkus = new Set((data.products || []).map((product) => String(product.sku || '').toLowerCase()).filter(Boolean))
-    const seen = new Set()
-    const errors = []
-    const rows = lines.map((line, index) => {
-      const values = line.split(',').map((value) => value.trim())
-      const row = Object.fromEntries(headers.map((header, position) => [header, values[position] || '']))
-      row.price = Number(row.price)
-      row.cost = Number(row.cost)
-      if (!row.name) errors.push(`Row ${index + 2}: name is required.`)
-      if (!row.sku) errors.push(`Row ${index + 2}: SKU is required.`)
-      if (row.price < 0 || !Number.isFinite(row.price)) errors.push(`Row ${index + 2}: price is invalid.`)
-      if (row.cost < 0 || !Number.isFinite(row.cost)) errors.push(`Row ${index + 2}: cost is invalid.`)
-      const sku = row.sku.toLowerCase()
-      if (existingSkus.has(sku) || seen.has(sku)) errors.push(`Row ${index + 2}: duplicate SKU ${row.sku}.`)
-      seen.add(sku)
-      return row
-    })
-    setImportRows(rows)
-    setImportErrors(errors)
-    event.target.value = ''
+
+  const saveProductDefinition = () => {
+    if (!productDraft?.name.trim() || !productDraft.voucher.trim()) return
+    if (duplicateProductName || duplicateProductCode || invalidProductCode) return
+    const productId = Date.now()
+    setProducts((current) => [...current, {
+      ...productDraft,
+      id: productId,
+      sku: productDraft.sku,
+      price: Number(productDraft.price),
+      cost: Number(productDraft.cost || 0),
+      quantity: Number(productDraft.quantity || 0),
+    }])
+    setRecords((current) => ({ ...current, [productId]: [{
+      type: 'လက်ခံခြင်း', voucher: productDraft.voucher, quantity: Number(productDraft.quantity || 0), supplier: productDraft.supplier, cost: Number(productDraft.cost || 0), price: Number(productDraft.price || 0), time: nowLabel(),
+    }] }))
+    setProductDraft(null)
   }
-  const confirmImport = async () => {
-    if (requireAuth?.() || importErrors.length) return
-    setImporting(true)
-    try {
-      for (const row of importRows) await createProductDocument(user.uid, row)
-      await refresh()
-      setImportRows([])
-    } finally { setImporting(false) }
+
+  const saveQuantityEdit = () => {
+    if (!quantityEditDraft || !quantityEditDraft.reason.trim() || !quantityEditDraft.editorName.trim()) return
+    const nextQuantity = Number(quantityEditDraft.quantity)
+    if (!Number.isFinite(nextQuantity) || nextQuantity < 0 || nextQuantity === quantityEditDraft.product.quantity) return
+    setProducts((current) => current.map((product) => product.id === quantityEditDraft.product.id ? { ...product, quantity: nextQuantity } : product))
+    setRecords((current) => ({ ...current, [quantityEditDraft.product.id]: [{
+      type: 'အရေအတွက်ပြင်ခြင်း',
+      previousQuantity: quantityEditDraft.product.quantity,
+      quantity: nextQuantity,
+      supplier: quantityEditDraft.product.supplier,
+      reason: quantityEditDraft.reason.trim(),
+      editorName: quantityEditDraft.editorName.trim(),
+      time: nowLabel(),
+    }, ...(current[quantityEditDraft.product.id] || [])] }))
+    setQuantityEditDraft(null)
   }
-  const saveProduct = async () => {
-    if (requireAuth?.() || !productDraft?.name.trim()) return
-    setImporting(true)
-    try {
-      const trackingCapabilities = {
-        LOT: ['inventory.lots'],
-        SERIAL: ['inventory.serials'],
-        EXPIRY: ['inventory.lots', 'inventory.expiry'],
-      }
-      const payload = {
-        name: productDraft.name,
-        sku: productDraft.sku,
-        price: Number(productDraft.price),
-        cost: Number(productDraft.cost),
-        description: productDraft.description,
-        trackingMode: productDraft.trackingMode,
-        quantityPrecision: Number(productDraft.quantityPrecision || 0),
-        capabilities: trackingCapabilities[productDraft.trackingMode] || [],
-        categoryId: productDraft.categoryId || undefined,
-        ...(productDraft.baseUnitId ? {
-          units: [
-            {
-              unitId: productDraft.baseUnitId,
-              conversionFactor: 1,
-              isBase: true,
-              canSell: true,
-              canPurchase: true,
-              minimumOrderQty: Number(productDraft.minimumOrderQty || 1),
-            },
-            ...(productDraft.sellingUnitId && productDraft.sellingUnitId !== productDraft.baseUnitId ? [{
-              unitId: productDraft.sellingUnitId,
-              conversionFactor: Number(productDraft.sellingConversionFactor || 1),
-              isBase: false,
-              canSell: true,
-              canPurchase: true,
-              minimumOrderQty: Number(productDraft.minimumOrderQty || 1),
-            }] : []),
-          ],
-        } : {}),
-      }
-      if (productDraft.id) await updateProductDocument(user.uid, productDraft.id, payload)
-      else {
-        const created = await createProductDocument(user.uid, payload)
-        const productId = created.product?.id || created.id
-        if (Number(productDraft.openingQuantity || 0) > 0 && productDraft.trackingMode === 'NONE') {
-          await api.createInventory(getStoredShopId() || user.uid, {
-            productId,
-            quantity: Number(productDraft.openingQuantity),
-            unitCost: Number(productDraft.cost || 0),
-            note: 'Product Wizard opening inventory',
-          })
-        }
-      }
-      await refresh()
-      notify(productDraft.id ? 'Product updated.' : 'Product and opening inventory saved.')
-      setProductDraft(null)
-      setWizardStep(0)
-    } catch (error) {
-      notify(error.message || 'Product could not be saved.', 'error')
-    } finally { setImporting(false) }
+
+  const deleteProduct = (product) => {
+    if (Number(product.quantity) !== 0) return
+    setProducts((current) => current.filter((item) => item.id !== product.id))
+    setDetail(null)
   }
-  const addPriceGroup = async () => {
-    if (!wholesalePricing?.groupName.trim()) return
-    try {
-      await api.createPriceGroup(getStoredShopId() || user.uid, { name: wholesalePricing.groupName.trim() })
-      setWholesalePricing((current) => ({ ...current, groupName: '' }))
-      await refresh?.()
-      notify('Customer price group created.')
-    } catch (error) { notify(error.message || 'Price group could not be created.', 'error') }
+
+  const saveCategory = () => {
+    const name = categoryDraft.trim()
+    if (!name || categories.some((item) => item.toLowerCase() === name.toLowerCase())) return
+    setCategories((current) => [...current, name])
+    setProductDraft((current) => current ? { ...current, category: name } : current)
+    setCategoryDraft('')
+    setCategoryModalOpen(false)
   }
-  const addPriceTier = async () => {
-    if (!wholesalePricing?.productId || Number(wholesalePricing.minimumQuantity) <= 0 || Number(wholesalePricing.unitPrice) < 0) return
-    try {
-      await api.createPriceTier(getStoredShopId() || user.uid, {
-        productId: wholesalePricing.productId,
-        minimumQuantity: Number(wholesalePricing.minimumQuantity),
-        unitPrice: Number(wholesalePricing.unitPrice),
-        ...(wholesalePricing.priceGroupId ? { priceGroupId: wholesalePricing.priceGroupId } : {}),
-      })
-      setWholesalePricing((current) => ({ ...current, minimumQuantity: 1, unitPrice: 0 }))
-      await refresh?.()
-      notify('Wholesale tier created.')
-    } catch (error) { notify(error.message || 'Price tier could not be created.', 'error') }
-  }
-  const openRecipe = (product) => {
-    const recipe = (data.recipes || []).find((entry) => entry.productId === product.id)
-    setRecipeDraft({
-      productId: product.id,
-      productName: product.name,
-      yieldQuantity: Number(recipe?.yieldQuantity || 1),
-      components: (recipe?.components || []).map((entry) => ({
-        ingredientProductId: entry.ingredientProductId,
-        quantity: Number(entry.quantity),
-      })),
-      modifierGroups: (recipe?.modifierGroups || []).map((group) => ({
-        name: group.name,
-        required: Boolean(group.required),
-        minSelect: Number(group.minSelect || 0),
-        maxSelect: Number(group.maxSelect || 1),
-        options: (group.options || []).map((option) => {
-          const delta = Array.isArray(option.ingredientDelta) ? option.ingredientDelta[0] : null
-          return {
-            name: option.name,
-            priceDelta: Number(option.priceDelta || 0),
-            ingredientProductId: delta?.productId || '',
-            ingredientQuantity: Number(delta?.quantity || 0),
-          }
-        }),
-      })),
-    })
-  }
-  const saveRecipe = async () => {
-    if (!recipeDraft?.components.length) {
-      notify('Add at least one ingredient.', 'warning')
-      return
-    }
-    setImporting(true)
-    try {
-      await api.replaceRecipe(getStoredShopId() || user.uid, recipeDraft.productId, {
-        yieldQuantity: Number(recipeDraft.yieldQuantity),
-        components: recipeDraft.components.map((entry) => ({
-          ingredientProductId: entry.ingredientProductId,
-          quantity: Number(entry.quantity),
-        })),
-        modifierGroups: recipeDraft.modifierGroups.map((group) => ({
-          name: group.name,
-          required: group.required,
-          minSelect: Number(group.minSelect),
-          maxSelect: Number(group.maxSelect),
-          options: group.options.map((option) => ({
-            name: option.name,
-            priceDelta: Number(option.priceDelta),
-            ingredientDelta: option.ingredientProductId && Number(option.ingredientQuantity)
-              ? [{ productId: option.ingredientProductId, quantity: Number(option.ingredientQuantity) }]
-              : [],
-          })),
-        })),
-      })
-      await refresh?.()
-      setRecipeDraft(null)
-      notify('Recipe and modifiers saved.')
-    } catch (error) {
-      notify(error.message || 'Recipe could not be saved.', 'error')
-    } finally { setImporting(false) }
-  }
+
+  useEffect(() => {
+    setAppHeaderActions(<>
+      <Button className="app-product-setup-action" variant="outlined" startIcon={<SettingsSuggestRoundedIcon />} onClick={() => setProductDraft({ ...emptyProductDraft, category: categories[0] || '' })}>ကုန်ပစ္စည်းသတ်မှတ်မည်</Button>
+      <Button className="app-product-add-action" variant="contained" startIcon={<AddCircleRoundedIcon />} onClick={() => setStockDraft({ ...emptyStockDraft })}>ထည့်မည်</Button>
+    </>)
+    return () => setAppHeaderActions(null)
+  }, [categories, setAppHeaderActions])
 
   return (
-    <Box className="page-stack">
-      <PageHeader title="Products" subtitle="Manage your catalog, pricing, variants and availability." actions={<>
-        {data.storeConfiguration?.effectiveCapabilities?.includes('wholesale.tierPricing') ? <Button onClick={() => setWholesalePricing({ groupName: '', productId: data.products?.[0]?.id || '', priceGroupId: '', minimumQuantity: 1, unitPrice: 0 })}>Wholesale pricing</Button> : null}
-        <Button onClick={downloadTemplate}>CSV template</Button>
-        <Button component="label">Import CSV<input hidden type="file" accept=".csv,text/csv" onChange={readCsv} /></Button>
-        <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => { setWizardStep(0); setProductDraft({ ...emptyProduct, baseUnitId: data.units?.[0]?.id || '' }) }}>Add product</Button>
-      </>} />
-      <TextField
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search products or SKU"
-        size="small"
-        slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> } }}
-      />
-      <Box className="product-grid">
-        {products.map((product) => (
-          <Card key={product.id} variant="outlined" className="product-card">
-            <Box className="product-image"><Inventory2RoundedIcon /></Box>
-            <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                <Typography fontWeight={800}>{product.name}</Typography>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={product.isActive === false ? 'Archived' : 'Active'}
-                  sx={product.isActive === false ? undefined : { color: 'primary.dark', borderColor: 'primary.main', fontWeight: 700 }}
-                />
-              </Box>
-              <Typography variant="caption" color="text.secondary">{product.sku || 'No SKU'} · {(product.variants || []).length} variants</Typography>
-              <Typography variant="h6" sx={{ mt: 1 }}>{formatKs(product.price)}</Typography>
-              <Typography variant="body2" color="text.secondary">{availableByProduct[product.id] || 0} available</Typography>
-            </CardContent>
-            <CardActions>
-              <Button onClick={() => { setWizardStep(0); setProductDraft({ ...emptyProduct, ...product, baseUnitId: product.units?.find((unit) => unit.isBase)?.unitId || '' }) }}>View / edit</Button>
-              <Button onClick={() => navigate('stock')}>Inventory</Button>
-              {data.storeConfiguration?.effectiveCapabilities?.includes('restaurant.recipes')
-                ? <Button onClick={() => openRecipe(product)}>Recipe</Button>
-                : null}
-            </CardActions>
-          </Card>
-        ))}
+    <Box className="page-stack products-page">
+      <Box className="product-overview-card">
+        <Box>
+          <Typography variant="body2" color="text.secondary">လက်ကျန်ဝယ်တန်ဖိုး</Typography>
+          <Typography variant="h4">{money(totalValue)}</Typography>
+          <Typography variant="body2" color="text.secondary">ကုန်ပစ္စည်း {products.length} မျိုး · လက်ကျန် {totalQuantity}</Typography>
+        </Box>
+        <Box className="product-overview-icon"><Inventory2RoundedIcon /></Box>
       </Box>
-      {!products.length ? <EmptyState title="No products found" message="Add a product or try a different search." /> : null}
-      <Dialog open={Boolean(importRows.length || importErrors.length)} onClose={() => { setImportRows([]); setImportErrors([]) }} maxWidth="md" fullWidth>
-        <DialogTitle>Product import preview</DialogTitle>
-        <DialogContent>
-          {importErrors.map((error) => <Typography key={error} color="error" variant="body2">{error}</Typography>)}
-          {importRows.map((row) => <Box key={row.sku} className="purchase-line"><span><b>{row.name}</b><small>{row.sku}</small></span><b>{formatKs(row.price)}</b></Box>)}
-        </DialogContent>
-        <DialogActions><Button onClick={() => { setImportRows([]); setImportErrors([]) }}>Cancel</Button><Button variant="contained" disabled={Boolean(importErrors.length) || importing} onClick={confirmImport}>Import {importRows.length} products</Button></DialogActions>
-      </Dialog>
-      <Dialog open={Boolean(productDraft)} onClose={() => !importing && setProductDraft(null)} maxWidth="md" fullWidth fullScreen={fullScreen}>
-        <DialogTitle>{productDraft?.id ? 'Edit product' : `Add ${data.storeConfiguration?.template?.terminology?.product || 'product'}`}</DialogTitle>
-        <DialogContent className="dialog-form">
-          {!productDraft?.id ? <Stepper activeStep={wizardStep} alternativeLabel sx={{ mb: 1 }}>
-            {['Basics', 'Units', 'Tracking', 'Opening', 'Review'].map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
-          </Stepper> : null}
-          {(productDraft?.id || wizardStep === 0) ? <>
-            <TextField autoFocus required label="Product name" value={productDraft?.name || ''} onChange={(event) => setProductDraft((current) => ({ ...current, name: event.target.value }))} />
-            <TextField label="SKU" value={productDraft?.sku || ''} onChange={(event) => setProductDraft((current) => ({ ...current, sku: event.target.value }))} />
-            <TextField select label="Category" value={productDraft?.categoryId || ''} onChange={(event) => setProductDraft((current) => ({ ...current, categoryId: event.target.value }))}>
-              <MenuItem value="">No category</MenuItem>
-              {(data.productTypes || []).map((category) => <MenuItem key={category.id} value={category.id}>{category.name}</MenuItem>)}
-            </TextField>
-            <TextField type="number" label="Selling price" value={productDraft?.price ?? 0} onChange={(event) => setProductDraft((current) => ({ ...current, price: event.target.value }))} />
-            <TextField type="number" label="Cost" value={productDraft?.cost ?? 0} onChange={(event) => setProductDraft((current) => ({ ...current, cost: event.target.value }))} />
-            <TextField multiline minRows={2} label="Description" value={productDraft?.description || ''} onChange={(event) => setProductDraft((current) => ({ ...current, description: event.target.value }))} />
-          </> : null}
-          {!productDraft?.id && wizardStep === 1 ? <>
-            <FormControl fullWidth>
-              <InputLabel id="base-unit-label">Base unit</InputLabel>
-              <Select labelId="base-unit-label" label="Base unit" value={productDraft?.baseUnitId || ''} onChange={(event) => {
-                const unit = data.units?.find((entry) => entry.id === event.target.value)
-                setProductDraft((current) => ({ ...current, baseUnitId: event.target.value, quantityPrecision: unit?.precision ?? 0 }))
-              }}>
-                {(data.units || []).map((unit) => <MenuItem key={unit.id} value={unit.id}>{unit.name} ({unit.symbol})</MenuItem>)}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel id="selling-unit-label">Additional selling unit</InputLabel>
-              <Select labelId="selling-unit-label" label="Additional selling unit" value={productDraft?.sellingUnitId || ''} onChange={(event) => setProductDraft((current) => ({ ...current, sellingUnitId: event.target.value }))}>
-                <MenuItem value="">Base unit only</MenuItem>
-                {(data.units || []).filter((unit) => unit.id !== productDraft?.baseUnitId).map((unit) => <MenuItem key={unit.id} value={unit.id}>{unit.name} ({unit.symbol})</MenuItem>)}
-              </Select>
-            </FormControl>
-            {productDraft?.sellingUnitId ? <TextField type="number" label="Units contained in selling unit" helperText="Example: one carton contains 24 base pieces." value={productDraft.sellingConversionFactor} onChange={(event) => setProductDraft((current) => ({ ...current, sellingConversionFactor: event.target.value }))} slotProps={{ htmlInput: { min: 1, step: '0.001' } }} /> : null}
-            <TextField type="number" label="Minimum order quantity" value={productDraft?.minimumOrderQty || 1} onChange={(event) => setProductDraft((current) => ({ ...current, minimumOrderQty: event.target.value }))} slotProps={{ htmlInput: { min: 1, step: '0.001' } }} />
-          </> : null}
-          {!productDraft?.id && wizardStep === 2 ? <>
-            <FormControl fullWidth>
-              <InputLabel id="tracking-mode-label">Tracking</InputLabel>
-              <Select labelId="tracking-mode-label" label="Tracking" value={productDraft?.trackingMode || 'NONE'} onChange={(event) => setProductDraft((current) => ({ ...current, trackingMode: event.target.value }))}>
-                <MenuItem value="NONE">No advanced tracking</MenuItem>
-                {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.lots') ? <MenuItem value="LOT">Lot / batch</MenuItem> : null}
-                {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.expiry') ? <MenuItem value="EXPIRY">Lot and expiry</MenuItem> : null}
-                {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.serials') ? <MenuItem value="SERIAL">Serial / IMEI</MenuItem> : null}
-              </Select>
-            </FormControl>
-            <Typography variant="body2" color="text.secondary">Only released capabilities enabled for this store are shown. Serial products use whole-number quantities.</Typography>
-          </> : null}
-          {!productDraft?.id && wizardStep === 3 ? <>
-            {productDraft?.trackingMode === 'NONE'
-              ? <TextField type="number" label="Opening quantity" helperText="Creates an audited opening inventory batch. Fractional opening balances use the Inventory receiving workflow during compatibility mode." value={productDraft?.openingQuantity || 0} onChange={(event) => setProductDraft((current) => ({ ...current, openingQuantity: event.target.value }))} slotProps={{ htmlInput: { min: 0, step: 1 } }} />
-              : <Typography color="text.secondary">Tracked products require exact lot, expiry, or serial details. Save the product first, then use the Inventory receiving workflow.</Typography>}
-          </> : null}
-          {!productDraft?.id && wizardStep === 4 ? <Box sx={{ display: 'grid', gap: 1 }}>
-            <Typography variant="h6">{productDraft?.name}</Typography>
-            <Typography color="text.secondary">{productDraft?.sku || 'No SKU'} · {productDraft?.trackingMode === 'NONE' ? 'Simple inventory' : productDraft?.trackingMode}</Typography>
-            <Typography>{formatKs(productDraft?.price || 0)} selling price · {formatKs(productDraft?.cost || 0)} cost</Typography>
-            <Chip sx={{ justifySelf: 'start' }} color="success" label={`${data.storeConfiguration?.template?.label || 'General Store'} policy checked`} />
-          </Box> : null}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => { setProductDraft(null); setWizardStep(0) }}>Cancel</Button>
-          {!productDraft?.id && wizardStep > 0 ? <Button onClick={() => setWizardStep((step) => step - 1)}>Back</Button> : null}
-          {!productDraft?.id && wizardStep < 4
-            ? <Button variant="contained" disabled={(wizardStep === 0 && !productDraft?.name.trim()) || (wizardStep === 1 && !productDraft?.baseUnitId)} onClick={() => setWizardStep((step) => step + 1)}>Continue</Button>
-            : <Button variant="contained" disabled={importing || !productDraft?.name.trim()} onClick={saveProduct}>{importing ? 'Saving…' : 'Save product'}</Button>}
-        </DialogActions>
-      </Dialog>
-      <Dialog open={Boolean(wholesalePricing)} onClose={() => setWholesalePricing(null)} maxWidth="md" fullWidth>
-        <DialogTitle>Wholesale customer groups and tier pricing</DialogTitle>
-        <DialogContent className="dialog-form">
-          <Typography variant="h6">Customer groups</Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <TextField fullWidth label="New group name" value={wholesalePricing?.groupName || ''} onChange={(event) => setWholesalePricing((current) => ({ ...current, groupName: event.target.value }))} />
-            <Button variant="outlined" onClick={addPriceGroup}>Add</Button>
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-            {(data.priceGroups || []).map((group) => <Chip key={group.id} label={`${group.name} · ${group.tiers?.length || 0} tiers`} />)}
-          </Box>
-          <Typography variant="h6" sx={{ mt: 2 }}>Add quantity tier</Typography>
-          <TextField select label="Product" value={wholesalePricing?.productId || ''} onChange={(event) => setWholesalePricing((current) => ({ ...current, productId: event.target.value }))}>
-            {(data.products || []).map((product) => <MenuItem key={product.id} value={product.id}>{product.name}</MenuItem>)}
-          </TextField>
-          <TextField select label="Customer group (optional)" value={wholesalePricing?.priceGroupId || ''} onChange={(event) => setWholesalePricing((current) => ({ ...current, priceGroupId: event.target.value }))}>
-            <MenuItem value="">All customers</MenuItem>
-            {(data.priceGroups || []).map((group) => <MenuItem key={group.id} value={group.id}>{group.name}</MenuItem>)}
-          </TextField>
-          <TextField type="number" label="Minimum base quantity" value={wholesalePricing?.minimumQuantity || 1} onChange={(event) => setWholesalePricing((current) => ({ ...current, minimumQuantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
-          <TextField type="number" label="Tier unit price" value={wholesalePricing?.unitPrice ?? 0} onChange={(event) => setWholesalePricing((current) => ({ ...current, unitPrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setWholesalePricing(null)}>Close</Button>
-          <Button variant="contained" onClick={addPriceTier}>Add tier</Button>
-        </DialogActions>
-      </Dialog>
-      <Dialog open={Boolean(recipeDraft)} onClose={() => !importing && setRecipeDraft(null)} maxWidth="md" fullWidth fullScreen={fullScreen}>
-        <DialogTitle>Recipe and modifiers · {recipeDraft?.productName}</DialogTitle>
-        <DialogContent className="dialog-form">
-          <TextField type="number" label="Menu yield quantity" value={recipeDraft?.yieldQuantity || 1} onChange={(event) => setRecipeDraft((current) => ({ ...current, yieldQuantity: event.target.value }))} slotProps={{ htmlInput: { min: 0.001, step: 0.001 } }} />
-          <Typography variant="h6">Ingredients</Typography>
-          {(recipeDraft?.components || []).map((component, index) => <Box key={`${component.ingredientProductId}-${index}`} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 140px auto' }, gap: 1 }}>
-            <TextField select label="Ingredient" value={component.ingredientProductId} onChange={(event) => setRecipeDraft((current) => ({ ...current, components: current.components.map((entry, position) => position === index ? { ...entry, ingredientProductId: event.target.value } : entry) }))}>
-              {(data.products || []).filter((entry) => entry.id !== recipeDraft.productId).map((entry) => <MenuItem key={entry.id} value={entry.id}>{entry.name}</MenuItem>)}
-            </TextField>
-            <TextField type="number" label="Base quantity" value={component.quantity} onChange={(event) => setRecipeDraft((current) => ({ ...current, components: current.components.map((entry, position) => position === index ? { ...entry, quantity: event.target.value } : entry) }))} slotProps={{ htmlInput: { min: 0.001, step: 0.001 } }} />
-            <IconButton aria-label="Remove ingredient" onClick={() => setRecipeDraft((current) => ({ ...current, components: current.components.filter((_, position) => position !== index) }))}><DeleteOutlineRoundedIcon /></IconButton>
-          </Box>)}
-          <Button startIcon={<AddRoundedIcon />} onClick={() => setRecipeDraft((current) => ({ ...current, components: [...current.components, { ingredientProductId: data.products?.find((entry) => entry.id !== current.productId)?.id || '', quantity: 1 }] }))}>Add ingredient</Button>
-          <Typography variant="h6" sx={{ mt: 2 }}>Modifier groups</Typography>
-          {(recipeDraft?.modifierGroups || []).map((group, groupIndex) => <Box key={groupIndex} sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 2, display: 'grid', gap: 1 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 90px 90px auto' }, gap: 1 }}>
-              <TextField label="Group name" value={group.name} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, name: event.target.value } : entry) }))} />
-              <TextField type="number" label="Min" value={group.minSelect} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, minSelect: event.target.value } : entry) }))} />
-              <TextField type="number" label="Max" value={group.maxSelect} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, maxSelect: event.target.value } : entry) }))} />
-              <IconButton aria-label="Remove modifier group" onClick={() => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.filter((_, position) => position !== groupIndex) }))}><DeleteOutlineRoundedIcon /></IconButton>
+
+      <Box className="products-toolbar">
+        <TextField
+          fullWidth
+          size="small"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="ကုန်ပစ္စည်း သို့မဟုတ် ကုဒ်ဖြင့်ရှာပါ"
+          slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> } }}
+        />
+        <TextField select size="small" value={category} onChange={(event) => setCategory(event.target.value)}>
+          {categoryOptions.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
+        </TextField>
+      </Box>
+
+      <Box className="products-mobile-list">
+        {shownProducts.map((product) => <Box key={product.id} className="product-mobile-card">
+          <Box className="product-mobile-main">
+            <Box className="product-mini-icon"><Inventory2RoundedIcon /></Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography fontWeight={800}>{product.name}</Typography>
+              <Typography variant="caption" color="text.secondary">{product.sku} · {product.category}</Typography>
+              <Typography variant="body2" sx={{ mt: .5 }}>ရောင်း {money(product.price)} · အရင်း {money(product.cost)}</Typography>
             </Box>
-            {(group.options || []).map((option, optionIndex) => <Box key={optionIndex} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 120px 1fr 120px auto' }, gap: 1 }}>
-              <TextField label="Option" value={option.name} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, options: entry.options.map((item, itemIndex) => itemIndex === optionIndex ? { ...item, name: event.target.value } : item) } : entry) }))} />
-              <TextField type="number" label="Price +" value={option.priceDelta} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, options: entry.options.map((item, itemIndex) => itemIndex === optionIndex ? { ...item, priceDelta: event.target.value } : item) } : entry) }))} />
-              <TextField select label="Extra ingredient" value={option.ingredientProductId} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, options: entry.options.map((item, itemIndex) => itemIndex === optionIndex ? { ...item, ingredientProductId: event.target.value } : item) } : entry) }))}>
-                <MenuItem value="">None</MenuItem>
-                {(data.products || []).filter((entry) => entry.id !== recipeDraft.productId).map((entry) => <MenuItem key={entry.id} value={entry.id}>{entry.name}</MenuItem>)}
-              </TextField>
-              <TextField type="number" label="Extra qty" value={option.ingredientQuantity} onChange={(event) => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, options: entry.options.map((item, itemIndex) => itemIndex === optionIndex ? { ...item, ingredientQuantity: event.target.value } : item) } : entry) }))} />
-              <IconButton aria-label="Remove modifier option" onClick={() => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, options: entry.options.filter((_, itemIndex) => itemIndex !== optionIndex) } : entry) }))}><DeleteOutlineRoundedIcon /></IconButton>
-            </Box>)}
-            <Button onClick={() => setRecipeDraft((current) => ({ ...current, modifierGroups: current.modifierGroups.map((entry, position) => position === groupIndex ? { ...entry, options: [...entry.options, { name: '', priceDelta: 0, ingredientProductId: '', ingredientQuantity: 0 }] } : entry) }))}>Add option</Button>
-          </Box>)}
-          <Button startIcon={<AddRoundedIcon />} onClick={() => setRecipeDraft((current) => ({ ...current, modifierGroups: [...current.modifierGroups, { name: '', required: false, minSelect: 0, maxSelect: 1, options: [] }] }))}>Add modifier group</Button>
+          </Box>
+          <Box className="product-mobile-side">
+            <Box className={`product-stock-indicator ${product.quantity === 0 ? 'is-empty' : product.quantity <= 5 ? 'is-low' : ''}`}>
+              <Typography component="span">လက်ကျန်</Typography>
+              <Typography component="strong">{product.quantity}</Typography>
+              {product.quantity === 0 ? <Typography component="em">ကုန်ပြီ</Typography> : product.quantity <= 5 ? <Typography component="em">နည်းနေ</Typography> : null}
+            </Box>
+            <Box>
+              <IconButton aria-label="အသေးစိတ်" onClick={() => setDetail(product)}><VisibilityOutlinedIcon /></IconButton>
+              <IconButton aria-label="အရေအတွက်ပြင်ဆင်မည်" onClick={() => setQuantityEditDraft({ product, quantity: product.quantity, reason: '', editorName: '' })}><EditOutlinedIcon /></IconButton>
+              <IconButton aria-label="မှတ်တမ်း" onClick={() => setRecordProduct(product)}><HistoryRoundedIcon /></IconButton>
+            </Box>
+          </Box>
+        </Box>)}
+      </Box>
+
+      <Box className="products-desktop-table">
+        <Box className="products-table-head"><span>အမှတ်စဉ်</span><span>ကုန်ပစ္စည်း</span><span>အရင်း</span><span>ရောင်းဈေး</span><span>လက်ကျန်</span><span>လုပ်ဆောင်ချက်</span></Box>
+        {shownProducts.map((product, index) => <Box key={product.id} className="products-table-row">
+          <span>{index + 1}</span>
+          <span><b>{product.name}</b><small>{product.sku} · {product.category}</small></span>
+          <span>{money(product.cost)}</span><span>{money(product.price)}</span><span><Chip size="small" label={`${product.quantity}`} color={product.quantity <= 5 ? 'warning' : 'success'} /></span>
+          <span><IconButton aria-label="အသေးစိတ်" onClick={() => setDetail(product)}><VisibilityOutlinedIcon /></IconButton><IconButton aria-label="အရေအတွက်ပြင်ဆင်မည်" onClick={() => setQuantityEditDraft({ product, quantity: product.quantity, reason: '', editorName: '' })}><EditOutlinedIcon /></IconButton><IconButton aria-label="မှတ်တမ်း" onClick={() => setRecordProduct(product)}><HistoryRoundedIcon /></IconButton></span>
+        </Box>)}
+      </Box>
+
+      {!shownProducts.length ? <Box className="products-empty"><MoreHorizRoundedIcon /><Typography fontWeight={700}>ရှာဖွေမှုနှင့် ကိုက်ညီသည့် ကုန်ပစ္စည်းမရှိသေးပါ</Typography></Box> : null}
+
+      <Dialog open={Boolean(stockDraft)} onClose={() => setStockDraft(null)} fullWidth maxWidth="sm">
+        <DialogTitle>ကုန်ပစ္စည်းထည့်မည်</DialogTitle>
+        <DialogContent className="product-form product-stock-form">
+          <Box className="product-dialog-note"><Typography fontWeight={800}>ကုန်ပစ္စည်းအရင်ရွေးပါ</Typography><Button size="small" onClick={() => { setStockDraft(null); setProductDraft({ ...emptyProductDraft, category: categories[0] || '' }) }}>ကုန်ပစ္စည်းသတ်မှတ်မည်</Button></Box>
+          <Autocomplete
+            options={products}
+            value={stockDraft?.product || null}
+            getOptionLabel={(product) => `${product.name} (${product.sku})`}
+            onChange={(_, product) => setStockDraft((value) => ({ ...value, product, category: product?.category ?? '', supplier: product?.supplier ?? '', voucher: product?.voucher ?? '', purchasePrice: product?.cost ?? '', sellingPrice: product?.price ?? '' }))}
+            renderInput={(params) => <TextField {...params} autoFocus label="ကုန်ပစ္စည်း ရှာရန်" placeholder="ကုဒ် သို့မဟုတ် အမည်ဖြင့်ရှာပါ" />}
+          />
+          <TextField select label="ပစ္စည်းအမျိုးအစား" value={stockDraft?.category || ''} disabled={!stockDraft?.product} onChange={(event) => setStockDraft((value) => ({ ...value, category: event.target.value }))}>
+            {categories.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
+          </TextField>
+          <Autocomplete freeSolo options={supplierOptions} value={stockDraft?.supplier || ''} disabled={!stockDraft?.product} onInputChange={(_, supplier) => setStockDraft((value) => ({ ...value, supplier }))} renderInput={(params) => <TextField {...params} label="ကုန်သည် / ကုမ္ပဏီ" placeholder="နာမည်ရိုက်၍ ရွေးပါ" />} />
+          <TextField required label="ဘောက်ချာနံပါတ်" value={stockDraft?.voucher || ''} disabled={!stockDraft?.product} onChange={(event) => setStockDraft((value) => ({ ...value, voucher: event.target.value }))} />
+          <TextField className="received-quantity-field" type="number" label="လက်ခံမည့် အရေအတွက်" helperText={stockDraft?.product ? `လက်ကျန် — ${stockDraft.product.quantity}` : 'ကုန်ပစ္စည်းရွေးပြီးနောက် လက်ကျန်ပြမည်'} value={stockDraft?.quantity || ''} onChange={(event) => setStockDraft((value) => ({ ...value, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
+          <TextField type="number" label="ဝယ်ဈေး" helperText="ယခုလက်ခံသည့် ပစ္စည်း၏ ဝယ်ဈေး" value={stockDraft?.purchasePrice ?? ''} onChange={(event) => setStockDraft((value) => ({ ...value, purchasePrice: event.target.value }))} />
+          <TextField type="number" label="ရောင်းဈေး" helperText="database ထဲက default ရောင်းဈေးကို ပြထားသည်" value={stockDraft?.sellingPrice ?? ''} onChange={(event) => setStockDraft((value) => ({ ...value, sellingPrice: event.target.value }))} />
+          <TextField required type="date" label="ပစ္စည်းလက်ခံရက်" value={stockDraft?.receivedDate || ''} onChange={(event) => setStockDraft((value) => ({ ...value, receivedDate: event.target.value }))} InputLabelProps={{ shrink: true }} />
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRecipeDraft(null)}>Cancel</Button>
-          <Button variant="contained" disabled={importing || !recipeDraft?.components.length} onClick={saveRecipe}>Save recipe</Button>
-        </DialogActions>
+        <DialogActions><Button onClick={() => setStockDraft(null)}>မလုပ်တော့ပါ</Button><Button variant="contained" disabled={!stockDraft?.product || !stockDraft?.voucher.trim() || !stockDraft?.receivedDate || Number(stockDraft.quantity) <= 0} onClick={saveStock}>ထည့်သွင်းမည်</Button></DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(detail)} onClose={() => setDetail(null)} fullWidth maxWidth="xs">
+        <DialogTitle>ကုန်ပစ္စည်းအသေးစိတ်</DialogTitle>
+        <DialogContent className="product-detail">
+          <Typography variant="h6">{detail?.name}</Typography><Typography>{detail?.category} · {detail?.sku}</Typography>
+          <Typography>ဝယ်ဈေး — {money(detail?.cost)}</Typography><Typography>ရောင်းဈေး — {money(detail?.price)}</Typography><Typography>လက်ကျန် — {detail?.quantity}</Typography>
+          <Typography>ကုန်သည် / ကုမ္ပဏီ — {detail?.supplier || 'မသတ်မှတ်ရသေးပါ'}</Typography>
+          {(records[detail?.id] || []).filter((record) => record.voucher).map((record, index) => <Typography key={`${record.voucher}-${index}`}>ဘောက်ချာနံပါတ် — {record.voucher} · {record.supplier || detail?.supplier}</Typography>)}
+        </DialogContent>
+        <DialogActions><Button color="error" startIcon={<DeleteOutlineRoundedIcon />} disabled={Number(detail?.quantity) !== 0} onClick={() => detail && deleteProduct(detail)}>ဖျက်မည်</Button><Box sx={{ flex: 1 }} />{Number(detail?.quantity) !== 0 ? <Typography variant="caption" color="text.secondary">လက်ကျန် 0 ဖြစ်မှသာ ဖျက်နိုင်သည်</Typography> : null}<Button onClick={() => setDetail(null)}>ပိတ်မည်</Button></DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(recordProduct)} onClose={() => setRecordProduct(null)} fullWidth maxWidth="xs">
+        <DialogTitle>ကုန်ပစ္စည်း မှတ်တမ်း</DialogTitle>
+        <DialogContent className="product-record-list">
+          {(records[recordProduct?.id] || []).length ? (records[recordProduct?.id] || []).map((record, index) => <Box key={`${record.time}-${index}`} className="product-record-card">
+            <Typography fontWeight={800}>အမျိုးအစား — ပစ္စည်း{record.type}</Typography>
+            <Typography variant="h6">{recordProduct?.name}</Typography>
+            <Typography variant="body2" color="text.secondary">{recordProduct?.sku} · {recordProduct?.category}</Typography>
+            <Typography>ကုန်သည် / ကုမ္ပဏီ — {record.supplier || recordProduct?.supplier || 'မသတ်မှတ်ရသေးပါ'}</Typography>
+            {record.voucher ? <Typography>ဘောက်ချာနံပါတ် — {record.voucher}</Typography> : null}
+            {record.type === 'လက်ခံခြင်း' ? <><Typography>လက်ခံသည့်အရေအတွက် — {record.quantity}</Typography><Typography>ဝယ်ဈေး — {money(record.cost)}</Typography><Typography>ရောင်းဈေး — {money(record.price)}</Typography></> : <><Typography>မူလအရေအတွက် — {record.previousQuantity ?? 'မသတ်မှတ်ရသေးပါ'}</Typography><Typography>ပြင်ဆင်ထားသောအရေအတွက် — {record.quantity}</Typography><Typography>အကြောင်းပြချက် — {record.reason || 'မသတ်မှတ်ရသေးပါ'}</Typography><Typography>ပြင်ဆင်သူ — {record.editorName || 'မသတ်မှတ်ရသေးပါ'}</Typography></>}
+            <Typography variant="caption" color="text.secondary">{record.type === 'လက်ခံခြင်း' ? 'ပစ္စည်းလက်ခံရက်' : 'ပြင်ဆင်ချိန်'} — {record.time}</Typography>
+          </Box>) : <Typography color="text.secondary">ဤကုန်ပစ္စည်းအတွက် မှတ်တမ်းမရှိသေးပါ။</Typography>}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setRecordProduct(null)}>ပိတ်မည်</Button></DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(productDraft)} onClose={() => setProductDraft(null)} fullWidth maxWidth="sm">
+        <DialogTitle>ကုန်ပစ္စည်းသတ်မှတ်မည်</DialogTitle>
+        <DialogContent className="product-form product-definition-form">
+          <TextField autoFocus required label="အမည်" value={productDraft?.name || ''} onChange={(event) => setProductDraft((value) => ({ ...value, name: event.target.value }))} />
+          <Box className="category-field-row"><TextField select required label="ပစ္စည်းအမျိုးအစား" value={productDraft?.category || ''} onChange={(event) => setProductDraft((value) => ({ ...value, category: event.target.value }))}>{categories.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}</TextField><Button variant="outlined" onClick={() => setCategoryModalOpen(true)}>အမျိုးအစားသတ်မှတ်မည်</Button></Box>
+          <Autocomplete freeSolo options={supplierOptions} value={productDraft?.supplier || ''} onInputChange={(_, supplier) => setProductDraft((value) => ({ ...value, supplier }))} renderInput={(params) => <TextField {...params} label="ကုန်သည် / ကုမ္ပဏီ" placeholder="နာမည်ရိုက်၍ ရွေးပါ" />} />
+          <TextField required label="ဘောက်ချာနံပါတ်" value={productDraft?.voucher || ''} onChange={(event) => setProductDraft((value) => ({ ...value, voucher: event.target.value }))} />
+          <TextField required label="ကုဒ် (၄ လုံး)" placeholder="ဥပမာ 1005" value={productDraft?.sku || ''} onChange={(event) => setProductDraft((value) => ({ ...value, sku: event.target.value.replace(/\D/g, '').slice(0, 4) }))} error={Boolean(invalidProductCode || duplicateProductCode)} helperText={duplicateProductCode ? 'ဤကုဒ်ကို အသုံးပြုထားပြီးဖြစ်သည်' : invalidProductCode ? 'ဂဏန်း ၄ လုံး အတိအကျထည့်ပါ' : 'ဂဏန်း ၄ လုံး ထည့်ပါ'} />
+          <TextField type="number" label="ကုန်ပစ္စည်း အရေအတွက်" helperText="ကုန်ပစ္စည်းအသစ်အတွက် အစလက်ကျန် ထည့်ပါ" value={productDraft?.quantity ?? ''} onChange={(event) => setProductDraft((value) => ({ ...value, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+          <TextField type="number" label="ဝယ်ဈေး" value={productDraft?.cost ?? ''} onChange={(event) => setProductDraft((value) => ({ ...value, cost: event.target.value }))} />
+          <TextField type="number" label="ရောင်းဈေး" value={productDraft?.price ?? ''} onChange={(event) => setProductDraft((value) => ({ ...value, price: event.target.value }))} />
+          {duplicateProductName ? <Alert severity="warning">ဤအမည်ဖြင့် ကုန်ပစ္စည်းရှိပြီးသားဖြစ်သည်။ “ထည့်မည်” ကိုသုံး၍ လက်ကျန်ဖြည့်ပါ။</Alert> : null}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setProductDraft(null)}>မလုပ်တော့ပါ</Button><Button variant="contained" disabled={!productDraft?.name.trim() || !productDraft?.category || !productDraft?.sku || !productDraft?.voucher.trim() || invalidProductCode || duplicateProductName || duplicateProductCode} onClick={saveProductDefinition}>သတ်မှတ်မည်</Button></DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(quantityEditDraft)} onClose={() => setQuantityEditDraft(null)} fullWidth maxWidth="xs">
+        <DialogTitle>ပစ္စည်းအရေအတွက် ပြင်ဆင်မည်</DialogTitle>
+        <DialogContent className="quantity-edit-form">
+          <Box className="existing-product-summary"><Typography fontWeight={800}>{quantityEditDraft?.product.name}</Typography><Typography variant="body2" color="text.secondary">ကုဒ် {quantityEditDraft?.product.sku} · လက်ရှိအရေအတွက် {quantityEditDraft?.product.quantity}</Typography></Box>
+          <TextField autoFocus required type="number" label="ပြင်ဆင်ပြီး အရေအတွက်" helperText="လက်ရှိအရေအတွက်ထက် တိုး/လျှော့၍ ပြင်နိုင်သည်" value={quantityEditDraft?.quantity ?? ''} onChange={(event) => setQuantityEditDraft((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+          <TextField required multiline minRows={2} label="အကြောင်းပြချက်" value={quantityEditDraft?.reason || ''} onChange={(event) => setQuantityEditDraft((current) => ({ ...current, reason: event.target.value }))} />
+          <TextField required label="ပြင်ဆင်သူအမည်" value={quantityEditDraft?.editorName || ''} onChange={(event) => setQuantityEditDraft((current) => ({ ...current, editorName: event.target.value }))} />
+        </DialogContent>
+        <DialogActions><Button onClick={() => setQuantityEditDraft(null)}>မလုပ်တော့ပါ</Button><Button variant="contained" disabled={!quantityEditDraft?.reason.trim() || !quantityEditDraft?.editorName.trim() || Number(quantityEditDraft?.quantity) < 0 || Number(quantityEditDraft?.quantity) === quantityEditDraft?.product.quantity} onClick={saveQuantityEdit}>ပြင်ဆင်မည်</Button></DialogActions>
+      </Dialog>
+
+      <Dialog open={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>ပစ္စည်းအမျိုးအစားသတ်မှတ်မည်</DialogTitle>
+        <DialogContent className="category-dialog-content"><TextField autoFocus fullWidth label="အမျိုးအစားအမည်" value={categoryDraft} onChange={(event) => setCategoryDraft(event.target.value)} /></DialogContent>
+        <DialogActions><Button onClick={() => setCategoryModalOpen(false)}>မလုပ်တော့ပါ</Button><Button variant="contained" disabled={!categoryDraft.trim() || categories.some((item) => item.toLowerCase() === categoryDraft.trim().toLowerCase())} onClick={saveCategory}>သတ်မှတ်မည်</Button></DialogActions>
       </Dialog>
     </Box>
   )

@@ -1,0 +1,2 @@
+ALTER TABLE "Promotion"
+  ADD COLUMN "minimumQuantity" DECIMAL(18,3) NOT NULL DEFAULT 1;

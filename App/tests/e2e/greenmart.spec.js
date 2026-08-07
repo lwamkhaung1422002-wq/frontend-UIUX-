@@ -7,7 +7,7 @@ import { join } from 'node:path'
 expect.configure({ timeout: 15000 })
 
 const widths = [360, 390, 768, 820, 1024, 1280, 1440]
-const routes = ['home', 'order', 'purchases', 'products', 'settings']
+const routes = ['home', 'order', 'purchases', 'products', 'pricing', 'settings']
 
 for (const width of widths) {
   test(`core workspaces remain usable without overflow at ${width}px`, async ({ page }) => {
@@ -48,7 +48,7 @@ test('login and critical workspaces have no serious accessibility violations', a
     await page.getByRole('menuitem', { name: 'Get Started' }).click()
   }
   await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible()
-  for (const route of ['/', '/home', '/order', '/purchases', '/products', '/settings']) {
+  for (const route of ['/', '/home', '/order', '/purchases', '/products', '/pricing', '/settings']) {
     await page.goto(`/#${route}`)
     const results = await new AxeBuilder({ page }).analyze()
     const serious = results.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact))

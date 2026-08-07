@@ -1,16 +1,16 @@
 import { Box, IconButton, Typography } from '@mui/material'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 
-export default function PageHeader({ title, subtitle, onBack, actions }) {
+export default function PageHeader({ title, subtitle, onBack, actions, inlineActions = false }) {
   return (
     <Box
-      className="page-header"
+      className={`page-header${inlineActions ? ' page-header--inline-actions' : ''}`}
       sx={{
         display: 'flex',
-        alignItems: { xs: 'flex-start', sm: 'center' },
+        alignItems: { xs: inlineActions ? 'center' : 'flex-start', sm: 'center' },
         justifyContent: 'space-between',
         gap: 2,
-        flexDirection: { xs: 'column', sm: 'row' },
+        flexDirection: { xs: inlineActions ? 'row' : 'column', sm: 'row' },
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
@@ -37,7 +37,7 @@ export default function PageHeader({ title, subtitle, onBack, actions }) {
             display: 'flex',
             flexWrap: 'wrap',
             gap: 1,
-            width: { xs: '100%', sm: 'auto' },
+            width: { xs: inlineActions ? 'auto' : '100%', sm: 'auto' },
             justifyContent: { xs: 'stretch', sm: 'flex-end' },
           }}
         >

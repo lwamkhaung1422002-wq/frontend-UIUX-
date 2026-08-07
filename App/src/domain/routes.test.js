@@ -4,7 +4,7 @@ import { preloadAllRoutes, preloadRoute, routeLoaders } from '../routes.js'
 describe('route preloading', () => {
   it('defines every authenticated operational page', () => {
     expect(Object.keys(routeLoaders).sort()).toEqual(
-      ['balance', 'customers', 'finance', 'home', 'order', 'products', 'purchases', 'sales', 'settings', 'stock', 'suppliers'].sort(),
+      ['balance', 'customers', 'finance', 'home', 'order', 'pricing', 'products', 'purchases', 'sales', 'settings', 'stock', 'suppliers'].sort(),
     )
   })
 

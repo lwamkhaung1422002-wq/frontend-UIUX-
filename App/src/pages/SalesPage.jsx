@@ -1,988 +1,182 @@
 import { useMemo, useState } from 'react'
 import {
-  Box,
-  Button,
-  Chip,
-  Divider,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Drawer,
-  FormControl,
-  IconButton,
-  InputLabel,
-  Menu,
-  MenuItem,
-  Paper,
-  Select,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
-  Tooltip,
-  Typography,
-  useMediaQuery,
+  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, IconButton, Paper, Stack, Table, TableBody, TableCell, TableContainer,
+  TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography, useMediaQuery,
 } from '@mui/material'
-import AddShoppingCartRoundedIcon from '@mui/icons-material/AddShoppingCartRounded'
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
-import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
-import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
-import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
-import TaskAltRoundedIcon from '@mui/icons-material/TaskAltRounded'
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
-import PageHeader from '../components/PageHeader.jsx'
-import ConfirmDialog from '../components/ConfirmDialog.jsx'
-import SectionCard from '../components/SectionCard.jsx'
-import EmptyState from '../components/EmptyState.jsx'
-import StatusChip from '../components/StatusChip.jsx'
-import { useAuth } from '../contexts/AuthContext.jsx'
 import { useData } from '../contexts/DataContext.jsx'
-import { useFeedback } from '../contexts/FeedbackContext.jsx'
-import {
-  cancelOrderAtomic,
-  deleteOrderDocument,
-  fulfillPreorderAtomic,
-  returnOrderProducts,
-  setOrderFulfillmentStatus,
-} from '../services/shopApiService.js'
 import { formatKs, getToday } from '../utils/storage.js'
-import {
-  deductionLabel,
-  getOrderQuantity,
-  normalizeOrders,
-} from '../domain/orders.js'
-import useSessionState from '../hooks/useSessionState.js'
 
-const filters = ['all', 'reserved', 'completed', 'paid', 'unpaid', 'refunded', 'preorder', 'cancelled']
-const filterLabel = (value) => value[0].toUpperCase() + value.slice(1)
-const savedViews = [
-  { id: 'today-unpaid', label: "Today's unpaid" },
-  { id: 'cod-pending', label: 'COD pending' },
-  { id: 'partial', label: 'Partially paid' },
-  { id: 'cancelled', label: 'Cancelled' },
-  { id: 'refunded', label: 'Refunded' },
-  { id: 'this-month', label: 'This month' },
-]
-const nextFulfillment = {
-  new: ['confirmed', 'Confirm'],
-  confirmed: ['preparing', 'Start preparing'],
-  preparing: ['ready', 'Mark ready'],
-  ready: ['completed', 'Complete'],
-  reserved: ['completed', 'Complete'],
+const money = (value) => formatKs(Number(value || 0))
+
+function orderDate(order) {
+  return String(order.date || order.createdAt || '').slice(0, 10)
 }
 
-function matchesPaymentFilter(order, value) {
-  if (value === 'unpaid') {
-    return order.paymentStatus === 'unpaid' && order.fulfillmentStatus !== 'cancelled'
-  }
-  return order.paymentStatus === value
+function orderTime(order) {
+  const date = new Date(order.createdAt || order.completedAt || `${orderDate(order)}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Yangon' }).format(date)
 }
 
-function statusColor(status) {
-  if (status === 'completed') return 'success'
-  if (status === 'preorder') return 'warning'
-  if (status === 'cancelled') return 'error'
-  return 'primary'
+function receiptNumber(order) {
+  return order.orderNumber || String(order.id || '').slice(-5) || '-----'
 }
 
-function ItemsSummary({ order }) {
-  return (
-    <Stack spacing={0.25}>
-      {order.items.slice(0, 2).map((item) => (
-        <Typography key={item.id} variant="body2">
-          {item.quantity}× {item.type} · {item.size} · {item.color}
-        </Typography>
-      ))}
-      {order.items.length > 2 ? (
-        <Typography variant="caption" color="text.secondary">
-          +{order.items.length - 2} more item line(s)
-        </Typography>
-      ) : null}
-    </Stack>
-  )
+function isCredit(order) {
+  return order.paymentStatus === 'unpaid' || Number(order.balanceDue || 0) > 0
 }
 
-export default function SalesPage({ navigate, refresh, requireAuth }) {
+function paymentMethodLabel(order) {
+  const method = String(order.paymentMethod || '').trim()
+  const labels = { CASH: 'ငွေသား', MOBILE: 'မိုဘိုင်းငွေပေးချေမှု', CREDIT: 'အကြွေး' }
+  return labels[method.toUpperCase()] || method || 'ငွေသား'
+}
+
+function productKey(item) {
+  return String(item.productId || item.productName || item.type || item.name || item.id || '')
+}
+
+function hasPromotion(item) {
+  return Boolean(item.promotionName || item.promotionId || Number(item.promotionDiscount || 0) > 0)
+}
+
+function SummaryMetric({ label, value, accent = false }) {
+  return <Box className={`sales-summary-metric${accent ? ' is-accent' : ''}`}>
+    <Typography component="dt">{label}</Typography>
+    <Typography component="dd">{value}</Typography>
+  </Box>
+}
+
+function OrderActions({ order, onDetails, onPrint }) {
+  return <Stack direction="row" spacing={0.25} className="sales-order-actions">
+    <IconButton aria-label={`${receiptNumber(order)} အချက်အလက်ကြည့်ရန်`} onClick={() => onDetails(order)}><VisibilityOutlinedIcon /></IconButton>
+    <IconButton aria-label="အရောင်းမှတ်တမ်းထုတ်ရန်" onClick={onPrint}><PrintRoundedIcon /></IconButton>
+  </Stack>
+}
+
+export default function SalesPage() {
   const mobile = useMediaQuery('(max-width:899px)')
-  const { user } = useAuth()
   const { data } = useData()
-  const { notify } = useFeedback()
-  const [view, setView] = useSessionState('sales:view', {
-    filter: 'all',
-    from: '',
-    to: '',
-    savedView: '',
-  })
-  const { filter, from, to, savedView = '' } = view
-  const setFilter = (value) => setView((current) => ({ ...current, filter: value, savedView: '' }))
-  const setFrom = (value) => setView((current) => ({ ...current, from: value }))
-  const setTo = (value) => setView((current) => ({ ...current, to: value }))
-  const applySavedView = (value) => setView((current) => ({ ...current, savedView: value, filter: 'all', from: '', to: '' }))
-  const [cancelTarget, setCancelTarget] = useState(null)
-  const [deleteTarget, setDeleteTarget] = useState(null)
-  const [detailsOrder, setDetailsOrder] = useState(null)
-  const [returnWorkflow, setReturnWorkflow] = useState(null)
-  const [workingId, setWorkingId] = useState('')
+  const [search, setSearch] = useState('')
+  const [from, setFrom] = useState(getToday)
+  const [to, setTo] = useState(getToday)
+  const [status, setStatus] = useState('all')
+  const [details, setDetails] = useState(null)
 
-  const orders = useMemo(() => normalizeOrders(data.orders), [data.orders])
-  const codOrderIds = useMemo(() => new Set((data.payments || []).filter((payment) => payment.billNumber || /cod/i.test(String(payment.method || ''))).flatMap((payment) => [payment.orderId, ...(payment.orderIds || [])].filter(Boolean).map(String))), [data.payments])
-  const filterCounts = useMemo(
-    () =>
-      Object.fromEntries(
-        filters.map((item) => [
-          item,
-          item === 'all'
-            ? orders.length
-            : ['paid', 'unpaid', 'refunded'].includes(item)
-              ? orders.filter((order) => matchesPaymentFilter(order, item)).length
-              : orders.filter((order) => order.fulfillmentStatus === item).length,
-        ]),
-      ),
-    [orders],
-  )
-  const filteredOrders = useMemo(() => {
-    return orders
-      .filter((order) => {
-        if (['paid', 'unpaid', 'refunded'].includes(filter) && !matchesPaymentFilter(order, filter)) {
-          return false
-        }
-        if (
-          !['all', 'paid', 'unpaid', 'refunded'].includes(filter) &&
-          order.fulfillmentStatus !== filter
-        ) {
-          return false
-        }
-        if (from && order.date < from) return false
-        if (to && order.date > to) return false
-        if (savedView === 'today-unpaid' && !(order.date === getToday() && Number(order.balanceDue || 0) > 0)) return false
-        if (savedView === 'cod-pending' && !(codOrderIds.has(String(order.id)) && Number(order.balanceDue || 0) > 0)) return false
-        if (savedView === 'partial' && !(Number(order.paidAmount || 0) > 0 && Number(order.balanceDue || 0) > 0)) return false
-        if (savedView === 'cancelled' && order.fulfillmentStatus !== 'cancelled') return false
-        if (savedView === 'refunded' && order.paymentStatus !== 'refunded') return false
-        if (savedView === 'this-month' && !String(order.date).startsWith(getToday().slice(0, 7))) return false
-        return true
+  const orders = useMemo(() => (data.orders || [])
+    .filter((order) => order.fulfillmentStatus !== 'cancelled')
+    .sort((left, right) => new Date(right.createdAt || right.date).getTime() - new Date(left.createdAt || left.date).getTime()), [data.orders])
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    return orders.filter((order) => {
+      const date = orderDate(order)
+      const inRange = (!from || date >= from) && (!to || date <= to)
+      const typeMatches = status === 'all' || (status === 'paid' ? !isCredit(order) : isCredit(order))
+      const searchable = [receiptNumber(order), ...(order.items || []).map((item) => item.type || item.productName || item.name)]
+        .join(' ').toLowerCase().includes(term)
+      return inRange && typeMatches && searchable
+    })
+  }, [orders, from, to, search, status])
+
+  const summary = useMemo(() => {
+    const productTypes = new Set()
+    let totalSales = 0
+    let creditTotal = 0
+    let creditOrders = 0
+    let itemCount = 0
+    filtered.forEach((order) => {
+      totalSales += Number(order.total || 0)
+      if (isCredit(order)) {
+        creditOrders += 1
+        creditTotal += Number(order.balanceDue || order.total || 0)
+      }
+      ;(order.items || []).forEach((item) => {
+        const key = productKey(item)
+        if (key) productTypes.add(key)
+        itemCount += Number(item.quantity || 0)
       })
-      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
-  }, [codOrderIds, filter, from, orders, savedView, to])
+    })
+    return { totalSales, creditTotal, orderCount: filtered.length, creditOrders, productTypeCount: productTypes.size, itemCount }
+  }, [filtered])
 
-  const totals = filteredOrders.reduce(
-    (summary, order) => ({
-      quantity: summary.quantity + getOrderQuantity(order),
-      amount: summary.amount + order.total,
-    }),
-    { quantity: 0, amount: 0 },
-  )
-
-  const run = async (order, operation, successMessage) => {
-    if (requireAuth?.('update order')) return
-    setWorkingId(order.id)
-    try {
-      await operation()
-      await refresh?.()
-      notify(successMessage)
-      return true
-    } catch (error) {
-      notify(error.message || 'The order could not be updated.', 'error')
-      return false
-    } finally {
-      setWorkingId('')
-    }
+  const printReport = () => {
+    window.print()
   }
 
-  const toggleCompleted = (order) =>
-    run(
-      order,
-      () => setOrderFulfillmentStatus(user.uid, order.id, nextFulfillment[order.fulfillmentStatus]?.[0] || 'completed'),
-      'Fulfillment status updated.',
-    )
-
-  const fulfillPreorder = (order) =>
-    run(
-      order,
-      () => fulfillPreorderAtomic(user.uid, order, data.stocks, data.orders),
-      'Preorder is now reserved from available stock.',
-    )
-
-  const confirmCancel = async () => {
-    if (requireAuth?.('cancel order')) return
-    const order = cancelTarget
-    if (!order) return
-    await run(
-      order,
-      () => cancelOrderAtomic(user.uid, order.id, 'Cancelled by shop owner'),
-      'Order cancelled and reserved stock released.',
-    )
-    setCancelTarget(null)
-  }
-
-  const confirmDelete = async () => {
-    if (requireAuth?.('delete order')) return
-    const order = deleteTarget
-    if (!order) return
-    await run(
-      order,
-      () => deleteOrderDocument(user.uid, order),
-      'Order deleted.',
-    )
-    if (detailsOrder?.id === order.id) setDetailsOrder(null)
-    setDeleteTarget(null)
-  }
-
-  const submitProductReturn = async () => {
-    const workflow = returnWorkflow
-    if (!workflow || !workflow.orderItemId || Number(workflow.quantity) <= 0 || !workflow.reason.trim()) {
-      notify('Choose an item, enter a valid quantity, and provide a return reason.', 'warning')
-      return
-    }
-    const item = workflow.order.items.find((entry) => entry.id === workflow.orderItemId)
-    if (!item || Number(workflow.quantity) > Number(item.baseQuantity ?? item.quantity)) {
-      notify('Return quantity cannot exceed the sold quantity.', 'warning')
-      return
-    }
-    if (item.trackingMode === 'SERIAL' && workflow.serialIds.length !== Number(workflow.quantity)) {
-      notify(`Select exactly ${workflow.quantity} sold serial number(s).`, 'warning')
-      return
-    }
-    const succeeded = await run(
-      workflow.order,
-      () => returnOrderProducts(user.uid, workflow.order.id, {
-        items: [{
-          orderItemId: workflow.orderItemId,
-          quantity: Number(workflow.quantity),
-          condition: workflow.condition,
-          reason: workflow.reason.trim(),
-          ...(item.trackingMode === 'SERIAL' ? { serialIds: workflow.serialIds } : {}),
-        }],
-      }, workflow.idempotencyKey),
-      workflow.condition === 'DAMAGED'
-        ? 'Product recorded in quarantine. No financial refund was created.'
-        : 'Product returned to sellable inventory. No financial refund was created.',
-    )
-    if (succeeded) {
-      setReturnWorkflow(null)
-      setDetailsOrder(null)
-    }
-  }
-
-  const printSales = async () => {
-    const { printSalesReport } = await import('../utils/reports.js')
-    printSalesReport(filteredOrders)
-  }
-
-  const printReceipt = async (order) => {
-    const { printOrderReceipt } = await import('../utils/reports.js')
-    printOrderReceipt(order)
-  }
-
-  return (
-    <Box className="page-stack">
-      <PageHeader
-        title="Orders"
-        subtitle="Manage multi-item orders, fulfillment, payments, and receipts."
-        actions={
-          <>
-            <Button variant="outlined" startIcon={<PictureAsPdfRoundedIcon />} onClick={printSales}>
-              Print report
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={<AddShoppingCartRoundedIcon />}
-              onClick={() => navigate('order')}
-            >
-              New order
-            </Button>
-          </>
-        }
-      />
-
-      <SectionCard>
-        <Typography fontWeight={900}>Saved views</Typography>
-        <Stack direction="row" gap={0.75} sx={{ mt: 1, mb: 2, flexWrap: 'wrap' }}>
-          {savedViews.map((item) => <Chip key={item.id} label={item.label} color={savedView === item.id ? 'primary' : 'default'} variant={savedView === item.id ? 'filled' : 'outlined'} onClick={() => applySavedView(savedView === item.id ? '' : item.id)} />)}
-        </Stack>
-        <Box className="sales-date-toolbar">
-          <Box>
-            <Typography fontWeight={900}>Date filter</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Review orders within a date range.
-            </Typography>
-          </Box>
-          <TextField
-            type="date"
-            label="From"
-            value={from}
-            onChange={(event) => setFrom(event.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            size="small"
-          />
-          <TextField
-            type="date"
-            label="To"
-            value={to}
-            onChange={(event) => setTo(event.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            size="small"
-          />
-        </Box>
-        <Stack direction="row" gap={0.75} sx={{ mt: 2, flexWrap: 'wrap' }}>
-          {['all', 'paid', 'unpaid', 'refunded', 'preorder', 'cancelled'].map((item) => (
-            <Chip
-              key={item}
-              size="small"
-              variant={filter === item ? 'filled' : 'outlined'}
-              color={filter === item ? 'primary' : 'default'}
-              label={`${filterLabel(item)} ${filterCounts[item]}`}
-              onClick={() => setFilter(item)}
-            />
-          ))}
-        </Stack>
-        {mobile ? (
-          <FormControl fullWidth size="small" sx={{ mt: 2 }}>
-            <InputLabel>Status</InputLabel>
-            <Select label="Status" value={filter} onChange={(event) => setFilter(event.target.value)}>
-              {filters.map((item) => (
-                <MenuItem key={item} value={item}>
-                  {filterLabel(item)} ({filterCounts[item]})
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        ) : (
-          <Box sx={{ mt: 2, overflowX: 'auto' }}>
-            <ToggleButtonGroup
-              value={filter}
-              exclusive
-              size="small"
-              onChange={(_, value) => value && setFilter(value)}
-            >
-              {filters.map((item) => (
-                <ToggleButton key={item} value={item}>
-                  {filterLabel(item)} ({filterCounts[item]})
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
-          </Box>
-        )}
-      </SectionCard>
-
-      {mobile ? (
-        <Box className="mobile-order-list">
-          {filteredOrders.map((order) => (
-            <MobileOrderCard
-              key={order.id}
-              order={order}
-              busy={workingId === order.id}
-              onPrint={() => printReceipt(order)}
-              onToggle={() => toggleCompleted(order)}
-              onFulfill={() => fulfillPreorder(order)}
-              onCancel={() => setCancelTarget(order)}
-              onDelete={() => setDeleteTarget(order)}
-              onView={() => setDetailsOrder(order)}
-            />
-          ))}
-          {!filteredOrders.length ? (
-            <EmptyState
-              title="No matching orders"
-              message="Adjust the filters or create a new order."
-              actionLabel="New order"
-              onAction={() => navigate('order')}
-            />
-          ) : null}
-        </Box>
-      ) : (
-        <TableContainer component={Paper} variant="outlined" className="desktop-order-table">
-          <Table size="small" stickyHeader>
-            <TableHead>
-              <TableRow>
-                <TableCell>Date / ID</TableCell>
-                <TableCell>Customer</TableCell>
-                <TableCell>Items</TableCell>
-                <TableCell align="right">Qty</TableCell>
-                <TableCell align="right">Total</TableCell>
-                <TableCell>Fulfillment</TableCell>
-                <TableCell>Payment</TableCell>
-                <TableCell align="center">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filteredOrders.map((order) => (
-                <TableRow key={order.id} hover>
-                  <TableCell>
-                    <Typography variant="body2">{order.date}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {order.id.slice(0, 10)}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography fontWeight={700}>{order.customer.name}</Typography>
-                    <Typography variant="caption">{order.customer.phone}</Typography>
-                  </TableCell>
-                  <TableCell>
-                    <ItemsSummary order={order} />
-                  </TableCell>
-                  <TableCell align="right">{getOrderQuantity(order)}</TableCell>
-                  <TableCell align="right">{formatKs(order.total)}</TableCell>
-                  <TableCell>
-                    <StatusChip status={order.fulfillmentStatus} />
-                  </TableCell>
-                  <TableCell>
-                    <StatusChip status={order.paymentStatus} />
-                  </TableCell>
-                  <TableCell align="center">
-                    <DesktopOrderActions
-                      order={order}
-                      busy={workingId === order.id}
-                      onPrint={() => printReceipt(order)}
-                      onToggle={() => toggleCompleted(order)}
-                      onFulfill={() => fulfillPreorder(order)}
-                      onCancel={() => setCancelTarget(order)}
-                      onDelete={() => setDeleteTarget(order)}
-                      onView={() => setDetailsOrder(order)}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!filteredOrders.length ? (
-                <TableRow>
-                  <TableCell colSpan={8}>
-                    <Box className="empty-state">
-                      <EmptyState
-                        compact
-                        title="No matching orders"
-                        message="Adjust the filters or create a new order."
-                      />
-                    </Box>
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-
-      <SectionCard>
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          gap={1}
-          sx={{ justifyContent: 'space-between' }}
-        >
-          <Typography>
-            <strong>{filteredOrders.length}</strong> orders · <strong>{totals.quantity}</strong> items
-          </Typography>
-          <Typography fontWeight={900}>Total: {formatKs(totals.amount)}</Typography>
-        </Stack>
-      </SectionCard>
-
-      <ConfirmDialog
-        open={Boolean(cancelTarget)}
-        title="Cancel order?"
-        message="The order will remain in the audit history and its reserved stock will be released. Paid orders must be refunded first."
-        confirmLabel="Cancel order"
-        busy={Boolean(cancelTarget && workingId === cancelTarget.id)}
-        onCancel={() => setCancelTarget(null)}
-        onConfirm={confirmCancel}
-      />
-
-      <ConfirmDialog
-        open={Boolean(deleteTarget)}
-        title="Delete order?"
-        message="Only cancelled unpaid orders can be deleted. This removes the order from sales records while keeping the audit record."
-        confirmLabel="Delete order"
-        busy={Boolean(deleteTarget && workingId === deleteTarget.id)}
-        onCancel={() => setDeleteTarget(null)}
-        onConfirm={confirmDelete}
-      />
-
-      <OrderDetailsDrawer
-        order={detailsOrder}
-        mobile={mobile}
-        onClose={() => setDetailsOrder(null)}
-        onPrint={() => detailsOrder && printReceipt(detailsOrder)}
-        onReturn={() => detailsOrder && setReturnWorkflow({
-          order: detailsOrder,
-          orderItemId: detailsOrder.items?.[0]?.id || '',
-          quantity: 1,
-          condition: 'SELLABLE',
-          reason: '',
-          serialIds: [],
-          idempotencyKey: crypto.randomUUID(),
-        })}
-      />
-      <Dialog open={Boolean(returnWorkflow)} onClose={() => setReturnWorkflow(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Confirm physical product return</DialogTitle>
-        <DialogContent>
-          <Typography color="text.secondary" sx={{ mb: 2 }}>
-            This changes inventory only. Create a separate refund if money must be returned.
-          </Typography>
-          <Stack spacing={2}>
-            <FormControl fullWidth>
-              <InputLabel>Sold item</InputLabel>
-              <Select
-                label="Sold item"
-                value={returnWorkflow?.orderItemId || ''}
-                onChange={(event) => setReturnWorkflow((current) => ({
-                  ...current, orderItemId: event.target.value, quantity: 1, serialIds: [],
-                }))}
-              >
-                {(returnWorkflow?.order.items || []).map((item) => (
-                  <MenuItem key={item.id} value={item.id}>{item.productName || item.type} · sold {Number(item.baseQuantity ?? item.quantity)} base units</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <TextField type="number" label="Return quantity (base unit)" value={returnWorkflow?.quantity || 1} onChange={(event) => setReturnWorkflow((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: {
-              min: returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? 1 : 0.001,
-              step: returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? 1 : 0.001,
-              max: Number(returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.baseQuantity ?? returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.quantity ?? 0),
-            } }} />
-            {returnWorkflow?.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.trackingMode === 'SERIAL' ? (
-              <FormControl fullWidth>
-                <InputLabel id="return-serials-label">Returned serials / IMEIs</InputLabel>
-                <Select
-                  labelId="return-serials-label"
-                  multiple
-                  label="Returned serials / IMEIs"
-                  value={returnWorkflow.serialIds}
-                  onChange={(event) => {
-                    const serialIds = event.target.value
-                    setReturnWorkflow((current) => ({ ...current, serialIds, quantity: serialIds.length || 1 }))
-                  }}
-                >
-                  {(returnWorkflow.order.items.find((item) => item.id === returnWorkflow.orderItemId)?.serials || [])
-                    .filter((serial) => serial.status === 'SOLD')
-                    .map((serial) => (
-                      <MenuItem key={serial.id} value={serial.id}>
-                        {serial.serial}{serial.imei ? ` / IMEI ${serial.imei}` : ''}
-                      </MenuItem>
-                    ))}
-                </Select>
-              </FormControl>
-            ) : null}
-            <FormControl fullWidth>
-              <InputLabel>Condition</InputLabel>
-              <Select label="Condition" value={returnWorkflow?.condition || 'SELLABLE'} onChange={(event) => setReturnWorkflow((current) => ({ ...current, condition: event.target.value }))}>
-                <MenuItem value="SELLABLE">Sellable — return to inventory</MenuItem>
-                <MenuItem value="DAMAGED">Damaged — send to quarantine</MenuItem>
-              </Select>
-            </FormControl>
-            <TextField required multiline minRows={2} label="Return reason" value={returnWorkflow?.reason || ''} onChange={(event) => setReturnWorkflow((current) => ({ ...current, reason: event.target.value }))} />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setReturnWorkflow(null)}>Cancel</Button>
-          <Button variant="contained" disabled={Boolean(returnWorkflow && workingId === returnWorkflow.order.id)} onClick={submitProductReturn}>Confirm inventory return</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  )
-}
-
-function MobileOrderCard({ order, busy, onPrint, onToggle, onFulfill, onCancel, onDelete, onView }) {
-  const [menuAnchor, setMenuAnchor] = useState(null)
-  const active = order.fulfillmentStatus !== 'cancelled'
-  const preorder = order.fulfillmentStatus === 'preorder'
-
-  return (
-    <Paper variant="outlined" className="mobile-order-card">
-      <Stack direction="row" gap={2} sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography fontWeight={900} noWrap>
-            {order.customer.name || 'Unnamed customer'}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {order.date} · {order.customer.phone || 'No phone'}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            #{order.id.slice(0, 10)}
-          </Typography>
-        </Box>
-        <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
-          <Typography fontWeight={900} color="primary.main">
-            {formatKs(order.total)}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {getOrderQuantity(order)} item(s)
-          </Typography>
-        </Box>
-      </Stack>
-
-      <Box className="mobile-order-items">
-        <ItemsSummary order={order} />
+  return <Box className="page-stack sales-report-page">
+    <Paper className="sales-summary" variant="outlined" component="section" aria-label="အရောင်းအနှစ်ချုပ်">
+      <Box component="dl" className="sales-summary-grid">
+        <SummaryMetric label="ရောင်းရငွေ စုစုပေါင်း" value={money(summary.totalSales)} accent />
+        <SummaryMetric label="အကြွေး စုစုပေါင်း" value={money(summary.creditTotal)} />
+        <SummaryMetric label="အရောင်းဘောက်ချာ" value={`${summary.orderCount} စောင်`} />
+        <SummaryMetric label="အကြွေးဘောက်ချာ" value={`${summary.creditOrders} စောင်`} />
+        <SummaryMetric label="ပစ္စည်းအမျိုးအစား" value={`${summary.productTypeCount} မျိုး`} />
+        <SummaryMetric label="ရောင်းပြီး item" value={`${summary.itemCount} ခု`} />
       </Box>
-
-      <Stack direction="row" gap={0.75} sx={{ flexWrap: 'wrap' }}>
-        <Chip
-          size="small"
-          color={statusColor(order.fulfillmentStatus)}
-          label={order.fulfillmentStatus}
-        />
-        <Chip
-          size="small"
-          variant="outlined"
-          color={order.paymentStatus === 'paid' ? 'success' : 'default'}
-          label={order.paymentStatus}
-        />
-        {order.source ? <Chip size="small" variant="outlined" label={order.source} /> : null}
-      </Stack>
-
-      <Divider />
-
-      <Stack direction="row" gap={1} sx={{ alignItems: 'center' }}>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<VisibilityOutlinedIcon />}
-          onClick={onView}
-        >
-          Details
-        </Button>
-        {preorder ? (
-          <Button
-            size="small"
-            color="success"
-            variant="contained"
-            startIcon={<CheckCircleRoundedIcon />}
-            onClick={onFulfill}
-            disabled={busy}
-            sx={{ flex: 1 }}
-          >
-            Reserve stock
-          </Button>
-        ) : active && nextFulfillment[order.fulfillmentStatus] ? (
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={<TaskAltRoundedIcon />}
-            onClick={onToggle}
-            disabled={busy}
-            sx={{ flex: 1 }}
-          >
-            {nextFulfillment[order.fulfillmentStatus][1]}
-          </Button>
-        ) : (
-          <>
-            <Button size="small" variant="outlined" startIcon={<PrintRoundedIcon />} onClick={onPrint} sx={{ flex: 1 }}>
-              Receipt
-            </Button>
-            <Button
-              size="small"
-              color="error"
-              variant="outlined"
-              startIcon={<DeleteOutlineRoundedIcon />}
-              onClick={onDelete}
-              disabled={busy}
-            >
-              Delete order
-            </Button>
-          </>
-        )}
-
-        {active ? (
-          <>
-            <Tooltip title="More actions">
-              <IconButton
-                aria-label={`More actions for order ${order.id}`}
-                onClick={(event) => setMenuAnchor(event.currentTarget)}
-                sx={{ border: '1px solid', borderColor: 'divider' }}
-              >
-                <MoreVertRoundedIcon />
-              </IconButton>
-            </Tooltip>
-            <Menu
-              anchorEl={menuAnchor}
-              open={Boolean(menuAnchor)}
-              onClose={() => setMenuAnchor(null)}
-            >
-              <MenuItem
-                onClick={() => {
-                  setMenuAnchor(null)
-                  onView()
-                }}
-              >
-                <VisibilityOutlinedIcon fontSize="small" sx={{ mr: 1.5 }} />
-                View details
-              </MenuItem>
-              <MenuItem
-                onClick={() => {
-                  setMenuAnchor(null)
-                  onPrint()
-                }}
-              >
-                <PrintRoundedIcon fontSize="small" sx={{ mr: 1.5 }} />
-                Print receipt
-              </MenuItem>
-              <MenuItem
-                disabled={busy}
-                onClick={() => {
-                  setMenuAnchor(null)
-                  onCancel()
-                }}
-                sx={{ color: 'error.main' }}
-              >
-                <CancelOutlinedIcon fontSize="small" sx={{ mr: 1.5 }} />
-                Cancel order
-              </MenuItem>
-            </Menu>
-          </>
-        ) : null}
-      </Stack>
     </Paper>
-  )
-}
 
-function DesktopOrderActions({ order, busy, onPrint, onToggle, onFulfill, onCancel, onDelete, onView }) {
-  return (
-    <Stack direction="row" gap={0.25} sx={{ justifyContent: 'center', whiteSpace: 'nowrap' }}>
-      <Tooltip title="View full order details">
-        <IconButton size="small" aria-label="View order details" onClick={onView}>
-          <VisibilityOutlinedIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Print receipt">
-        <IconButton size="small" aria-label="Print receipt" onClick={onPrint}>
-          <PrintRoundedIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      {order.fulfillmentStatus === 'preorder' ? (
-        <Tooltip title="Reserve available stock">
-          <span>
-            <IconButton
-              size="small"
-              color="success"
-              aria-label="Reserve available stock"
-              onClick={onFulfill}
-              disabled={busy}
-            >
-              <CheckCircleRoundedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-      ) : nextFulfillment[order.fulfillmentStatus] ? (
-        <Tooltip title={nextFulfillment[order.fulfillmentStatus][1]}>
-          <span>
-            <IconButton
-              size="small"
-              color="success"
-              aria-label={nextFulfillment[order.fulfillmentStatus][1]}
-              onClick={onToggle}
-              disabled={busy}
-            >
-              <TaskAltRoundedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-      ) : null}
-      {order.fulfillmentStatus !== 'cancelled' ? (
-        <Tooltip title="Cancel order">
-          <span>
-            <IconButton
-              size="small"
-              color="error"
-              aria-label="Cancel order"
-              onClick={onCancel}
-              disabled={busy}
-            >
-              <CancelOutlinedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-      ) : (
-        <Tooltip title="Delete order">
-          <span>
-            <IconButton
-              size="small"
-              color="error"
-              aria-label="Delete order"
-              onClick={onDelete}
-              disabled={busy}
-            >
-              <DeleteOutlineRoundedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-      )}
-    </Stack>
-  )
-}
+    <Paper className="sales-controls" variant="outlined" component="section" aria-label="အရောင်းမှတ်တမ်းရှာဖွေရန်">
+      <Box className="sales-filter-row">
+        <TextField fullWidth size="small" value={search} onChange={(event) => setSearch(event.target.value)} label="ဘောက်ချာနံပါတ် သို့မဟုတ် ကုန်ပစ္စည်းရှာရန်" slotProps={{ input: { startAdornment: <SearchRoundedIcon color="action" sx={{ mr: 1 }} /> } }} />
+        <Stack direction="row" spacing={1} className="sales-date-range">
+          <TextField fullWidth size="small" type="date" label="မှ" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+          <TextField fullWidth size="small" type="date" label="ထိ" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+        </Stack>
+      </Box>
+      <ToggleButtonGroup exclusive value={status} onChange={(_, next) => next && setStatus(next)} size="small" className="sales-status-filter">
+        <ToggleButton value="all">အားလုံး</ToggleButton>
+        <ToggleButton value="paid">ငွေရှင်းပြီး</ToggleButton>
+        <ToggleButton value="credit">အကြွေး</ToggleButton>
+      </ToggleButtonGroup>
+    </Paper>
 
-function DetailField({ label, value }) {
-  return (
-    <Box>
-      <Typography variant="caption" color="text.secondary">
-        {label}
-      </Typography>
-      <Typography sx={{ overflowWrap: 'anywhere' }}>{value || '—'}</Typography>
-    </Box>
-  )
-}
-
-function OrderDetailsDrawer({ order, mobile, onClose, onPrint, onReturn }) {
-  return (
-    <Drawer
-      anchor="right"
-      open={Boolean(order)}
-      onClose={onClose}
-      slotProps={{
-        paper: {
-          sx: {
-            width: mobile ? '100%' : 560,
-            maxWidth: '100%',
-          },
-        },
-      }}
-    >
-      {order ? (
-        <Box sx={{ p: { xs: 2, sm: 3 } }}>
-          <Stack direction="row" gap={2} sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <Box>
-              <Typography variant="h5" fontWeight={900}>
-                Order details
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                #{order.id} · {order.date}
-              </Typography>
-            </Box>
-            <IconButton aria-label="Close order details" onClick={onClose}>
-              <CloseRoundedIcon />
-            </IconButton>
-          </Stack>
-
-          <Stack direction="row" gap={1} sx={{ mt: 2, flexWrap: 'wrap' }}>
-            <Chip
-              size="small"
-              color={statusColor(order.fulfillmentStatus)}
-              label={order.fulfillmentStatus}
-            />
-            <Chip
-              size="small"
-              variant="outlined"
-              color={order.paymentStatus === 'paid' ? 'success' : 'default'}
-              label={order.paymentStatus}
-            />
-            {order.source ? <Chip size="small" variant="outlined" label={order.source} /> : null}
-          </Stack>
-          {order.fulfillmentStatus === 'completed' ? (
-            <Button variant="outlined" sx={{ mt: 2 }} onClick={onReturn}>
-              Return physical product
-            </Button>
-          ) : null}
-
-          <Divider sx={{ my: 3 }} />
-
-          <Typography variant="overline" color="text.secondary">
-            Customer
-          </Typography>
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: mobile ? '1fr' : '1fr 1fr',
-              gap: 2,
-              mt: 1,
-            }}
-          >
-            <DetailField label="Name" value={order.customer.name} />
-            <DetailField label="Phone" value={order.customer.phone} />
-            <DetailField label="City" value={order.customer.city} />
-            <DetailField label="Address" value={order.customer.address} />
+    <Paper className="sales-list" variant="outlined" component="section" aria-label="အရောင်းစာရင်း">
+      {filtered.length ? mobile ? <Box className="sales-mobile-list">
+        {filtered.map((order, index) => <Box className="sales-mobile-row" key={order.id}>
+          {index > 0 ? <Divider /> : null}
+          <Box className="sales-mobile-entry">
+            <Typography className="sales-sequence">{index + 1}</Typography>
+            <Typography className="sales-invoice-number">({receiptNumber(order)})</Typography>
+            <Typography className="sales-row-date">{orderDate(order)}</Typography>
+            <Typography className="sales-row-time">{orderTime(order)}</Typography>
+            <Typography fontWeight={900}>{money(order.total)}</Typography>
+            <Chip size="small" color={isCredit(order) ? 'warning' : 'success'} label={isCredit(order) ? 'အကြွေး' : 'ငွေရှင်းပြီး'} />
+            <OrderActions order={order} onDetails={setDetails} onPrint={printReport} />
           </Box>
+        </Box>)}
+      </Box> : <TableContainer>
+        <Table className="sales-desktop-table" aria-label="အရောင်းမှတ်တမ်း">
+          <TableHead><TableRow><TableCell>စဉ်</TableCell><TableCell>ဘောက်ချာ</TableCell><TableCell>ရက်စွဲ</TableCell><TableCell>အချိန်</TableCell><TableCell align="right" className="sales-amount-cell">ကျသင့်ငွေ</TableCell><TableCell className="sales-status-cell">အခြေအနေ</TableCell><TableCell align="right">လုပ်ဆောင်ချက်</TableCell></TableRow></TableHead>
+          <TableBody>{filtered.map((order, index) => <TableRow key={order.id} hover>
+            <TableCell className="sales-sequence">{index + 1}</TableCell>
+            <TableCell><Typography className="sales-invoice-number">({receiptNumber(order)})</Typography></TableCell>
+            <TableCell>{orderDate(order)}</TableCell><TableCell>{orderTime(order)}</TableCell>
+            <TableCell align="right" className="sales-amount-cell" sx={{ fontWeight: 900 }}>{money(order.total)}</TableCell>
+            <TableCell className="sales-status-cell"><Chip size="small" color={isCredit(order) ? 'warning' : 'success'} label={isCredit(order) ? 'အကြွေး' : 'ငွေရှင်းပြီး'} /></TableCell>
+            <TableCell align="right"><OrderActions order={order} onDetails={setDetails} onPrint={printReport} /></TableCell>
+          </TableRow>)}</TableBody>
+        </Table>
+      </TableContainer> : <Box className="sales-empty"><Typography color="text.secondary">ရွေးထားသောအခြေအနေအတွက် အရောင်းမှတ်တမ်း မရှိသေးပါ</Typography></Box>}
+    </Paper>
 
-          <Divider sx={{ my: 3 }} />
-
-          <Typography variant="overline" color="text.secondary">
-            Items
-          </Typography>
-          <Stack spacing={1.5} sx={{ mt: 1 }}>
-            {order.items.map((item, index) => (
-              <Paper key={item.id} variant="outlined" sx={{ p: 1.5 }}>
-                <Stack direction="row" gap={2} sx={{ justifyContent: 'space-between' }}>
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography fontWeight={800}>
-                      {index + 1}. {item.type}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {item.size} · {item.color}
-                    </Typography>
-                    <Typography variant="body2">
-                      {item.quantity} × {formatKs(item.unitPrice)}
-                    </Typography>
-                    {item.discount && item.deductionType === 'discount' ? (
-                      <Typography variant="caption" color="text.secondary">
-                        {deductionLabel(item.deductionType)}: {formatKs(item.discount)}
-                      </Typography>
-                    ) : null}
-                  </Box>
-                  <Typography fontWeight={800} sx={{ flexShrink: 0 }}>
-                    {formatKs(item.lineTotal)}
-                  </Typography>
-                </Stack>
-              </Paper>
-            ))}
-          </Stack>
-
-          <Divider sx={{ my: 3 }} />
-
-          <Stack spacing={1}>
-            <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-              <Typography color="text.secondary">Subtotal</Typography>
-              <Typography>{formatKs(order.subtotal)}</Typography>
-            </Stack>
-            <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-              <Typography color="text.secondary">Order discount</Typography>
-              <Typography>{formatKs(order.discount)}</Typography>
-            </Stack>
-            {order.advancedPaymentAmount ? (
-              <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                <Typography color="text.secondary">Advanced payment</Typography>
-                <Typography>{formatKs(order.advancedPaymentAmount)}</Typography>
-              </Stack>
-            ) : null}
-            {order.paidAmount ? (
-              <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                <Typography color="text.secondary">Paid amount</Typography>
-                <Typography>{formatKs(order.paidAmount)}</Typography>
-              </Stack>
-            ) : null}
-            {order.balanceDue ? (
-              <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-                <Typography color="text.secondary">Balance due</Typography>
-                <Typography>{formatKs(order.balanceDue)}</Typography>
-              </Stack>
-            ) : null}
-            <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-              <Typography color="text.secondary">Delivery fee</Typography>
-              <Typography>{formatKs(order.deliveryFee)}</Typography>
-            </Stack>
-            <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
-              <Typography fontWeight={900}>Total</Typography>
-              <Typography fontWeight={900} color="primary.main">
-                {formatKs(order.total)}
-              </Typography>
-            </Stack>
-          </Stack>
-
-          <Divider sx={{ my: 3 }} />
-          <DetailField label="Remark" value={order.remark} />
-
-          <Button
-            fullWidth
-            variant="contained"
-            startIcon={<PrintRoundedIcon />}
-            onClick={onPrint}
-            sx={{ mt: 3 }}
-          >
-            Print receipt
-          </Button>
-        </Box>
-      ) : null}
-    </Drawer>
-  )
+    <Dialog open={Boolean(details)} onClose={() => setDetails(null)} fullWidth maxWidth="sm">
+      {details ? <><DialogTitle>အရောင်းအသေးစိတ်</DialogTitle><DialogContent className="sales-details-content">
+        <Stack spacing={1.5}>
+          <Paper variant="outlined" className="sales-details-overview">
+            <Typography className="sales-details-invoice">({receiptNumber(details)})</Typography>
+            <Typography fontWeight={800}>{orderDate(details)} · {orderTime(details)}</Typography>
+            {isCredit(details) ? <Typography className="sales-details-value" fontWeight={800}>{details.customer?.name || 'မသတ်မှတ်ထားပါ'}</Typography> : <><Typography className="sales-details-value" fontWeight={800} color="success.main">ငွေရှင်းပြီး</Typography><Typography fontWeight={800}>{paymentMethodLabel(details)}</Typography></>}
+          </Paper>
+          <Box className="sales-details-items">{(details.items || []).map((item) => <Box key={item.id} className="sales-details-item"><Box><Typography>{item.type || item.productName || item.name} × {item.quantity}</Typography>{hasPromotion(item) ? <Typography className="sales-promotion" variant="caption">{item.promotionName || 'ပရိုမိုးရှင်း'} · လျှော့စျေး {money(Number(item.promotionDiscount || 0) * Number(item.quantity || 0))}</Typography> : null}</Box><Typography fontWeight={800}>{money(item.lineTotal || Number(item.quantity || 0) * Number(item.unitPrice || 0))}</Typography></Box>)}</Box>
+          <Paper variant="outlined" className="sales-details-total"><Typography fontWeight={800}>ကျသင့်ငွေ ပေါင်း</Typography><Typography fontWeight={900}>{money(details.total)}</Typography>{isCredit(details) ? <><Typography>အကြွေးကျန်</Typography><Typography fontWeight={900} color="warning.main">{money(details.balanceDue || details.total)}</Typography></> : null}</Paper>
+        </Stack>
+      </DialogContent><DialogActions><Button onClick={() => setDetails(null)}>ပိတ်မည်</Button><Button variant="contained" startIcon={<PictureAsPdfRoundedIcon />} onClick={printReport}>မှတ်တမ်းထုတ်မည်</Button></DialogActions></> : null}
+    </Dialog>
+  </Box>
 }

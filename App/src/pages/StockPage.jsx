@@ -26,13 +26,17 @@ import {
   Typography,
 } from '@mui/material'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
+import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded'
 import PageHeader from '../components/PageHeader.jsx'
 import MetricCard from '../components/MetricCard.jsx'
 import EmptyState from '../components/EmptyState.jsx'
 import DataToolbar from '../components/DataToolbar.jsx'
 import SectionCard from '../components/SectionCard.jsx'
+import BarcodeScannerDialog from '../components/BarcodeScannerDialog.jsx'
+import BarcodeLinkDialog from '../components/BarcodeLinkDialog.jsx'
 import { useAuth } from '../contexts/AuthContext.jsx'
 import { useData } from '../contexts/DataContext.jsx'
 import { useFeedback } from '../contexts/FeedbackContext.jsx'
@@ -200,6 +204,9 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
   const [search, setSearch] = useSessionState('stock:main-search', '')
   const [stockDialogOpen, setStockDialogOpen] = useState(false)
   const [stockForm, setStockForm] = useState(emptyStockForm)
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const [unknownBarcode, setUnknownBarcode] = useState('')
+  const [lastBarcode, setLastBarcode] = useState(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [adjustTarget, setAdjustTarget] = useState(null)
   const [adjustDraft, setAdjustDraft] = useState({
@@ -379,6 +386,61 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
     exportStockPDF(rows, totals)
   }
 
+  const selectBarcodeTarget = (barcode) => {
+    const product = data.products.find((entry) => entry.id === barcode.productId)
+    if (!product) throw new Error('The linked product is not available in this store catalog.')
+    const variant = (product.variants || []).find((entry) => entry.id === barcode.variantId)
+    const productUnit = (product.units || []).find((entry) => entry.id === barcode.productUnitId)
+      || (product.units || []).find((entry) => entry.isBase)
+    setStockForm((current) => ({
+      ...current,
+      productId: product.id,
+      variantId: variant?.id || '',
+      optionValueIds: variant ? valueIdsFromOptionPath(variant.optionPath) : [],
+      unitId: productUnit?.unitId || current.unitId,
+      quantity: 1,
+      unitCost: moneyOrBlank(variant?.cost ?? product.cost ?? current.unitCost),
+      salePrice: moneyOrBlank(variant?.price ?? product.price ?? current.salePrice),
+    }))
+    setLastBarcode({ value: barcode.value, productName: product.name, unitName: productUnit?.unit?.name || productUnit?.unit?.symbol || 'Base unit' })
+  }
+
+  const scanStockBarcode = async (value) => {
+    try {
+      const result = await api.lookupBarcode(getStoredShopId() || user.uid, value, 'INVENTORY')
+      setScannerOpen(false)
+      if (!result.known) {
+        setUnknownBarcode(result.normalizedValue || value.trim())
+        return
+      }
+      selectBarcodeTarget(result.barcode)
+      notify('Barcode matched. Product, variant and package were selected.')
+    } catch (error) {
+      notify(error.message || 'Barcode lookup failed.', 'error')
+    }
+  }
+
+  const generateStockBarcode = async () => {
+    if (!selectedProduct) {
+      notify('Select a product before generating a barcode.', 'warning')
+      return
+    }
+    try {
+      const productUnit = (selectedProduct.units || []).find((entry) => entry.unitId === stockForm.unitId)
+      const result = await api.createInternalBarcode(getStoredShopId() || user.uid, {
+        productId: selectedProduct.id,
+        variantId: selectedVariant?.id || stockForm.variantId || null,
+        productUnitId: productUnit?.id || null,
+        packageQuantity: Number(productUnit?.conversionFactor || 1),
+        isPrimary: true,
+      })
+      selectBarcodeTarget(result.barcode)
+      notify(`Internal barcode ${result.barcode.value} generated and linked.`)
+    } catch (error) {
+      notify(error.message || 'Internal barcode could not be generated.', 'error')
+    }
+  }
+
   const saveTransfer = async () => {
     if (!transferTarget?.targetLocationId || !transferTarget.reason.trim() || Number(transferTarget.quantity || 0) <= 0) {
       notify('Target location, quantity and reason are required.', 'warning')
@@ -519,6 +581,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
     .filter((row) => row.available <= lowStockThreshold)
     .sort((a, b) => a.available - b.available)
     .map((row) => ({ ...row, suggested: Math.max(1, 10 - row.available, Number(row.sold || 0)) }))
+  const lowStockCount = reorderRows.length
   const inventoryTimeline = [
     ...(data.adjustments || []).map((item) => ({
       id: `adjustment-${item.id}`,
@@ -539,52 +602,50 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
   return (
     <Box className="page-stack">
       <PageHeader
-        title="Stock"
-        subtitle="Manage product stock by stable variants."
+        title="ကုန်ပစ္စည်းလက်ကျန်"
+        subtitle="လက်ကျန်ပစ္စည်းနှင့် ဝယ်ဈေးကို စီမံပါ"
         actions={
           <>
-            <Button variant="outlined" startIcon={<SettingsRoundedIcon />} onClick={() => navigate('settings')}>
-              App Settings
+            <Button variant="outlined" startIcon={<QrCodeScannerRoundedIcon />} onClick={() => { openStockDialog(); setScannerOpen(true) }}>
+              ဘားကုဒ်စကင်
             </Button>
-            <Button variant="outlined" color="error" startIcon={<PictureAsPdfRoundedIcon />} onClick={exportStock}>
-              Export PDF
+            <Button className="inventory-export-button" variant="outlined" startIcon={<PictureAsPdfRoundedIcon />} onClick={exportStock}>
+              PDF ထုတ်ရန်
             </Button>
             <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={openStockDialog}>
-              Add Stock
+              ပစ္စည်းထည့်ရန်
             </Button>
           </>
         }
       />
 
-      <DataToolbar title="Find stock" subtitle="Search by product, variant, option, note, date, or price.">
+      <DataToolbar title="ကုန်ပစ္စည်းရှာရန်" subtitle="အမည် သို့မဟုတ် ကုဒ်ဖြင့်ရှာနိုင်သည်">
         <TextField
-          label="Search stock"
+          label="ပစ္စည်းရှာရန်"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search stock records"
+          placeholder="ဥပမာ - Jasmine, SKU"
           fullWidth
           size="small"
         />
       </DataToolbar>
 
-      <div className="metric-grid wide">
-        <MetricCard title="Available Stock" value={totals.totalAvailable} tone="success" />
-        <MetricCard title="Total Sold" value={totals.totalSold} tone="primary" />
-        <MetricCard title="Total Quantity" value={totals.totalQuantity} />
-        <MetricCard title="Total Stock Value" value={formatKs(totals.totalValue)} />
-        <MetricCard title="Available Stock Value" value={formatKs(totals.totalAvailableValue)} tone="success" />
-        <MetricCard title="Total Delivery Cost" value={formatKs(totals.totalDeliveryCost)} tone="warning" />
+      <div className="inventory-summary-grid">
+        <MetricCard title="လက်ကျန်" value={`${totals.totalAvailable} ခု`} tone="success" icon={<Inventory2RoundedIcon />} />
+        <MetricCard title="ကုန်ပစ္စည်းအမျိုးအစား" value={`${rows.length} မျိုး`} tone="primary" icon={<SettingsRoundedIcon />} />
+        <MetricCard title="လက်ကျန်တန်ဖိုး" value={formatKs(totals.totalAvailableValue)} tone="success" icon={<PictureAsPdfRoundedIcon />} />
+        <MetricCard title="ပြန်ဝယ်ရန်" value={`${lowStockCount} မျိုး`} tone={lowStockCount ? 'warning' : 'success'} icon={<AddRoundedIcon />} />
       </div>
 
-      <SectionCard title="Inventory workspace" subtitle="Balances remain legacy-compatible while ledger movements and tracked inventory are available for reconciliation.">
-        <Tabs value={workspace} onChange={(_, value) => setWorkspace(value)} variant="scrollable" scrollButtons="auto" aria-label="Inventory workspaces">
-          <Tab value="balances" label="Balances" />
-          <Tab value="movements" label="Movements" />
-          <Tab value="locations" label="Locations" />
-          <Tab value="counts" label="Counts" />
-          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.lots') || data.inventoryLots?.length ? <Tab value="lots" label="Lots / Expiry" /> : null}
-          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.serials') || data.inventorySerials?.length ? <Tab value="serials" label="Serials / IMEIs" /> : null}
-          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.warranty') || data.warranties?.length ? <Tab value="warranties" label="Warranty" /> : null}
+      <SectionCard title="လက်ကျန်စီမံခန့်ခွဲမှု" subtitle="အသေးစိတ် စာရင်းများ">
+        <Tabs value={workspace} onChange={(_, value) => setWorkspace(value)} variant="scrollable" scrollButtons="auto" aria-label="ကုန်ပစ္စည်း စာရင်းများ">
+          <Tab value="balances" label="လက်ကျန်" />
+          <Tab value="movements" label="ဝင်/ထွက်" />
+          <Tab value="locations" label="သိုလှောင်နေရာ" />
+          <Tab value="counts" label="ရေတွက်ရန်" />
+          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.lots') || data.inventoryLots?.length ? <Tab value="lots" label="အုပ်စု / သက်တမ်း" /> : null}
+          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.serials') || data.inventorySerials?.length ? <Tab value="serials" label="Serial / IMEI" /> : null}
+          {data.storeConfiguration?.effectiveCapabilities?.includes('inventory.warranty') || data.warranties?.length ? <Tab value="warranties" label="အာမခံ" /> : null}
         </Tabs>
         {workspace === 'balances' ? <Stack spacing={1} sx={{ mt: 2 }}>
           {(data.inventoryBalances || []).slice(0, 10).map((balance) => (
@@ -685,14 +746,14 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
         </Stack> : null}
       </SectionCard>
 
-      <Box className="home-main-grid">
-        <SectionCard title="Reorder recommendations" subtitle="Suggested quantities use current availability and recent sold quantity.">
+      <Box className="inventory-insight-grid">
+        <SectionCard title="ပြန်ဝယ်ရန်လိုသော ပစ္စည်းများ" subtitle="လက်ကျန်နည်းနေသော ပစ္စည်းများ">
           <Stack spacing={1}>
             {reorderRows.slice(0, 8).map((row) => (
               <Box key={`reorder-${row.id}`} className="purchase-line">
                 <span><b>{row.productName}</b><small>{row.variantName} · {row.available} available</small></span>
                 <Chip
-                  label={`Order ${row.suggested}`}
+                  label={`${row.suggested} ခု ထည့်ရန်`}
                   color={row.available <= 0 ? 'error' : 'warning'}
                   variant="outlined"
                   size="small"
@@ -700,10 +761,10 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
                 />
               </Box>
             ))}
-            {!reorderRows.length ? <Typography color="text.secondary">All products are above the threshold of {lowStockThreshold}.</Typography> : null}
+            {!reorderRows.length ? <Typography color="text.secondary">ကုန်ပစ္စည်းအားလုံး လက်ကျန်ကောင်းနေပါသည်။</Typography> : null}
           </Stack>
         </SectionCard>
-        <SectionCard title="Inventory timeline" subtitle="Receipts and manual stock adjustments.">
+        <SectionCard title="နောက်ဆုံး လှုပ်ရှားမှုများ" subtitle="ပစ္စည်းထည့်ခြင်းနှင့် ပြင်ဆင်မှုများ">
           <Stack spacing={1}>
             {inventoryTimeline.map((event) => (
               <Box key={event.id} className="timeline-row">
@@ -711,7 +772,7 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
                 <span><b>{event.title}</b><small>{event.detail} · {event.date}</small></span>
               </Box>
             ))}
-            {!inventoryTimeline.length ? <Typography color="text.secondary">No inventory activity yet.</Typography> : null}
+            {!inventoryTimeline.length ? <Typography color="text.secondary">ပစ္စည်းလှုပ်ရှားမှု မရှိသေးပါ။</Typography> : null}
           </Stack>
         </SectionCard>
       </Box>
@@ -726,18 +787,18 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
                   {row.variantName} - {row.date}
                 </Typography>
               </Box>
-              <Chip size="small" label={`${row.available} available`} color={stockTone(row.available)} variant="outlined" />
+              <Chip size="small" label={`${row.available} ခု`} color={stockTone(row.available)} variant="outlined" />
             </Stack>
             <Box className="mobile-detail-grid">
-              <MobileDetail label="Stock" value={row.adjustedQty} />
-              <MobileDetail label="Sold" value={row.sold} />
-              <MobileDetail label="Unit Cost" value={formatKs(row.unitCost)} />
-              <MobileDetail label="Sale Price" value={formatKs(row.salePrice)} />
+              <MobileDetail label="စုစုပေါင်း" value={`${row.adjustedQty} ခု`} />
+              <MobileDetail label="ရောင်းပြီး" value={`${row.sold} ခု`} />
+              <MobileDetail label="ဝယ်ဈေး" value={formatKs(row.unitCost)} />
+              <MobileDetail label="ရောင်းဈေး" value={formatKs(row.salePrice)} />
             </Box>
             <Stack direction="row" gap={1}>
-              <Button fullWidth variant="outlined" onClick={() => setAdjustTarget(row)}>Adjust</Button>
+              <Button fullWidth variant="outlined" onClick={() => setAdjustTarget(row)}>လက်ကျန်ပြင်ရန်</Button>
               {row.ledgerMode && data.inventoryLocations?.length > 1
-                ? <Button fullWidth variant="outlined" onClick={() => openTransfer(row)}>Transfer</Button>
+                ? <Button fullWidth variant="outlined" onClick={() => openTransfer(row)}>နေရာပြောင်းရန်</Button>
                 : null}
             </Stack>
           </Paper>
@@ -795,17 +856,23 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
       </TableContainer>
 
       <Dialog open={stockDialogOpen} onClose={() => setStockDialogOpen(false)} fullWidth maxWidth="md">
-        <DialogTitle>Add Stock</DialogTitle>
+        <DialogTitle>ပစ္စည်းလက်ခံထည့်သွင်းရန်</DialogTitle>
         <DialogContent dividers>
           {!data.products.length ? (
             <Alert severity="info" sx={{ mb: 2 }}>
-              Create a product from the Products page before adding stock.
+              ပစ္စည်းထည့်ရန် ကုန်ပစ္စည်းစာရင်းတွင် ပစ္စည်းအရင်ဖန်တီးပါ။
             </Alert>
           ) : null}
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+            <Button variant="outlined" startIcon={<QrCodeScannerRoundedIcon />} onClick={() => setScannerOpen(true)}>ဘားကုဒ်စကင်ရန်</Button>
+            <Button variant="outlined" disabled={!selectedProduct} onClick={generateStockBarcode}>ကိုယ်ပိုင်ဘားကုဒ်ထုတ်ရန်</Button>
+            <Button onClick={() => navigate('pricing')}>ဘားကုဒ်စီမံရန်</Button>
+          </Stack>
+          {lastBarcode ? <Alert severity="success" sx={{ mb: 2 }}>Selected from barcode <b>{lastBarcode.value}</b>: {lastBarcode.productName} · {lastBarcode.unitName}</Alert> : null}
           <Box className="form-grid" sx={{ pt: 1 }}>
             <FormControl className="span-12">
-              <InputLabel>Product</InputLabel>
-              <Select label="Product" value={stockForm.productId} onChange={(event) => updateProduct(event.target.value)}>
+              <InputLabel>ကုန်ပစ္စည်း</InputLabel>
+              <Select label="ကုန်ပစ္စည်း" value={stockForm.productId} onChange={(event) => updateProduct(event.target.value)}>
                 {data.products.map((product) => (
                   <MenuItem key={product.id} value={product.id}>{product.name}</MenuItem>
                 ))}
@@ -825,11 +892,11 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
                 </Select>
               </FormControl>
             )) : null}
-            <TextField className="span-4" type="date" label="Received Date" value={stockForm.date} onChange={(event) => setStockForm((current) => ({ ...current, date: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
-            <TextField className="span-4" type="number" label="Unit Cost" value={stockForm.unitCost} onChange={(event) => setStockForm((current) => ({ ...current, unitCost: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
-            <TextField className="span-4" type="number" label="Sale Price" value={stockForm.salePrice} onChange={(event) => setStockForm((current) => ({ ...current, salePrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
-            <TextField className="span-6" type="number" label="Quantity to add" value={stockForm.quantity} onChange={(event) => setStockForm((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
-            <TextField className="span-6" type="number" label="Delivery Cost" value={stockForm.deli} onChange={(event) => setStockForm((current) => ({ ...current, deli: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+            <TextField className="span-4" type="date" label="လက်ခံသည့်ရက်" value={stockForm.date} onChange={(event) => setStockForm((current) => ({ ...current, date: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
+            <TextField className="span-4" type="number" label="တစ်ခုချင်းဝယ်ဈေး" value={stockForm.unitCost} onChange={(event) => setStockForm((current) => ({ ...current, unitCost: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+            <TextField className="span-4" type="number" label="ရောင်းဈေး" value={stockForm.salePrice} onChange={(event) => setStockForm((current) => ({ ...current, salePrice: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
+            <TextField className="span-6" type="number" label="ထည့်မည့်အရေအတွက်" value={stockForm.quantity} onChange={(event) => setStockForm((current) => ({ ...current, quantity: event.target.value }))} slotProps={{ htmlInput: { min: 1 } }} />
+            <TextField className="span-6" type="number" label="ပို့ဆောင်ခ" value={stockForm.deli} onChange={(event) => setStockForm((current) => ({ ...current, deli: event.target.value }))} slotProps={{ htmlInput: { min: 0 } }} />
             {['LOT', 'EXPIRY'].includes(selectedProduct?.trackingMode) ? <>
               <TextField required className="span-6" label="Lot number" value={stockForm.lotNumber} onChange={(event) => setStockForm((current) => ({ ...current, lotNumber: event.target.value }))} />
               <TextField required={selectedProduct?.trackingMode === 'EXPIRY'} className="span-6" type="date" label="Expiry date" value={stockForm.expiresAt} onChange={(event) => setStockForm((current) => ({ ...current, expiresAt: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} />
@@ -838,8 +905,8 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setStockDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={saveStock} disabled={!data.products.length}>Save Stock</Button>
+          <Button onClick={() => setStockDialogOpen(false)}>မလုပ်တော့ပါ</Button>
+          <Button variant="contained" onClick={saveStock} disabled={!data.products.length}>ပစ္စည်းသိမ်းရန်</Button>
         </DialogActions>
       </Dialog>
 
@@ -860,6 +927,24 @@ export default function StockPage({ refresh, requireAuth, navigate }) {
           <Button variant="contained" onClick={saveAdjustment} disabled={confirmBusy}>{confirmBusy ? 'Saving...' : 'Save adjustment'}</Button>
         </DialogActions>
       </Dialog>
+
+      <BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onScan={scanStockBarcode} />
+      <BarcodeLinkDialog
+        open={Boolean(unknownBarcode)}
+        barcodeValue={unknownBarcode}
+        products={data.products}
+        shopId={getStoredShopId() || user.uid}
+        onClose={() => setUnknownBarcode('')}
+        onLinked={async (barcode) => {
+          selectBarcodeTarget(barcode)
+          notify('Barcode linked. You can continue adding stock without losing the form.')
+        }}
+        onCreateProduct={() => {
+          setUnknownBarcode('')
+          setStockDialogOpen(false)
+          navigate('products')
+        }}
+      />
 
       <Dialog open={Boolean(transferTarget)} onClose={() => setTransferTarget(null)} fullWidth maxWidth="sm">
         <DialogTitle>Transfer inventory</DialogTitle>

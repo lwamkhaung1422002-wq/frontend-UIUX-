@@ -10,6 +10,7 @@ export const routeLoaders = {
   customers: () => import('./pages/CustomersPage.jsx'),
   suppliers: () => import('./pages/SuppliersPage.jsx'),
   purchases: () => import('./pages/PurchasesPage.jsx'),
+  pricing: () => import('./pages/PricingPage.jsx'),
 }
 
 const preloadCache = new Map()

@@ -30,7 +30,7 @@ Generated: 2026-07-29 (Asia/Yangon)
 | Eight-store reconciliation | PASS | Eight stores passed; unexplained differences `0` |
 | Serious/critical Axe violations | PASS | `0` on login and authenticated critical workspaces |
 | Staging deployment/smoke | BLOCKED | No staging target or deployment credentials are configured in this workspace |
-| GitHub workflow publication | BLOCKED | OAuth token lacks GitHub `workflow` scope; the two local workflow files are therefore not present in the publication commit |
+| GitHub workflow publication | BLOCKED | Production-gate and staging-smoke workflow files are committed locally; the current GitHub credential is invalid, so commit publication remains blocked |
 | Backup restore drill | PASS | 18 migrations; 41 tables and 5,004 rows restored into a fresh isolated database; digest differences `0` |
 | Tenant query performance | PASS | Product/movement/order/purchase/lot queries completed in `0.36–9.24ms` against the seeded local dataset; `250ms` gate |
 | Screenshot evidence | PASS | 11 deterministic desktop/tablet/mobile and eight-template captures in `App/uat-evidence/screenshots` |
@@ -62,6 +62,8 @@ Deterministic stores:
 
 Seed data includes template capabilities, units, products/variants, opening inventory, purchases and receipts, partial payments, receivables/payables, expenses, returns/refunds/adjustments, low-stock data, lots/expiry, serial/IMEI/warranty, restaurant recipes/modifiers and wholesale tiers.
 
+The current local demo records are intentionally retained for owner inspection. The seed and UAT commands do not delete those stores or their transactions. They must only be removed after an explicit owner request.
+
 ## Functional scenario status
 
 | Scenario | Status | Coverage |
@@ -74,6 +76,8 @@ Seed data includes template capabilities, units, products/variants, opening inve
 | Cosmetics | PASS | Variants combined with lot/expiry tracking |
 | Online Restaurant | PASS | Delivery/pickup lifecycle, recipes, modifiers, reservation and atomic completion |
 | Wholesale | PASS | MOQ, customer group tiers, unit snapshots, partial payment and receivable |
+
+Independent real-API transaction UAT also passed for all eight stores. It created inspectable purchase receipts, partial supplier payments, sales/orders, customer payments, ledger movements and report entries. Online Restaurant has no supplier purchase in this scenario by design; its order lifecycle and atomic ingredient consumption passed.
 
 ## Inventory and finance integrity
 
@@ -110,7 +114,8 @@ Seed data includes template capabilities, units, products/variants, opening inve
 App: npm ci (isolated), npm run verify, npm run test:e2e, npm audit --audit-level=high
 API: npm ci (isolated), npm run build, npm run test:api, npx prisma validate,
      npx prisma migrate status, npm run inventory:reconcile, npm run db:backup:local,
-     npm run db:restore-drill:local, npm run performance:check, npm audit --audit-level=high
+     npm run db:restore-drill:local, npm run performance:check, npm run uat:eight-stores,
+     npm audit --audit-level=high
 Health: GET / and GET /health
 ```
 
@@ -129,6 +134,11 @@ Health: GET / and GET /health
 - Parallel browser workers could starve bcrypt/Prisma transactions on a small shared test database; the deterministic default is now one worker, with explicit opt-in parallelism for provisioned CI pools.
 - Registration template-default creation could exceed Prisma's default five-second interactive transaction budget under CI load; the atomic transaction now has bounded `maxWait`/`timeout` values.
 - Order and purchase compatibility columns silently constrained measured products to integers; additive exact-base columns, decimal-safe allocation logic and unit-aware UI controls now preserve fractional sales, receipts and returns.
+- Several template fixtures could not prove their specialized paths: lot stores used the compatibility `EXPIRY` label, Fashion/Cosmetics lacked variant balances, Restaurant ingredients lacked ledger stock, Wholesale customers lacked a price-group assignment, Pharmacy lacked an expired quarantine lot, and Electronics lacked a deterministic warranty. The non-destructive seed now creates all of these records.
+- The original eight-template browser test only switched stores and did not exercise transactions. `npm run uat:eight-stores` now executes independent purchase/sale/order/payment/inventory/report scenarios for all templates, including idempotent receipt replay, FEFO expiry rejection, exact variant/serial allocation, restaurant ingredient consumption and wholesale tier resolution.
+- Demo browser credentials used two historical environment-variable names, allowing the eight-store test to be skipped accidentally. The test now accepts both `E2E_DEMO_*` and `DEMO_OWNER_*` names.
+- The Restaurant ingredient assertion exposed harmless JavaScript display precision (`0.3500000000000014`); the UAT assertion now uses the same bounded decimal tolerance as the persisted three-decimal quantity policy. Persisted inventory reconciliation remained exact.
+- The final API audit detected one high `fast-uri` advisory and four moderate transitive Prisma-tooling advisories. A non-forced lockfile update patched the dependency graph; the subsequent audit reported `0` vulnerabilities and API typecheck/build/integration tests passed.
 
 ## Known limitations and production recommendation
 
@@ -136,7 +146,7 @@ Health: GET / and GET /health
 - Staff membership/roles and subscription/billing remain separate future releases.
 - Barcode and full restaurant POS (tables, waiters, dine-in, KDS) remain intentionally excluded.
 - Staging deployment/smoke is not evidenced because no staging target is configured.
-- The source release is on GitHub main, but publishing `.github/workflows/production-gate.yml` and `staging-smoke.yml` still requires a GitHub token with `workflow` scope.
+- The source release has a newer local commit containing `.github/workflows/production-gate.yml` and `staging-smoke.yml`; GitHub publication still requires restoring a valid credential with workflow permission.
 
 Production recommendation: **NO-GO (external release)** until staging deployment and smoke testing pass.
 Local implementation/UAT recommendation: **PASS** for continued staging preparation; no unexplained inventory differences, high/critical dependency advisories, or serious/critical Axe violations remain.

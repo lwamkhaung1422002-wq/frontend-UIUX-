@@ -97,6 +97,16 @@ async function main(): Promise<void> {
     },
   });
 
+  // These are shared with the POS demo: scanning the supplier barcode resolves this exact product.
+  await prisma.productBarcode.upsert({
+    where: { shopId_normalizedValue: { shopId: shop.id, normalizedValue: "8834000068683" } },
+    update: { productId: simpleProduct.id, value: "8834000068683", status: "ACTIVE", isPrimary: true },
+    create: {
+      shopId: shop.id, productId: simpleProduct.id, value: "8834000068683", normalizedValue: "8834000068683",
+      symbology: "CODE128", kind: "SUPPLIER", isPrimary: true,
+    },
+  });
+
   await prisma.inventoryBatch.deleteMany({
     where: { shopId: shop.id, note: { in: ["Seed stock", "Seed variant stock"] } },
   });

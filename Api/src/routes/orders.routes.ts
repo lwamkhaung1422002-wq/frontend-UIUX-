@@ -5,6 +5,7 @@ import { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
 import { recordInventoryMovement, setInventoryReservation } from "../lib/inventory-domain.js";
 import { prisma } from "../lib/prisma.js";
+import { resolvePrice } from "../lib/pricing-domain.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { assertCapability } from "../lib/store-capabilities.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
@@ -109,6 +110,16 @@ function badRequest(message: string): Error {
   return error;
 }
 
+ordersRouter.get("/:shopId/orders/next-number", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = paramsSchema.parse(request.params);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId }, select: { saleSequence: true } });
+    response.json({ orderNumber: String(shop.saleSequence + 1).padStart(5, "0") });
+  } catch (error) { next(error); }
+});
+
 function lineTotal(
   quantity: string | number | Prisma.Decimal,
   unitPrice: number,
@@ -183,7 +194,7 @@ function fefoEligibleBatches<T extends {
   unitCost: number;
   receivedAt: Date;
   createdAt: Date;
-  lots: Array<{ expiresAt: Date | null; status: string }>;
+  lots: Array<{ expiresAt: Date | null; status: string; quantity: unknown }>;
 }>(batches: T[], now = new Date()): T[] {
   return batches
     .filter((batch) => !batch.lots.some((lot) => lot.status === "ACTIVE" && lot.expiresAt && lot.expiresAt <= now))
@@ -234,9 +245,16 @@ async function reserveOrderInventory(
     for (const batch of batches) {
       if (!remaining.greaterThan("0.0005")) break;
 
-      const available = quantityDecimal(
+      const batchAvailable = quantityDecimal(
         batch.baseQuantity == null ? batch.quantity : String(batch.baseQuantity),
       ).minus(batch.reservedQuantity);
+      const lotAvailable = batch.lots.reduce(
+        (sum, lot) => sum.plus(quantityDecimal(String(lot.quantity))),
+        new Prisma.Decimal(0),
+      );
+      const available = item.product.trackingMode === "LOT"
+        ? Prisma.Decimal.min(batchAvailable, lotAvailable)
+        : batchAvailable;
       const take = Prisma.Decimal.min(available, remaining);
 
       if (!take.greaterThan(0)) continue;
@@ -538,23 +556,21 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
         const customer = customerId
           ? await tx.customer.findFirst({ where: { id: customerId, shopId }, select: { priceGroupId: true } })
           : null;
-        const eligibleTiers = product.priceTiers
-          .filter((tier) =>
-            quantityDecimal(tier.minimumQuantity).lessThanOrEqualTo(baseQuantity) &&
-            (!tier.variantId || tier.variantId === variant?.id) &&
-            (!tier.productUnitId || tier.productUnitId === productUnit?.id) &&
-            (!tier.priceGroupId || tier.priceGroupId === customer?.priceGroupId),
-          )
-          .sort((left, right) => {
-            const specificity = (tier: typeof left) =>
-              Number(Boolean(tier.priceGroupId)) * 4 + Number(Boolean(tier.productUnitId)) * 2 + Number(Boolean(tier.variantId));
-            return specificity(right) - specificity(left) ||
-              Number(right.minimumQuantity) - Number(left.minimumQuantity) ||
-              left.id.localeCompare(right.id);
-          });
-        const appliedTier = eligibleTiers[0] ?? null;
+        const manualDiscount = item.deductionType === "discount" ? item.discount ?? 0 : 0;
+        const pricing = await resolvePrice(tx, shopId, {
+          productId: product.id,
+          variantId: variant?.id,
+          productUnitId: productUnit?.id,
+          priceGroupId: customer?.priceGroupId,
+          quantity: baseQuantity,
+          channel: input.source?.toUpperCase() || "ALL",
+          manualDiscount,
+        });
+        const appliedTier = pricing.appliedTierId
+          ? product.priceTiers.find((tier) => tier.id === pricing.appliedTierId) ?? null
+          : null;
         const modifierPrice = selectedModifiers.reduce((sum, option) => sum + option.priceDelta, 0);
-        const unitPrice = (item.unitPrice ?? appliedTier?.unitPrice ?? variant?.price ?? product.price) + modifierPrice;
+        const unitPrice = pricing.finalUnitPrice + modifierPrice;
         const discount = item.discount ?? 0;
 
         preparedItems.push({
@@ -566,6 +582,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           conversionFactor,
           productUnit,
           appliedTier,
+          pricing,
           unitPrice,
           discount,
           deductionType: item.deductionType,
@@ -573,7 +590,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           lotOverride,
           lotOverrideReason: item.lotOverrideReason,
           selectedModifiers,
-          lineTotal: lineTotal(enteredQuantity, unitPrice, discount, item.deductionType),
+          lineTotal: lineTotal(enteredQuantity, unitPrice, 0, item.deductionType),
         });
       }
 
@@ -581,6 +598,12 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       const orderDiscount = Math.min(input.discount ?? 0, subtotal);
       const deliveryFee = input.deliveryFee ?? 0;
       const total = Math.max(0, subtotal - orderDiscount + deliveryFee);
+      const nextSequence = await tx.shop.update({
+        where: { id: shopId },
+        data: { saleSequence: { increment: 1 } },
+        select: { saleSequence: true },
+      });
+      const generatedOrderNumber = String(nextSequence.saleSequence).padStart(5, "0");
 
       const createdOrder = await tx.order.create({
         data: {
@@ -592,7 +615,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           fulfillmentStatus: input.fulfillmentStatus,
           paymentStatus: "unpaid",
           ...(customerId !== undefined ? { customerId } : {}),
-          ...(input.orderNumber !== undefined ? { orderNumber: input.orderNumber } : {}),
+          orderNumber: input.orderNumber || generatedOrderNumber,
           ...(input.source !== undefined ? { source: input.source } : {}),
           ...(input.note !== undefined ? { note: input.note } : {}),
         },
@@ -620,8 +643,15 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
         for (const batch of batches) {
           if (!remaining.greaterThan("0.0005")) break;
 
-          const available = quantityDecimal(batch.baseQuantity ?? batch.quantity)
+          const batchAvailable = quantityDecimal(batch.baseQuantity ?? batch.quantity)
             .minus(batch.reservedQuantity);
+          const lotAvailable = batch.lots.reduce(
+            (sum, lot) => sum.plus(quantityDecimal(String(lot.quantity))),
+            new Prisma.Decimal(0),
+          );
+          const available = prepared.product.trackingMode === "LOT"
+            ? Prisma.Decimal.min(batchAvailable, lotAvailable)
+            : batchAvailable;
           const take = Prisma.Decimal.min(available, remaining);
 
           if (!take.greaterThan(0)) continue;
@@ -669,20 +699,21 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
             ...(prepared.productUnit ? { unitId: prepared.productUnit.unitId } : {}),
             ...(prepared.appliedTier ? {
               appliedTierId: prepared.appliedTier.id,
-              pricingSnapshot: {
-                tierId: prepared.appliedTier.id,
-                minimumQuantity: String(prepared.appliedTier.minimumQuantity),
-                unitPrice: prepared.appliedTier.unitPrice,
-                priceGroupId: prepared.appliedTier.priceGroupId,
-                productUnitId: prepared.appliedTier.productUnitId,
-                variantId: prepared.appliedTier.variantId,
-              },
-            } : {
-              pricingSnapshot: {
-                tierId: null, unitPrice: prepared.unitPrice,
-                productUnitId: prepared.productUnit?.id ?? null,
-              },
-            }),
+            } : {}),
+            pricingSnapshot: {
+              ...prepared.pricing,
+              priceResolvedAt: prepared.pricing.priceResolvedAt.toISOString(),
+              productUnitId: prepared.productUnit?.id ?? null,
+            },
+            regularUnitPrice: prepared.pricing.regularUnitPrice,
+            tierUnitPrice: prepared.pricing.tierUnitPrice,
+            promotionId: prepared.pricing.promotionId,
+            promotionType: prepared.pricing.promotionType,
+            promotionValue: prepared.pricing.promotionValue,
+            promotionDiscount: prepared.pricing.promotionDiscount,
+            manualDiscount: prepared.pricing.manualDiscount,
+            finalUnitPrice: prepared.unitPrice,
+            priceResolvedAt: prepared.pricing.priceResolvedAt,
             unitPrice: prepared.unitPrice,
             unitCost,
             discount: prepared.discount,
@@ -892,34 +923,46 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
             quantity: storedItemBaseQuantity(item).toString(), release: true,
           });
           for (const allocation of item.allocations) {
-            const lot = await tx.inventoryLot.findFirst({
+            const lots = await tx.inventoryLot.findMany({
               where: { inventoryBatchId: allocation.inventoryBatchId, status: "ACTIVE" },
               orderBy: [{ expiresAt: "asc" }, { receivedAt: "asc" }],
             });
-            if (lot) {
-              const allocationQuantity = storedAllocationBaseQuantity(allocation);
-              const remainingLot = quantityDecimal(lot.quantity).minus(allocationQuantity);
-              if (remainingLot.isNegative()) throw badRequest("Lot balance is lower than the reserved sale allocation.");
-              await tx.inventoryLot.update({
-                where: { id: lot.id },
-                data: {
-                  quantity: remainingLot.toString(),
-                  ...(remainingLot.isZero() ? { status: "DEPLETED" } : {}),
-                },
+            let remainingAllocation = storedAllocationBaseQuantity(allocation);
+            if (lots.length) {
+              for (const lot of lots) {
+                if (!remainingAllocation.greaterThan("0.0005")) break;
+                const take = Prisma.Decimal.min(quantityDecimal(lot.quantity), remainingAllocation);
+                if (!take.greaterThan(0)) continue;
+                const remainingLot = quantityDecimal(lot.quantity).minus(take);
+                await tx.inventoryLot.update({
+                  where: { id: lot.id },
+                  data: { quantity: remainingLot.toString(), ...(remainingLot.isZero() ? { status: "DEPLETED" } : {}) },
+                });
+                await recordInventoryMovement(tx, {
+                  shopId, productId: item.productId, variantId: item.variantId,
+                  inventoryBatchId: allocation.inventoryBatchId, lotId: lot.id,
+                  type: "SALE", direction: "OUT", quantity: take.toString(),
+                  unitCost: allocation.unitCost, sourceType: "OrderItemAllocation", sourceId: `${allocation.id}:${lot.id}`,
+                  idempotencyKey: request.header("Idempotency-Key")
+                    ? `${request.header("Idempotency-Key")}:sale:${allocation.id}:${lot.id}`
+                    : `sale:${allocation.id}:${lot.id}`,
+                  occurredAt: updatedOrder.completedAt ?? new Date(),
+                });
+                remainingAllocation = remainingAllocation.minus(take);
+              }
+              if (remainingAllocation.greaterThan("0.0005")) throw badRequest("Lot balance is lower than the reserved sale allocation.");
+            } else {
+              await recordInventoryMovement(tx, {
+                shopId, productId: item.productId, variantId: item.variantId,
+                inventoryBatchId: allocation.inventoryBatchId,
+                type: "SALE", direction: "OUT", quantity: remainingAllocation.toString(),
+                unitCost: allocation.unitCost, sourceType: "OrderItemAllocation", sourceId: allocation.id,
+                idempotencyKey: request.header("Idempotency-Key")
+                  ? `${request.header("Idempotency-Key")}:sale:${allocation.id}`
+                  : `sale:${allocation.id}`,
+                occurredAt: updatedOrder.completedAt ?? new Date(),
               });
             }
-            await recordInventoryMovement(tx, {
-              shopId, productId: item.productId, variantId: item.variantId,
-              inventoryBatchId: allocation.inventoryBatchId,
-              type: "SALE", direction: "OUT",
-              quantity: storedAllocationBaseQuantity(allocation).toString(),
-              unitCost: allocation.unitCost, sourceType: "OrderItemAllocation", sourceId: allocation.id,
-              idempotencyKey: request.header("Idempotency-Key")
-                ? `${request.header("Idempotency-Key")}:sale:${allocation.id}`
-                : `sale:${allocation.id}`,
-              occurredAt: updatedOrder.completedAt ?? new Date(),
-              ...(lot ? { lotId: lot.id } : {}),
-            });
           }
           if (item.serialAllocations.length) {
             await tx.inventorySerial.updateMany({

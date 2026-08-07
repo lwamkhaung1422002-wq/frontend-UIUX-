@@ -1,0 +1,172 @@
+import { Prisma } from "../generated/prisma/client.js";
+
+type DbClient = Prisma.TransactionClient;
+
+export function priceTargetKey(productId: string, variantId?: string | null, productUnitId?: string | null): string {
+  return `${productId}:${variantId ?? "*"}:${productUnitId ?? "*"}`;
+}
+
+export function promotionTargetKey(input: {
+  productId: string;
+  variantId?: string | null | undefined;
+  productUnitId?: string | null | undefined;
+  priceGroupId?: string | null | undefined;
+  channel?: string | null | undefined;
+}): string {
+  return `${priceTargetKey(input.productId, input.variantId, input.productUnitId)}:${input.priceGroupId ?? "*"}:${input.channel ?? "ALL"}`;
+}
+
+export function effectivePromotionState(promotion: { state: string; startsAt: Date; endsAt: Date }, at = new Date()): string {
+  if (["DRAFT", "PAUSED", "CANCELLED"].includes(promotion.state)) return promotion.state;
+  if (promotion.endsAt <= at) return "ENDED";
+  if (promotion.startsAt > at) return "SCHEDULED";
+  return "RUNNING";
+}
+
+export async function assertPricingTarget(
+  tx: DbClient,
+  shopId: string,
+  input: { productId: string; variantId?: string | null | undefined; productUnitId?: string | null | undefined; priceGroupId?: string | null | undefined },
+) {
+  const product = await tx.product.findFirst({
+    where: { id: input.productId, shopId },
+    include: { variants: true, units: { include: { unit: true } } },
+  });
+  if (!product) throw Object.assign(new Error("Product not found."), { name: "NotFoundError" });
+  const variant = input.variantId ? product.variants.find((item) => item.id === input.variantId) : null;
+  if (input.variantId && !variant) throw Object.assign(new Error("Variant not found."), { name: "NotFoundError" });
+  const productUnit = input.productUnitId ? product.units.find((item) => item.id === input.productUnitId) : null;
+  if (input.productUnitId && !productUnit) throw Object.assign(new Error("Product unit not found."), { name: "NotFoundError" });
+  if (input.priceGroupId && !await tx.customerPriceGroup.findFirst({ where: { id: input.priceGroupId, shopId } })) {
+    throw Object.assign(new Error("Customer price group not found."), { name: "NotFoundError" });
+  }
+  return { product, variant, productUnit };
+}
+
+export async function ensureDefaultPriceBook(tx: DbClient, shopId: string) {
+  const existing = await tx.priceBook.findFirst({ where: { shopId, isDefault: true, isActive: true } });
+  if (existing) return existing;
+  const setting = await tx.shopSetting.findUnique({ where: { shopId }, select: { currencyCode: true } });
+  return tx.priceBook.upsert({
+    where: { shopId_name: { shopId, name: "Default" } },
+    update: { isDefault: true, isActive: true },
+    create: { shopId, name: "Default", currencyCode: setting?.currencyCode ?? "MMK", isDefault: true },
+  });
+}
+
+function roundMoney(value: Prisma.Decimal): number {
+  return Number(value.toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString());
+}
+
+export async function resolvePrice(
+  tx: DbClient,
+  shopId: string,
+  input: {
+    productId: string;
+    variantId?: string | null | undefined;
+    productUnitId?: string | null | undefined;
+    priceGroupId?: string | null | undefined;
+    quantity: Prisma.Decimal;
+    channel?: string | undefined;
+    manualDiscount?: number | undefined;
+    at?: Date | undefined;
+  },
+) {
+  const { product, variant, productUnit } = await assertPricingTarget(tx, shopId, input);
+  const at = input.at ?? new Date();
+  const targetKeys = [
+    priceTargetKey(product.id, variant?.id, productUnit?.id),
+    priceTargetKey(product.id, variant?.id, null),
+    priceTargetKey(product.id, null, productUnit?.id),
+    priceTargetKey(product.id, null, null),
+  ];
+  const entry = await tx.priceEntry.findFirst({
+    where: {
+      shopId,
+      targetKey: { in: targetKeys },
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      status: { not: "CANCELLED" },
+    },
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+  });
+  const conversionFactor = productUnit?.conversionFactor ?? new Prisma.Decimal(1);
+  const entryIsUnitSpecific = Boolean(entry?.productUnitId);
+  const baseRegularPrice = entry?.unitPrice ?? variant?.price ?? product.price;
+  const regularUnitPrice = entryIsUnitSpecific || !productUnit
+    ? baseRegularPrice
+    : roundMoney(new Prisma.Decimal(baseRegularPrice).mul(conversionFactor));
+  const tiers = await tx.priceTier.findMany({
+    where: {
+      productId: product.id,
+      OR: [{ variantId: variant?.id ?? null }, { variantId: null }],
+      AND: [
+        { OR: [{ productUnitId: productUnit?.id ?? null }, { productUnitId: null }] },
+        { OR: [{ priceGroupId: input.priceGroupId ?? null }, { priceGroupId: null }] },
+        { minimumQuantity: { lte: input.quantity } },
+      ],
+    },
+  });
+  const tier = tiers.sort((a, b) => {
+    const specificityA = Number(Boolean(a.variantId)) + Number(Boolean(a.productUnitId)) + Number(Boolean(a.priceGroupId));
+    const specificityB = Number(Boolean(b.variantId)) + Number(Boolean(b.productUnitId)) + Number(Boolean(b.priceGroupId));
+    if (specificityA !== specificityB) return specificityB - specificityA;
+    return Number(b.minimumQuantity.minus(a.minimumQuantity).toString());
+  })[0] ?? null;
+  const tierUnitPrice = tier?.unitPrice ?? null;
+  const promotionBaseDefault = tierUnitPrice ?? regularUnitPrice;
+  const channel = input.channel ?? "ALL";
+  const promotionKeys = [
+    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: input.priceGroupId, channel }),
+    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: null, channel }),
+    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: input.priceGroupId, channel: "ALL" }),
+    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: null, channel: "ALL" }),
+    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: null, priceGroupId: input.priceGroupId, channel: "ALL" }),
+    promotionTargetKey({ productId: product.id, variantId: null, productUnitId: null, priceGroupId: null, channel: "ALL" }),
+  ];
+  const promotions = await tx.promotion.findMany({
+    where: {
+      shopId,
+      targetKey: { in: promotionKeys },
+      startsAt: { lte: at },
+      endsAt: { gt: at },
+      state: { in: ["SCHEDULED", "RUNNING"] },
+      minimumQuantity: { lte: input.quantity },
+    },
+    orderBy: [{ priority: "desc" }, { startsAt: "desc" }],
+  });
+  const promotion = promotions[0] ?? null;
+  const promotionBase = promotion?.discountBase === "REGULAR_PRICE" ? regularUnitPrice : promotionBaseDefault;
+  let promotionDiscount = 0;
+  if (promotion?.type === "FIXED_PRICE") {
+    const fixedPrice = productUnit && !promotion.productUnitId
+      ? roundMoney(promotion.value.mul(conversionFactor))
+      : roundMoney(promotion.value);
+    promotionDiscount = Math.max(0, promotionBase - fixedPrice);
+  }
+  if (promotion?.type === "PERCENTAGE") {
+    promotionDiscount = Math.min(promotionBase, roundMoney(new Prisma.Decimal(promotionBase).mul(promotion.value).div(100)));
+  }
+  const afterPromotion = Math.max(0, promotionBaseDefault - promotionDiscount);
+  const manualDiscount = Math.max(0, Math.trunc(input.manualDiscount ?? 0));
+  if (manualDiscount > afterPromotion) {
+    throw Object.assign(new Error("Manual discount cannot exceed the resolved price."), { name: "BadRequestError" });
+  }
+  const finalUnitPrice = afterPromotion - manualDiscount;
+  return {
+    regularUnitPrice,
+    tierUnitPrice,
+    appliedTierId: tier?.id ?? null,
+    promotionId: promotion?.id ?? null,
+    promotionName: promotion?.name ?? null,
+    promotionType: promotion?.type ?? null,
+    promotionValue: promotion?.value?.toString() ?? null,
+    promotionMinimumQuantity: promotion?.minimumQuantity?.toString() ?? null,
+    promotionDiscount,
+    manualDiscount,
+    finalUnitPrice,
+    priceEntryId: entry?.id ?? null,
+    priceResolvedAt: at,
+    currencyCode: entry?.currencyCode ?? "MMK",
+  };
+}

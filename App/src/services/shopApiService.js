@@ -27,6 +27,7 @@ export const emptyData = {
   categories: [],
   customers: [],
   suppliers: [],
+  productSuppliers: [],
   purchases: [],
   dashboard: null,
   storeConfiguration: null,
@@ -39,6 +40,53 @@ export const emptyData = {
     warranties: [],
     recipes: [],
     priceGroups: [],
+}
+
+const previewToday = new Date().toISOString().slice(0, 10)
+
+// Temporary no-login test store. It deliberately mirrors the same product/barcode/stock data
+// used by the inventory examples; authenticated shops always load from PostgreSQL instead.
+export const previewDemoData = {
+  ...emptyData,
+  categories: [
+    { id: 'demo-cat-beauty', name: 'အလှကုန်' },
+    { id: 'demo-cat-drink', name: 'အအေး' },
+    { id: 'demo-cat-general', name: 'အထွေထွေ' },
+  ],
+  products: [
+    // The no-login POS uses the exact same four product demos displayed on the
+    // product page. The four-digit product code is also the scan value.
+    { id: 'demo-jasmine', sku: '1001', name: 'Jasmine အနံ့ဆီ', categoryId: 'demo-cat-beauty', price: 3500, cost: 2900, isActive: true, quantity: 68, barcodes: [{ value: '1001' }] },
+    { id: 'demo-nivea', sku: '1002', name: 'Nivea Roll on', categoryId: 'demo-cat-beauty', price: 6500, cost: 5800, isActive: true, quantity: 29, previewPromotion: { name: 'အလှကုန် အထူးလျှော့စျေး', type: 'PERCENTAGE', value: 10, minQuantity: 1, startsAt: '2026-01-01', endsAt: '2026-12-31', conditionLabel: 'Nivea Roll on အတွက် သတ်မှတ်ထားသော ပရိုမိုးရှင်းနှင့် ကိုက်ညီသည်' }, barcodes: [{ value: '1002' }] },
+    { id: 'demo-coke', sku: '1228', name: 'Coca-Cola 330ml', categoryId: 'demo-cat-drink', price: 1000, cost: 800, isActive: true, quantity: 20, barcodes: [{ value: '1228' }] },
+    { id: 'demo-betel', sku: '1004', name: 'ကွမ်းယာ', categoryId: 'demo-cat-general', price: 5000, cost: 4300, isActive: true, quantity: 2, barcodes: [{ value: '1004' }] },
+  ],
+  stocks: [
+    { id: 'demo-stock-jasmine', productId: 'demo-jasmine', quantity: 68, unitCost: 2900, price: 3500 },
+    { id: 'demo-stock-nivea', productId: 'demo-nivea', quantity: 29, unitCost: 5800, price: 6500 },
+    { id: 'demo-stock-coke', productId: 'demo-coke', quantity: 20, unitCost: 800, price: 1000 },
+    { id: 'demo-stock-betel', productId: 'demo-betel', quantity: 2, unitCost: 4300, price: 5000 },
+  ],
+  suppliers: [{ id: 'demo-supplier-pahtama', name: 'Pahtama Group', phone: '09666655928' }],
+  orders: [
+    {
+      id: 'demo-sale-9855', orderNumber: '9855', date: previewToday, createdAt: `${previewToday}T20:30:00+06:30`, completedAt: `${previewToday}T20:30:00+06:30`,
+      customer: { name: 'လမ်းလျှောက်ဝယ်သူ' }, fulfillmentStatus: 'completed', paymentStatus: 'paid', paidAmount: 180000, balanceDue: 0,
+      subtotal: 180000, discount: 0, deliveryFee: 0, total: 180000, source: 'Preview POS',
+      items: [
+        { id: 'demo-sale-9855-jasmine', productId: 'demo-jasmine', type: 'Jasmine အနံ့ဆီ', quantity: 36, unitPrice: 3500, lineTotal: 126000 },
+        { id: 'demo-sale-9855-nivea', productId: 'demo-nivea', type: 'Nivea Roll on', quantity: 8, unitPrice: 6500, lineTotal: 52000 },
+        { id: 'demo-sale-9855-coke', productId: 'demo-coke', type: 'Coca-Cola 330ml', quantity: 2, unitPrice: 1000, lineTotal: 2000 },
+      ],
+    },
+    {
+      id: 'demo-sale-3695', orderNumber: '3695', date: previewToday, createdAt: `${previewToday}T15:30:00+06:30`, completedAt: `${previewToday}T15:30:00+06:30`,
+      customer: { name: 'ဒေါ်မိုး' }, fulfillmentStatus: 'completed', paymentStatus: 'unpaid', paidAmount: 0, balanceDue: 10000,
+      subtotal: 10000, discount: 0, deliveryFee: 0, total: 10000, source: 'Preview POS',
+      items: [{ id: 'demo-sale-3695-betel', productId: 'demo-betel', type: 'ကွမ်းယာ', quantity: 2, unitPrice: 5000, lineTotal: 10000 }],
+    },
+  ],
+  dashboard: { summary: { revenue: 190000, profit: 62450, cashBalance: 32450, categoriesCount: 3, stockUnits: 119, lowStockCount: 1, expenses: 15000 }, lowStock: [], upcomingPayables: [], recentSales: [] },
 }
 
 function shopIdFrom(uid) {
@@ -163,6 +211,7 @@ function mapOrder(order, payments = []) {
 
   return {
     id: String(order.id),
+    orderNumber: order.orderNumber || '',
     customer: {
       name: order.customer?.name || '',
       phone: order.customer?.phone || '',
@@ -183,6 +232,10 @@ function mapOrder(order, payments = []) {
       unitPrice: Number(item.baseUnitPrice ?? item.unitPrice ?? 0),
       unitCost: Number(item.unitCost || 0),
       discount: Number(item.discount || 0),
+      promotionId: item.promotionId || '',
+      promotionName: item.pricingSnapshot?.promotionName || '',
+      promotionDiscount: Number(item.promotionDiscount || 0),
+      regularUnitPrice: Number(item.regularUnitPrice ?? item.unitPrice ?? 0),
       deductionType: item.deductionType === 'advance-payment' ? 'advance-payment' : 'discount',
       lineTotal: Number(item.lineTotal || 0),
       allocations: (item.allocations || []).map((allocation) => ({
@@ -213,6 +266,7 @@ function mapOrder(order, payments = []) {
     advancedPaymentAmount,
     fulfillmentStatus: order.fulfillmentStatus || 'reserved',
     paymentStatus: order.paymentStatus || 'unpaid',
+    paymentMethod: payment?.method || '',
     source: order.source || '',
     remark: order.note || '',
     paymentId: payment?.id || null,
@@ -274,6 +328,7 @@ async function loadUserData(uid) {
     customersResult,
     settingsResult,
     suppliersResult,
+    productSuppliersResult,
     purchasesResult,
     configurationResult,
     unitsResult,
@@ -297,6 +352,7 @@ async function loadUserData(uid) {
     api.customers(shopId).catch(() => ({ customers: [] })),
     api.shopSettings(shopId).catch(() => ({ settings: normalizeCatalogSettings() })),
     api.suppliers(shopId).catch(() => ({ suppliers: [] })),
+    api.productSuppliers(shopId).catch(() => ({ productSuppliers: [] })),
     api.purchases(shopId).catch(() => ({ purchases: [] })),
     api.storeConfiguration(shopId).catch(() => ({ configuration: null })),
     api.units(shopId).catch(() => ({ units: [] })),
@@ -357,6 +413,7 @@ async function loadUserData(uid) {
     customers: customersResult.customers || [],
     dashboard: dashboardResult.summary || dashboardResult,
     suppliers: suppliersResult.suppliers || [],
+    productSuppliers: productSuppliersResult.productSuppliers || [],
     purchases: purchasesResult.purchases || [],
     storeConfiguration: configurationResult.configuration || null,
     units: unitsResult.units || [],
@@ -515,6 +572,8 @@ export async function createCustomerDocument(uid, customer) {
 
 export const createSupplierDocument = (uid, supplier) =>
   api.createSupplier(shopIdFrom(uid), supplier)
+export const saveProductSupplierDocument = (uid, productSupplier) =>
+  api.saveProductSupplier(shopIdFrom(uid), productSupplier)
 export const createPurchaseDocument = (uid, purchase) =>
   api.createPurchase(shopIdFrom(uid), purchase)
 export const sendPurchaseDocument = (uid, purchaseId) =>
