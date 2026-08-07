@@ -109,7 +109,7 @@ export default function HomePage({ navigate }) {
             {user?.shop?.name || "ကျွန်ုပ်၏ဆိုင်"}
           </Typography>
         </Box>
-        <Stack direction="row" spacing={0.5} alignItems="center">
+        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
           <TextField
             className="dashboard-date-picker"
             type="date"
@@ -252,7 +252,7 @@ export default function HomePage({ navigate }) {
                   {sale.customerName}
                 </Typography>
               </Box>
-              <Stack alignItems="flex-end" spacing={0.25}>
+              <Stack spacing={0.25} sx={{ alignItems: 'flex-end' }}>
                 <Typography fontWeight={900}>{kyat(sale.amount)}</Typography>
                 <Chip
                   size="small"
@@ -292,7 +292,7 @@ function DashboardSection({ title, icon, action, children }) {
   return (
     <Card className="dashboard-section" elevation={0}>
       <Box className="dashboard-section-heading">
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <Box className="dashboard-section-icon">{icon}</Box>
           <Typography variant="h6">{title}</Typography>
         </Stack>
