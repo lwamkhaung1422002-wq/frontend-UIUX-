@@ -14,7 +14,8 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --font-myanmar: "Noto Sans Myanmar", Roboto, Arial, sans-serif;
+  --font-myanmar: "Noto Sans Myanmar", Inter, Roboto, Arial, sans-serif;
+  --font-numeric: Inter, "Noto Sans Myanmar", sans-serif;
 }
 
 html[data-color-mode='dark'] {

@@ -18,7 +18,7 @@ export function createAppTheme(mode) {
     },
     shape: { borderRadius: 10 },
     typography: {
-      fontFamily: '"Noto Sans Myanmar", Roboto, Arial, sans-serif',
+      fontFamily: '"Noto Sans Myanmar", Inter, Roboto, Arial, sans-serif',
       h5: { fontWeight: 750, letterSpacing: '-0.025em' },
       h6: { fontWeight: 700, letterSpacing: 0 },
       button: { fontWeight: 700, textTransform: 'none', letterSpacing: 0 },

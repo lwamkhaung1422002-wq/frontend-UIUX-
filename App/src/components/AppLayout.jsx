@@ -54,12 +54,6 @@ const navItems = [
   { key: 'purchases', label: 'ကုန်ပစ္စည်းအဝယ်စာရင်း', icon: <LocalShippingRoundedIcon /> },
 ]
 
-const navGroupByKey = {
-  home: 'ရောင်းချမှု', order: 'ရောင်းချမှု', sales: 'ရောင်းချမှု',
-  products: 'ကုန်ပစ္စည်း', suppliers: 'ကုန်ပစ္စည်း', purchases: 'ကုန်ပစ္စည်း', pricing: 'ကုန်ပစ္စည်း',
-  finance: 'ငွေကြေး', balance: 'ငွေကြေး',
-}
-
 export default function AppLayout({
   page,
   onNavigate,
@@ -93,15 +87,10 @@ export default function AppLayout({
   }
 
   const navList = (items, compact = false) => {
-    let lastGroup = ''
     return (
       <List component="nav" className={desktop ? 'prototype-side-nav' : 'prototype-drawer-nav'} sx={{ px: compact ? 0 : 0.25, py: compact ? 0 : 0.5 }}>
         {items.map((item) => {
-          const group = navGroupByKey[item.key]
-          const showTitle = group && group !== lastGroup
-          lastGroup = group
           return <Box key={item.key}>
-            {showTitle ? <Typography className="prototype-nav-title">{group}</Typography> : null}
             <ListItemButton
               selected={page === item.key}
               onClick={() => navigate(item.key)}
@@ -183,7 +172,7 @@ export default function AppLayout({
         position="fixed"
         color="inherit"
         elevation={0}
-        className="mobile-first-appbar"
+        className={`mobile-first-appbar ${page === 'home' ? 'dashboard-appbar' : ''}`}
         sx={{
           borderBottom: '1px solid',
           borderColor: 'divider',
@@ -195,7 +184,7 @@ export default function AppLayout({
           {!desktop ? <IconButton aria-label="မီနူးဖွင့်ရန်" onClick={() => setMobileOpen(true)} edge="start">
             <MenuRoundedIcon />
           </IconButton> : null}
-          <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Box className="appbar-page-heading" sx={{ flexGrow: 1, minWidth: 0 }}>
             <Typography variant="h6" noWrap sx={{ lineHeight: 1.2, fontWeight: 850 }}>
               {headerTitle}
             </Typography>

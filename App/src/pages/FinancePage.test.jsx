@@ -20,7 +20,7 @@ describe('Finance dashboard', () => {
   it('renders finance metrics and customer-credit receiving action', () => {
     responsive.mobile = false
     const html = renderToStaticMarkup(<FinancePage refresh={vi.fn()} />)
-    expect(html).toContain('45,000 Ks')
+    expect(html).toContain('45,000 ကျပ်')
     expect(html).toContain('finance-summary-grid')
     expect(html).toContain('အမျိုးအစား / အမည် / ဘောက်ချာ')
     expect(html).toContain('လုပ်ဆောင်ချက်')

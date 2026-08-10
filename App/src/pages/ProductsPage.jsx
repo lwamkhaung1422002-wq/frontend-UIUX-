@@ -32,6 +32,14 @@ const initialProducts = [
   { id: 2, name: 'Nivea Roll on', category: 'အလှကုန်', supplier: 'Pahtama Group', sku: '1002', price: 6500, cost: 5800, quantity: 29 },
   { id: 3, name: 'Coca-Cola 330ml', category: 'အအေး', supplier: 'Unilever', sku: '1228', price: 1000, cost: 800, quantity: 20 },
   { id: 4, name: 'ကွမ်းယာ', category: 'အထွေထွေ', supplier: 'Pahtama Group', sku: '1004', price: 5000, cost: 4300, quantity: 2 },
+  { id: 5, name: 'Premium Coffee Beans', category: 'စားသောက်ကုန်', supplier: 'Pahtama Group', sku: '1029', price: 13000, cost: 9800, quantity: 15 },
+  { id: 6, name: 'Organic Green Tea', category: 'စားသောက်ကုန်', supplier: 'Pahtama Group', sku: '1033', price: 4500, cost: 3200, quantity: 5 },
+  { id: 7, name: 'Almond Milk 1L', category: 'အအေး', supplier: 'Unilever', sku: '1045', price: 9600, cost: 7500, quantity: 0 },
+  { id: 8, name: 'Sunlight Lemon 400ml', category: 'လူသုံးကုန်', supplier: 'Unilever', sku: '3012', price: 1500, cost: 1200, quantity: 115 },
+  { id: 9, name: 'Mama Noodles Cup', category: 'စားသောက်ကုန်', supplier: 'Pahtama Group', sku: '4008', price: 1200, cost: 900, quantity: 5 },
+  { id: 10, name: 'Paper Cups', category: 'လူသုံးကုန်', supplier: 'Pahtama Group', sku: '4012', price: 3000, cost: 2200, quantity: 120 },
+  { id: 11, name: 'Shwe Phi Oo Tea', category: 'စားသောက်ကုန်', supplier: 'Pahtama Group', sku: '5001', price: 7200, cost: 5400, quantity: 5 },
+  { id: 12, name: 'Pure Cooking Oil 1L', category: 'လူသုံးကုန်', supplier: 'Unilever', sku: '5004', price: 8200, cost: 6500, quantity: 0 },
 ]
 
 const emptyProductDraft = { name: '', category: '', supplier: '', sku: '', voucher: '', price: '', cost: '', quantity: '' }
@@ -41,10 +49,11 @@ const nowLabel = () => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', ti
 
 export default function ProductsPage() {
   // Versioned key resets the old, mismatched browser demo state to this purchase-consistent set.
-  const [products, setProducts] = useSessionState('products:demo-items:v2', initialProducts)
-  const [categories, setCategories] = useSessionState('products:demo-categories', ['အလှကုန်', 'အအေး', 'အထွေထွေ'])
+  const [products, setProducts] = useSessionState('products:demo-items:v3', initialProducts)
+  const [categories, setCategories] = useSessionState('products:demo-categories:v3', ['အလှကုန်', 'အအေး', 'အထွေထွေ', 'စားသောက်ကုန်', 'လူသုံးကုန်'])
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('အားလုံး')
+  const [stockFilter, setStockFilter] = useState('all')
   const [stockDraft, setStockDraft] = useState(null)
   const [productDraft, setProductDraft] = useState(null)
   const [quantityEditDraft, setQuantityEditDraft] = useState(null)
@@ -71,9 +80,11 @@ export default function ProductsPage() {
     const keyword = query.trim().toLowerCase()
     return (!keyword || `${product.name} ${product.sku}`.toLowerCase().includes(keyword))
       && (category === 'အားလုံး' || product.category === category)
-  }), [products, query, category])
+      && (stockFilter !== 'low' || Number(product.quantity || 0) <= 5)
+  }), [products, query, category, stockFilter])
   const totalValue = products.reduce((total, product) => total + product.quantity * product.cost, 0)
   const totalQuantity = products.reduce((total, product) => total + product.quantity, 0)
+  const lowStockCount = products.filter((product) => Number(product.quantity || 0) <= 5).length
   const duplicateProductName = productDraft?.name && products.some((product) => product.id !== productDraft.id && product.name.trim().toLowerCase() === productDraft.name.trim().toLowerCase())
   const duplicateProductCode = productDraft?.sku && products.some((product) => product.id !== productDraft.id && product.sku === productDraft.sku)
   const invalidProductCode = productDraft?.sku && !/^\d{4}$/.test(productDraft.sku)
@@ -154,13 +165,16 @@ export default function ProductsPage() {
 
   return (
     <Box className="page-stack products-page">
-      <Box className="product-overview-card">
-        <Box>
-          <Typography variant="body2" color="text.secondary">လက်ကျန်ဝယ်တန်ဖိုး</Typography>
-          <Typography variant="h4">{money(totalValue)}</Typography>
-          <Typography variant="body2" color="text.secondary">ကုန်ပစ္စည်း {products.length} မျိုး · လက်ကျန် {totalQuantity}</Typography>
-        </Box>
-        <Box className="product-overview-icon"><Inventory2RoundedIcon /></Box>
+      <Box className="products-summary-grid">
+        <Box className="products-summary-card is-value"><Box className="products-summary-icon"><Inventory2RoundedIcon /></Box><Box><Typography>ကုန်ပစ္စည်းတန်ဖိုး</Typography><Typography component="strong">{money(totalValue)}</Typography></Box></Box>
+        <Box className="products-summary-card is-category"><Box className="products-summary-icon"><SettingsSuggestRoundedIcon /></Box><Box><Typography>အမျိုးအစား</Typography><Typography component="strong">{categories.length} မျိုး</Typography></Box></Box>
+        <Box className="products-summary-card is-quantity"><Box className="products-summary-icon"><Inventory2RoundedIcon /></Box><Box><Typography>ကုန်ပစ္စည်းအရေအတွက်</Typography><Typography component="strong">{totalQuantity} ခု</Typography></Box></Box>
+        <Box className="products-summary-card is-low"><Box className="products-summary-icon"><MoreHorizRoundedIcon /></Box><Box><Typography>လက်ကျန်နည်း</Typography><Typography component="strong">{lowStockCount} ခု</Typography></Box></Box>
+      </Box>
+
+      <Box className="products-status-tabs" role="tablist">
+        <Button role="tab" className={stockFilter === 'all' ? 'is-active' : ''} onClick={() => setStockFilter('all')}>အားလုံး ({products.length})</Button>
+        <Button role="tab" className={stockFilter === 'low' ? 'is-active' : ''} onClick={() => setStockFilter('low')}>လက်ကျန်နည်း ({lowStockCount})</Button>
       </Box>
 
       <Box className="products-toolbar">

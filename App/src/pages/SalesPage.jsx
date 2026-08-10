@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  Divider, IconButton, Paper, Stack, Table, TableBody, TableCell, TableContainer,
+  IconButton, Paper, Stack, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography, useMediaQuery,
 } from '@mui/material'
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded'
@@ -138,16 +138,10 @@ export default function SalesPage() {
 
     <Paper className="sales-list" variant="outlined" component="section" aria-label="အရောင်းစာရင်း">
       {filtered.length ? mobile ? <Box className="sales-mobile-list">
-        {filtered.map((order, index) => <Box className="sales-mobile-row" key={order.id}>
-          {index > 0 ? <Divider /> : null}
+        {filtered.map((order) => <Box className="sales-mobile-row" key={order.id}>
           <Box className="sales-mobile-entry">
-            <Typography className="sales-sequence">{index + 1}</Typography>
-            <Typography className="sales-invoice-number">({receiptNumber(order)})</Typography>
-            <Typography className="sales-row-date">{orderDate(order)}</Typography>
-            <Typography className="sales-row-time">{orderTime(order)}</Typography>
-            <Typography fontWeight={900}>{money(order.total)}</Typography>
-            <Chip size="small" color={isCredit(order) ? 'warning' : 'success'} label={isCredit(order) ? 'အကြွေး' : 'ငွေရှင်းပြီး'} />
-            <OrderActions order={order} onDetails={setDetails} onPrint={printReport} />
+            <Box className="sales-mobile-entry-top"><Box><Typography className="sales-invoice-number">({receiptNumber(order)})</Typography><Typography className="sales-row-date">{orderDate(order)} · {orderTime(order)}</Typography></Box><Typography className="sales-mobile-amount">{money(order.total)}</Typography></Box>
+            <Box className="sales-mobile-entry-bottom"><Chip size="small" color={isCredit(order) ? 'warning' : 'success'} label={isCredit(order) ? 'အကြွေး' : 'ငွေရှင်းပြီး'} /><OrderActions order={order} onDetails={setDetails} onPrint={printReport} /></Box>
           </Box>
         </Box>)}
       </Box> : <TableContainer>

@@ -7,7 +7,7 @@ afterEach(() => setStoreFormatPreferences(defaultStoreFormatPreferences))
 
 describe('store-aware formatting', () => {
   it.each([
-    ['MMK', 'en-MM', /Ks\s?12,500|12,500\s?Ks/],
+    ['MMK', 'en-MM', /12,500\s?ကျပ်/],
     ['USD', 'en-US', /\$12,500\.00/],
     ['THB', 'th-TH', /฿12,500\.00/],
   ])('formats %s using the selected locale', (currencyCode, locale, expected) => {

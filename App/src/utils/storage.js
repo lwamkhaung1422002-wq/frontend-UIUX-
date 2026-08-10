@@ -38,7 +38,7 @@ export function setStoreFormatPreferences(preferences = {}) {
 export function formatMoney(value, preferences = storeFormatPreferences) {
   const settings = { ...defaultStoreFormatPreferences, ...preferences }
   if (settings.currencyCode === 'MMK') {
-    return `${new Intl.NumberFormat(settings.locale, { maximumFractionDigits: 0 }).format(Number(value || 0))} Ks`
+    return `${new Intl.NumberFormat(settings.locale, { maximumFractionDigits: 0 }).format(Number(value || 0))} ကျပ်`
   }
   return new Intl.NumberFormat(settings.locale, {
     style: 'currency',
