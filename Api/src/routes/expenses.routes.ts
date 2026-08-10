@@ -19,12 +19,17 @@ const expenseSchema = z.object({
   title: z.string().trim().min(1, "Expense title is required."),
   category: z.string().trim().optional(),
   method: z.string().trim().optional(),
+  transactionId: z.string().trim().optional(),
   amount: moneySchema,
   spentAt: z.coerce.date().optional(),
   note: z.string().trim().optional(),
 });
 
 const updateExpenseSchema = expenseSchema.partial();
+
+function requiresTransactionId(method?: string): boolean {
+  return Boolean(method && !["cash", "ငွေသား"].includes(method.toLowerCase()));
+}
 
 expensesRouter.use(requireAuth);
 
@@ -58,6 +63,10 @@ expensesRouter.post("/:shopId/expenses", async (request, response, next) => {
     const { shopId } = paramsSchema.parse(request.params);
     const input = expenseSchema.parse(request.body);
 
+    if (requiresTransactionId(input.method) && !input.transactionId) {
+      throw new Error("Transaction ID is required for non-cash expenses.");
+    }
+
     await assertUserOwnsShop(authUser.id, shopId);
 
     const data: Prisma.ExpenseUncheckedCreateInput = {
@@ -66,6 +75,7 @@ expensesRouter.post("/:shopId/expenses", async (request, response, next) => {
       amount: input.amount,
       ...(input.category !== undefined ? { category: input.category } : {}),
       ...(input.method !== undefined ? { method: input.method } : {}),
+      ...(input.transactionId !== undefined ? { transactionId: input.transactionId } : {}),
       ...(input.spentAt !== undefined ? { spentAt: input.spentAt } : {}),
       ...(input.note !== undefined ? { note: input.note } : {}),
     };
@@ -96,6 +106,10 @@ expensesRouter.patch("/:shopId/expenses/:expenseId", async (request, response, n
     const expenseId = z.string().min(1).parse(request.params.expenseId);
     const input = updateExpenseSchema.parse(request.body);
 
+    if (requiresTransactionId(input.method) && !input.transactionId) {
+      throw new Error("Transaction ID is required for non-cash expenses.");
+    }
+
     await assertUserOwnsShop(authUser.id, shopId);
 
     const existingExpense = await prisma.expense.findFirst({
@@ -109,6 +123,7 @@ expensesRouter.patch("/:shopId/expenses/:expenseId", async (request, response, n
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.category !== undefined ? { category: input.category } : {}),
       ...(input.method !== undefined ? { method: input.method } : {}),
+      ...(input.transactionId !== undefined ? { transactionId: input.transactionId } : {}),
       ...(input.amount !== undefined ? { amount: input.amount } : {}),
       ...(input.spentAt !== undefined ? { spentAt: input.spentAt } : {}),
       ...(input.note !== undefined ? { note: input.note } : {}),

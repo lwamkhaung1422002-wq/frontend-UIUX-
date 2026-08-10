@@ -1,5 +1,5 @@
 import { api, getStoredShopId } from './api.js'
-import { groupOrdersByMonth } from '../utils/storage.js'
+import { getToday, groupOrdersByMonth } from '../utils/storage.js'
 import { normalizeOrders } from '../domain/orders.js'
 import {
   normalizeCatalogSettings,
@@ -42,7 +42,23 @@ export const emptyData = {
     priceGroups: [],
 }
 
-const previewToday = new Date().toISOString().slice(0, 10)
+const previewToday = getToday()
+
+const previewDashboardSales = [
+  { number: '9854', time: '19:45:00', total: 15500, quantity: 3, method: 'ငွေသား' },
+  { number: '9853', time: '18:20:00', total: 32500, quantity: 5, method: 'KPay' },
+  { number: '9852', time: '17:05:00', total: 8000, quantity: 2, method: 'Wave Pay' },
+  { number: '9851', time: '16:40:00', total: 12000, quantity: 4, method: 'ငွေသား' },
+  { number: '9850', time: '14:25:00', total: 28000, quantity: 6, method: 'KPay' },
+  { number: '9849', time: '13:10:00', total: 9500, quantity: 2, method: 'ငွေသား' },
+  { number: '9848', time: '11:55:00', total: 21500, quantity: 4, method: 'Wave Pay' },
+  { number: '9847', time: '10:15:00', total: 17500, quantity: 3, method: 'KPay' },
+].map((sale) => ({
+  id: `demo-sale-${sale.number}`, orderNumber: sale.number, date: previewToday, createdAt: `${previewToday}T${sale.time}+06:30`, completedAt: `${previewToday}T${sale.time}+06:30`,
+  customer: { name: 'လမ်းလျှောက်ဝယ်သူ' }, fulfillmentStatus: 'completed', paymentStatus: 'paid', paymentMethod: sale.method, paidAmount: sale.total, balanceDue: 0,
+  subtotal: sale.total, discount: 0, deliveryFee: 0, total: sale.total, source: 'Preview POS',
+  items: [{ id: `demo-sale-${sale.number}-item`, productId: 'demo-coke', type: 'Coca-Cola 330ml', quantity: sale.quantity, unitPrice: Math.round(sale.total / sale.quantity), unitCost: 800, lineTotal: sale.total }],
+}))
 
 // Temporary no-login test store. It deliberately mirrors the same product/barcode/stock data
 // used by the inventory examples; authenticated shops always load from PostgreSQL instead.
@@ -68,6 +84,21 @@ export const previewDemoData = {
     { id: 'demo-stock-betel', productId: 'demo-betel', quantity: 2, unitCost: 4300, price: 5000 },
   ],
   suppliers: [{ id: 'demo-supplier-pahtama', name: 'Pahtama Group', phone: '09666655928' }],
+  expenses: [{ id: 'demo-expense-today', title: 'ဆိုင်အသုံးစရိတ်', amount: 15000, method: 'ငွေသား', spentAt: `${previewToday}T09:00:00+06:30`, note: 'နေ့စဉ် ဆိုင်သုံးကုန်ကျစရိတ်' }],
+  purchases: [{
+    id: 'demo-purchase-paid', purchaseNumber: 'PO-00001', status: 'received', total: 50000, paidAmount: 50000,
+    supplier: { id: 'demo-supplier-pahtama', name: 'Pahtama Group' }, receivedAt: `${previewToday}T10:30:00+06:30`,
+    items: [{ id: 'demo-purchase-paid-item', productName: 'Jasmine အနံ့ဆီ', quantity: 10, unitCost: 5000, lineTotal: 50000 }],
+    payments: [{ id: 'demo-supplier-payment-today', amount: 50000, method: 'KPay', reference: 'KPay-20260809-001', mobileAccountName: 'Pahtama Group KPay', notes: 'KPay ဖြင့် ကုန်ပစ္စည်းဖိုးရှင်းပြီး', paidAt: `${previewToday}T10:35:00+06:30` }],
+  }, {
+    id: 'demo-purchase-cash-paid', purchaseNumber: 'PO-00003', status: 'received', total: 26000, paidAmount: 26000,
+    supplier: { id: 'demo-supplier-pahtama', name: 'Pahtama Group' }, receivedAt: `${previewToday}T12:10:00+06:30`,
+    items: [{ id: 'demo-purchase-cash-item', productName: 'Coca-Cola 330ml', quantity: 26, unitCost: 1000, lineTotal: 26000 }],
+    payments: [{ id: 'demo-supplier-payment-cash', amount: 26000, method: 'ငွေသား', payerName: 'ကိုအောင်လင်း', payerPhone: '09976543210', notes: 'ကုန်ပစ္စည်းဖိုး ငွေသားလက်မှတ်ဖြင့် ရှင်းပြီး', signatureDataUrl: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 180"%3E%3Crect width="600" height="180" fill="white"/%3E%3Cpath d="M55 118 C90 30 115 145 150 72 S220 150 255 80 S320 140 350 65 S410 125 455 72 S510 135 550 58" fill="none" stroke="%2300785b" stroke-width="7" stroke-linecap="round"/%3E%3Ctext x="55" y="157" font-family="sans-serif" font-size="22" fill="%23607569"%3Eကိုအောင်လင်း%3C/text%3E%3C/svg%3E', paidAt: `${previewToday}T12:15:00+06:30` }],
+  }, {
+    id: 'demo-purchase-payable', purchaseNumber: 'PO-00002', status: 'received', total: 28000, paidAmount: 0,
+    supplier: { id: 'demo-supplier-pahtama', name: 'Pahtama Group' }, receivedAt: `${previewToday}T11:15:00+06:30`, payments: [],
+  }],
   orders: [
     {
       id: 'demo-sale-9855', orderNumber: '9855', date: previewToday, createdAt: `${previewToday}T20:30:00+06:30`, completedAt: `${previewToday}T20:30:00+06:30`,
@@ -85,6 +116,7 @@ export const previewDemoData = {
       subtotal: 10000, discount: 0, deliveryFee: 0, total: 10000, source: 'Preview POS',
       items: [{ id: 'demo-sale-3695-betel', productId: 'demo-betel', type: 'ကွမ်းယာ', quantity: 2, unitPrice: 5000, lineTotal: 10000 }],
     },
+    ...previewDashboardSales,
   ],
   dashboard: { summary: { revenue: 190000, profit: 62450, cashBalance: 32450, categoriesCount: 3, stockUnits: 119, lowStockCount: 1, expenses: 15000 }, lowStock: [], upcomingPayables: [], recentSales: [] },
 }
@@ -288,6 +320,7 @@ function mapExpense(expense) {
     type: expense.category || 'General',
     category: expense.category || 'General',
     method: expense.method || 'Other',
+    transactionId: expense.transactionId || '',
     date: dateOnly(expense.spentAt || expense.createdAt),
     spentAt: expense.spentAt,
     note: expense.note || '',
@@ -805,6 +838,7 @@ export async function createExpenseDocument(uid, expense) {
     method: expense.method,
     amount: Number(expense.amount || 0),
     spentAt: expense.date ? new Date(expense.date).toISOString() : undefined,
+    transactionId: expense.transactionId || undefined,
     note: expense.note,
   })
 }
@@ -816,6 +850,7 @@ export function updateExpenseDocument(uid, expense) {
     method: expense.method,
     amount: Number(expense.amount || 0),
     spentAt: expense.date ? new Date(expense.date).toISOString() : undefined,
+    transactionId: expense.transactionId || undefined,
     note: expense.note,
   })
 }

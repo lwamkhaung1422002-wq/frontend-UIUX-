@@ -1,308 +1,164 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  Chip,
-  CircularProgress,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
-import AddShoppingCartRoundedIcon from "@mui/icons-material/AddShoppingCartRounded";
-import AccountBalanceWalletRoundedIcon from "@mui/icons-material/AccountBalanceWalletRounded";
-import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
-import PaidRoundedIcon from "@mui/icons-material/PaidRounded";
-import ProductionQuantityLimitsRoundedIcon from "@mui/icons-material/ProductionQuantityLimitsRounded";
-import TrendingUpRoundedIcon from "@mui/icons-material/TrendingUpRounded";
-import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
-import ReceiptLongRoundedIcon from "@mui/icons-material/ReceiptLongRounded";
-import LocalShippingRoundedIcon from "@mui/icons-material/LocalShippingRounded";
-import { useAuth } from "../contexts/AuthContext.jsx";
-import { useData } from "../contexts/DataContext.jsx";
-import { api } from "../services/api.js";
-import { formatKs, getToday } from "../utils/storage.js";
+  Alert, Box, Button, Card, CardActionArea, Chip, CircularProgress, Dialog,
+  DialogActions, DialogContent, DialogTitle, IconButton, Stack, Table,
+  TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip,
+  Typography, useMediaQuery,
+} from '@mui/material'
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
+import PaymentsRoundedIcon from '@mui/icons-material/PaymentsRounded'
+import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
+import TrendingDownRoundedIcon from '@mui/icons-material/TrendingDownRounded'
+import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded'
+import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
+import { useAuth } from '../contexts/AuthContext.jsx'
+import { useData } from '../contexts/DataContext.jsx'
+import { api } from '../services/api.js'
+import { previewDemoData } from '../services/shopApiService.js'
+import { getToday } from '../utils/storage.js'
 
-const kyat = (amount) => `${formatKs(Number(amount || 0))} ကျပ်`;
-const emptyList = [];
+const emptyList = []
+const kyat = (amount) => `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(amount || 0))} ကျပ်`
+const dayOf = (value) => String(value || '').slice(0, 10)
+const quantityOf = (items = []) => items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
 
-function dateLabel(value) {
-  if (!value) return "ယနေ့";
-  const [year, month, day] = value.split("-");
-  return `${day}/${month}/${year}`;
+function dateTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Yangon', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(date).replace(',', ' ·')
+}
+
+function escapeReceiptText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character])
+}
+
+function printSaleReceipt(sale) {
+  const receiptWindow = window.open('', '_blank', 'width=420,height=640')
+  if (!receiptWindow) return
+  receiptWindow.document.write(`<!doctype html><html lang="my"><head><meta charset="utf-8"><title>ဘောက်ချာ ${escapeReceiptText(sale.invoiceNumber)}</title><style>body{font-family:"Noto Sans Myanmar",sans-serif;margin:28px;color:#17211d}h1{font-size:20px;margin:0 0 14px}p{margin:7px 0;font-size:14px}.line{border-top:1px dashed #87958d;margin:18px 0}.total{font-size:18px;font-weight:700}</style></head><body><h1>အရောင်းဘောက်ချာ</h1><p>ဘောက်ချာအမှတ် — ${escapeReceiptText(sale.invoiceNumber)}</p><p>ရက်စွဲ / အချိန် — ${escapeReceiptText(dateTime(sale.completedAt))}</p><p>ပစ္စည်းအရေအတွက် — ${escapeReceiptText(sale.itemCount)} ခု</p><p>ငွေပေးချေမှု — ${escapeReceiptText(sale.paymentMethod || paymentLabel(sale.paymentStatus))}</p><div class="line"></div><p class="total">စုစုပေါင်း — ${escapeReceiptText(kyat(sale.amount))}</p></body></html>`)
+  receiptWindow.document.close()
+  receiptWindow.focus()
+  receiptWindow.print()
+}
+
+function getYesterday(today) {
+  const value = new Date(`${today}T00:00:00`)
+  value.setDate(value.getDate() - 1)
+  return value.toISOString().slice(0, 10)
+}
+
+function percentageChange(current, previous) {
+  const before = Number(previous || 0)
+  const after = Number(current || 0)
+  if (!Number.isFinite(before) || !Number.isFinite(after) || before === 0) return null
+  return ((after - before) / Math.abs(before)) * 100
 }
 
 function paymentLabel(status) {
-  if (status === "paid") return "ငွေရှင်းပြီး";
-  if (status === "partial") return "တစ်စိတ်တစ်ပိုင်းရှင်းပြီး";
-  return "ကုန်ကြွေး";
+  if (status === 'paid') return 'ငွေရှင်းပြီး'
+  if (status === 'partial') return 'တစ်စိတ်တစ်ပိုင်းရှင်းပြီး'
+  return 'ကုန်ကြွေး'
+}
+
+function previewDashboard(data, date, keepSeedDemoVisible = false) {
+  const productsById = new Map((data.products || []).map((product) => [product.id, product]))
+  const allCompletedOrders = (data.orders || []).filter((order) => order.fulfillmentStatus === 'completed')
+  const datedOrders = allCompletedOrders.filter((order) => dayOf(order.completedAt || order.createdAt || order.date) === date)
+  const completedOrders = datedOrders.length || !keepSeedDemoVisible ? datedOrders : allCompletedOrders
+  const revenue = completedOrders.reduce((sum, order) => sum + Number(order.total || 0), 0)
+  const costOfGoods = completedOrders.reduce((sum, order) => sum + (order.items || []).reduce((itemSum, item) => itemSum + (Number(item.unitCost ?? productsById.get(item.productId)?.cost ?? 0) * Number(item.quantity || 0)), 0), 0)
+  const datedExpenses = (data.expenses || []).filter((expense) => dayOf(expense.spentAt || expense.date || expense.createdAt) === date)
+  const operatingExpenses = (datedExpenses.length || !keepSeedDemoVisible ? datedExpenses : (data.expenses || [])).reduce((sum, expense) => sum + Number(expense.amount || 0), 0)
+  const lowStock = (data.products || []).map((product) => ({ productId: product.id, productCode: product.sku || null, productName: product.name, availableQuantity: Number(product.quantity || 0) })).filter((product) => product.availableQuantity <= 5)
+  const purchasePayments = (data.purchases || []).flatMap((purchase) => purchase.payments || []).filter((payment) => !payment.reversedAt && dayOf(payment.paidAt || payment.date || payment.createdAt) === date).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  const refunds = (data.payments || []).filter((payment) => payment.type === 'refund' && dayOf(payment.paidAt || payment.date || payment.createdAt) === date).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  return {
+    summary: { revenue, netProfit: revenue - costOfGoods - operatingExpenses, cashOut: purchasePayments + operatingExpenses + refunds },
+    lowStock,
+    recentSales: completedOrders.slice(0, 6).map((order) => {
+      const payment = (data.payments || []).find((item) => String(item.orderId) === String(order.id) && item.type === 'payment')
+      return { id: order.id, invoiceNumber: order.orderNumber || String(order.id).slice(-6), amount: order.total, paymentStatus: order.paymentStatus, paymentMethod: order.paymentMethod || payment?.method || 'ငွေသား', itemCount: quantityOf(order.items), completedAt: order.completedAt || order.createdAt }
+    }),
+  }
+}
+
+function Trend({ value, inverse = false }) {
+  if (value === null) return <Typography className="dashboard-card-trend neutral">ယမန်နေ့ကထက် 0%</Typography>
+  const increased = value > 0
+  const good = inverse ? !increased : increased
+  return <Typography className={`dashboard-card-trend ${good ? 'positive' : value === 0 ? 'neutral' : 'negative'}`}>{good ? <TrendingUpRoundedIcon /> : <TrendingDownRoundedIcon />}{value > 0 ? '+' : ''}{Math.round(value)}%</Typography>
+}
+
+function LowStockRow({ item }) {
+  const soldOut = Number(item.availableQuantity || 0) <= 0
+  return <Box className="low-stock-item-row">
+    <Box className="low-stock-item-main"><Typography className="low-stock-item-name">{item.productName}</Typography><Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap"><Typography className="low-stock-item-code">ကုဒ် — {item.productCode || '-'}</Typography><Chip size="small" className={soldOut ? 'low-stock-out-chip' : 'low-stock-warning-chip'} label={soldOut ? 'ကုန်သွားပြီ' : 'လက်ကျန်နည်း'} /></Stack></Box>
+    <Box className="low-stock-item-quantity"><Typography className="low-stock-item-quantity-label">လက်ကျန်</Typography><Typography className={`low-stock-item-quantity-value ${soldOut ? 'sold-out' : ''}`}>{item.availableQuantity} ခု</Typography></Box>
+  </Box>
+}
+
+function DashboardCard({ className, icon, label, value, trend, inverseTrend, onClick, children }) {
+  const content = <Box className="dashboard-card-content"><Box className={`dashboard-card-icon ${className || ''}`}>{icon}</Box><Typography className="dashboard-card-label">{label}</Typography><Typography className="dashboard-card-value">{value}</Typography>{trend !== undefined ? <Trend value={trend} inverse={inverseTrend} /> : children}</Box>
+  return <Card className={`dashboard-main-card ${className || ''}`} elevation={0}>{onClick ? <CardActionArea className="dashboard-card-action" onClick={onClick}>{content}</CardActionArea> : content}</Card>
+}
+
+function RecentSales({ sales, mobile }) {
+  if (!sales.length) return <Typography className="dashboard-empty">ယနေ့အရောင်းမှတ်တမ်း မရှိသေးပါ</Typography>
+  if (mobile) return <Box className="dashboard-sales-mobile-list">{sales.map((sale) => <Card className="dashboard-sale-mobile-card" variant="outlined" key={sale.id}><Box className="dashboard-sale-mobile-top"><Typography fontWeight={850}>{sale.invoiceNumber}</Typography><Typography className="dashboard-sale-amount">{kyat(sale.amount)}</Typography></Box><Typography className="dashboard-sale-secondary">{dateTime(sale.completedAt)}</Typography><Box className="dashboard-sale-mobile-meta"><Typography>{sale.itemCount} ခု · {sale.paymentMethod || paymentLabel(sale.paymentStatus)}</Typography><Button size="small" startIcon={<PrintRoundedIcon />} onClick={() => printSaleReceipt(sale)}>ပုံနှိပ်မည်</Button></Box></Card>)}</Box>
+  return <TableContainer className="dashboard-sales-table"><Table size="small"><TableHead><TableRow><TableCell>ဘောက်ချာအမှတ်</TableCell><TableCell>ရက်စွဲ / အချိန်</TableCell><TableCell align="center">ပစ္စည်းအရေအတွက်</TableCell><TableCell>ငွေပေးချေမှု</TableCell><TableCell align="right">ပမာဏ</TableCell><TableCell align="center">လုပ်ဆောင်ချက်</TableCell></TableRow></TableHead><TableBody>{sales.map((sale) => <TableRow key={sale.id} hover><TableCell><Typography fontWeight={800}>{sale.invoiceNumber}</Typography></TableCell><TableCell>{dateTime(sale.completedAt)}</TableCell><TableCell align="center">{sale.itemCount} ခု</TableCell><TableCell><Chip size="small" className={sale.paymentStatus === 'paid' ? 'dashboard-paid-chip' : 'dashboard-credit-chip'} label={sale.paymentMethod || paymentLabel(sale.paymentStatus)} /></TableCell><TableCell align="right" className="dashboard-sale-amount">{kyat(sale.amount)}</TableCell><TableCell align="center"><Tooltip title="ဘောက်ချာပုံနှိပ်မည်"><IconButton size="small" color="primary" aria-label="ဘောက်ချာပုံနှိပ်မည်" onClick={() => printSaleReceipt(sale)}><PrintRoundedIcon fontSize="small" /></IconButton></Tooltip></TableCell></TableRow>)}</TableBody></Table></TableContainer>
 }
 
 export default function HomePage({ navigate }) {
-  const { user } = useAuth();
-  const { data, loading: dataLoading, error: dataError } = useData();
-  const [selectedDate, setSelectedDate] = useState(getToday());
-  const [dashboard, setDashboard] = useState(null);
-  const [loadingDashboard, setLoadingDashboard] = useState(false);
-  const [dashboardError, setDashboardError] = useState("");
+  const mobile = useMediaQuery('(max-width:767px)')
+  const { user } = useAuth()
+  const { data, loading: dataLoading, error: dataError } = useData()
+  const [dashboard, setDashboard] = useState(null)
+  const [previousDashboard, setPreviousDashboard] = useState(null)
+  const [loadingDashboard, setLoadingDashboard] = useState(false)
+  const [dashboardError, setDashboardError] = useState('')
+  const [lowStockOpen, setLowStockOpen] = useState(false)
+  const shopId = user?.shop?.id
+  const today = getToday()
+  const yesterday = useMemo(() => getYesterday(today), [today])
 
-  const shopId = user?.shop?.id;
   const loadDashboard = useCallback(async () => {
-    if (!shopId || user?.preview) return;
-    setLoadingDashboard(true);
-    setDashboardError("");
-    try {
-      const result = await api.dashboard(shopId, {
-        from: selectedDate,
-        to: selectedDate,
-      });
-      setDashboard(result);
-    } catch (error) {
-      setDashboardError(error.message || "Dashboard data ကို မရယူနိုင်သေးပါ။");
-    } finally {
-      setLoadingDashboard(false);
-    }
-  }, [selectedDate, shopId, user?.preview]);
+    if (!shopId || user?.preview) return
+    setLoadingDashboard(true); setDashboardError('')
+    try { const [todayResult, yesterdayResult] = await Promise.all([api.dashboard(shopId, { from: today, to: today }), api.dashboard(shopId, { from: yesterday, to: yesterday })]); setDashboard(todayResult); setPreviousDashboard(yesterdayResult) } catch (error) { setDashboardError(error.message || 'ပင်မစာမျက်နှာအချက်အလက်ကို မရယူနိုင်သေးပါ') } finally { setLoadingDashboard(false) }
+  }, [shopId, today, yesterday, user?.preview])
 
-  useEffect(() => {
-    const timer = window.setTimeout(loadDashboard, 0);
-    return () => window.clearTimeout(timer);
-  }, [loadDashboard]);
+  useEffect(() => { const timer = window.setTimeout(() => { void loadDashboard() }, 0); return () => window.clearTimeout(timer) }, [loadDashboard])
 
-  const summary = dashboard?.summary || data.dashboard || {};
-  const lowStock = dashboard?.lowStock ?? emptyList;
-  const recentSales = dashboard?.recentSales ?? emptyList;
-  const upcomingPayables = dashboard?.upcomingPayables ?? emptyList;
-  const loading = loadingDashboard || (dataLoading && !dashboard);
+  const useDemoDashboard = user?.preview || user?.email === 'greenmart.demo@local.test'
+  const dashboardData = useDemoDashboard ? previewDemoData : data
+  const previewToday = useMemo(() => previewDashboard(dashboardData, today, useDemoDashboard), [dashboardData, today, useDemoDashboard])
+  const previewYesterday = useMemo(() => previewDashboard(dashboardData, yesterday), [dashboardData, yesterday])
+  const activeDashboard = useDemoDashboard ? previewToday : dashboard
+  const priorDashboard = useDemoDashboard ? previewYesterday : previousDashboard
+  const summary = activeDashboard?.summary || data.dashboard || {}
+  const previousSummary = priorDashboard?.summary || {}
+  const lowStock = activeDashboard?.lowStock ?? emptyList
+  const recentSales = activeDashboard?.recentSales ?? emptyList
+  const loading = loadingDashboard || (!useDemoDashboard && dataLoading && !dashboard)
 
-  const attentionItems = useMemo(
-    () => [
-      ...lowStock.slice(0, 3).map((item) => ({
-        id: `stock-${item.inventoryBatchId || item.productId}`,
-        kind: "stock",
-        title: item.productName,
-        detail: `လက်ကျန် ${item.availableQuantity} ခု`,
-        action: "ကုန်ပစ္စည်းကြည့်မည်",
-        page: "products",
-        urgent: Number(item.availableQuantity) <= 0,
-      })),
-      ...upcomingPayables.slice(0, 3).map((item) => ({
-        id: `payable-${item.id}`,
-        kind: "payable",
-        title: item.supplierName,
-        detail: `${kyat(item.amount)} · ပေးရန် ${item.dueDate ? dateLabel(String(item.dueDate).slice(0, 10)) : "ရက်မသတ်မှတ်ရသေးပါ"}`,
-        action: "အဝယ်စာရင်းကြည့်မည်",
-        page: "purchases",
-        urgent: false,
-      })),
-    ],
-    [lowStock, upcomingPayables],
-  );
-
-  return (
-    <Box className="page-stack dashboard-page">
-      <Box className="dashboard-topbar">
-        <Box>
-          <Typography className="dashboard-greeting">ပင်မ</Typography>
-          <Typography className="dashboard-store-name">
-            {user?.shop?.name || "ကျွန်ုပ်၏ဆိုင်"}
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-          <TextField
-            className="dashboard-date-picker"
-            type="date"
-            aria-label="ကြည့်မည့်ရက်"
-            value={selectedDate}
-            onChange={(event) =>
-              setSelectedDate(event.target.value || getToday())
-            }
-            slotProps={{ inputLabel: { shrink: true } }}
-            size="small"
-          />
-        </Stack>
-      </Box>
-
-      {dataError || dashboardError ? (
-        <Alert severity="warning">
-          {dashboardError || "ဆိုင်ဒေတာကို ပြန်လည်ရယူနေပါသည်။"}
-        </Alert>
-      ) : null}
-
-      <Card className="dashboard-hero" elevation={0}>
-        <Box>
-          <Typography className="dashboard-hero-label">
-            {selectedDate === getToday()
-              ? "ယနေ့ရောင်းအား"
-              : `${dateLabel(selectedDate)} ရောင်းအား`}
-          </Typography>
-          <Typography className="dashboard-hero-value">
-            {kyat(summary.revenue)}
-          </Typography>
-          <Typography className="dashboard-hero-caption">
-            အရောင်းပြီးစီးမှု {summary.salesCount || 0} ခု
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          className="dashboard-sale-action"
-          startIcon={<AddShoppingCartRoundedIcon />}
-          onClick={() => navigate("order")}
-        >
-          အရောင်းပြုလုပ်မည်
-        </Button>
-      </Card>
-
-      {loading ? (
-        <Box className="dashboard-loading">
-          <CircularProgress size={28} />
-        </Box>
-      ) : null}
-
-      <Box className="dashboard-metric-grid">
-        <DashboardMetric
-          icon={<TrendingUpRoundedIcon />}
-          label="ယနေ့အမြတ်"
-          value={kyat(summary.netProfit)}
-          tone="green"
-        />
-        <DashboardMetric
-          icon={<AccountBalanceWalletRoundedIcon />}
-          label="ငွေလက်ကျန်"
-          value={kyat(summary.cashBalance)}
-          tone="mint"
-        />
-        <DashboardMetric
-          icon={<Inventory2RoundedIcon />}
-          label="ကုန်ပစ္စည်းလက်ကျန်"
-          value={`${summary.stockUnits || 0} ခု`}
-          subvalue={`အမျိုးအစား ${summary.categoriesCount || 0} မျိုး`}
-          tone="mint"
-        />
-        <DashboardMetric
-          icon={<ProductionQuantityLimitsRoundedIcon />}
-          label="stock နည်း/ပြတ်"
-          value={`${lowStock.length} မျိုး`}
-          tone={lowStock.length ? "amber" : "mint"}
-        />
-        <DashboardMetric
-          icon={<PaidRoundedIcon />}
-          label="ယနေ့အသုံးစရိတ်"
-          value={kyat(summary.operatingExpenses)}
-          tone="amber"
-          wide
-        />
-      </Box>
-
-      <DashboardSection
-        title="အာရုံစိုက်ရန်"
-        icon={<WarningAmberRoundedIcon />}
-      >
-        {attentionItems.length ? (
-          attentionItems.map((item) => (
-            <Box className="dashboard-attention-row" key={item.id}>
-              <Box
-                className={`dashboard-attention-icon ${item.urgent ? "is-urgent" : ""}`}
-              >
-                {item.kind === "stock" ? (
-                  <Inventory2RoundedIcon />
-                ) : (
-                  <LocalShippingRoundedIcon />
-                )}
-              </Box>
-              <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography fontWeight={800} noWrap>
-                  {item.title}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {item.detail}
-                </Typography>
-              </Box>
-              <Button size="small" onClick={() => navigate(item.page)}>
-                {item.action}
-              </Button>
-            </Box>
-          ))
-        ) : (
-          <DashboardEmpty message="ယနေ့အတွက် အရေးကြီးသောသတိပေးချက် မရှိသေးပါ။" />
-        )}
-      </DashboardSection>
-
-      <DashboardSection
-        title="ယနေ့နောက်ဆုံးအရောင်းများ"
-        icon={<ReceiptLongRoundedIcon />}
-        action={
-          <Button size="small" onClick={() => navigate("sales")}>
-            အားလုံးကြည့်မည်
-          </Button>
-        }
-      >
-        {recentSales.length ? (
-          recentSales.map((sale) => (
-            <Box className="dashboard-sale-row" key={sale.id}>
-              <Box className="dashboard-sale-icon">
-                <ReceiptLongRoundedIcon />
-              </Box>
-              <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography fontWeight={800} noWrap>
-                  {sale.invoiceNumber}
-                </Typography>
-                <Typography variant="body2" color="text.secondary" noWrap>
-                  {sale.customerName}
-                </Typography>
-              </Box>
-              <Stack spacing={0.25} sx={{ alignItems: 'flex-end' }}>
-                <Typography fontWeight={900}>{kyat(sale.amount)}</Typography>
-                <Chip
-                  size="small"
-                  label={paymentLabel(sale.paymentStatus)}
-                  color={sale.paymentStatus === "paid" ? "success" : "warning"}
-                />
-              </Stack>
-            </Box>
-          ))
-        ) : (
-          <DashboardEmpty message="ရွေးထားသောရက်တွင် အရောင်းပြီးစီးမှု မရှိသေးပါ။" />
-        )}
-      </DashboardSection>
+  return <Box className="page-stack dashboard-page">
+    {dataError || dashboardError ? <Alert severity="warning">{dashboardError || 'ဆိုင်အချက်အလက်ကို ပြန်လည်ရယူနေပါသည်'}</Alert> : null}
+    {loading ? <Box className="dashboard-loading"><CircularProgress size={28} /></Box> : null}
+    <Box className="dashboard-main-grid">
+      <DashboardCard className="dashboard-sales-card" icon={<PaymentsRoundedIcon />} label="ယနေ့ရောင်းရငွေ" value={kyat(summary.revenue)} trend={percentageChange(summary.revenue, previousSummary.revenue)} />
+      <DashboardCard className="dashboard-profit-card" icon={<TrendingUpRoundedIcon />} label="ယနေ့အမြတ်" value={kyat(summary.netProfit)} trend={percentageChange(summary.netProfit, previousSummary.netProfit)} />
+      <DashboardCard className="dashboard-cashout-card" icon={<TrendingDownRoundedIcon />} label="ယနေ့ထွက်ငွေ" value={kyat(summary.cashOut)} trend={percentageChange(summary.cashOut, previousSummary.cashOut)} inverseTrend onClick={() => navigate('finance')} />
+      <DashboardCard className="dashboard-lowstock-card" icon={<WarningAmberRoundedIcon />} label="လက်ကျန်နည်း" value={`${lowStock.length} မျိုး`} onClick={() => setLowStockOpen(true)}><Typography className="dashboard-card-support">စစ်ဆေးရန်</Typography></DashboardCard>
     </Box>
-  );
-}
-
-function DashboardMetric({ icon, label, value, subvalue, tone, wide = false }) {
-  return (
-    <Card
-      className={`dashboard-metric dashboard-metric-${tone} ${wide ? "dashboard-metric-wide" : ""}`}
-      elevation={0}
-    >
-      <Box className="dashboard-metric-icon">{icon}</Box>
-      <Typography className="dashboard-metric-label">{label}</Typography>
-      <Typography className="dashboard-metric-value">{value}</Typography>
-      {subvalue ? (
-        <Typography className="dashboard-metric-subvalue">
-          {subvalue}
-        </Typography>
-      ) : null}
-    </Card>
-  );
-}
-
-function DashboardSection({ title, icon, action, children }) {
-  return (
-    <Card className="dashboard-section" elevation={0}>
-      <Box className="dashboard-section-heading">
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-          <Box className="dashboard-section-icon">{icon}</Box>
-          <Typography variant="h6">{title}</Typography>
-        </Stack>
-        {action}
-      </Box>
-      <Box className="dashboard-section-body">{children}</Box>
-    </Card>
-  );
-}
-
-function DashboardEmpty({ message }) {
-  return <Typography className="dashboard-empty">{message}</Typography>;
+    <Card className="dashboard-recent-sales" elevation={0}><Box className="dashboard-recent-heading"><Box><Typography variant="h6">နောက်ဆုံးအရောင်းမှတ်တမ်း</Typography><Typography variant="body2" color="text.secondary">ယနေ့ပြုလုပ်ထားသော အရောင်းစာရင်းများ</Typography></Box><Button size="small" onClick={() => navigate('sales')}>အားလုံးကြည့်ရန်</Button></Box><RecentSales sales={recentSales} mobile={mobile} /></Card>
+    <Dialog open={lowStockOpen} onClose={() => setLowStockOpen(false)} fullWidth maxWidth="sm" aria-labelledby="low-stock-dialog-title" PaperProps={{ className: mobile ? 'low-stock-sheet-paper' : 'low-stock-dialog-paper' }}>
+      {mobile ? <Box className="low-stock-sheet-handle" /> : null}
+      <DialogTitle id="low-stock-dialog-title" className="low-stock-dialog-title"><Box><Typography variant="h6">လက်ကျန်နည်းသော ကုန်ပစ္စည်းများ</Typography><Typography variant="body2" color="text.secondary">ကုန်ပစ္စည်း {lowStock.length} မျိုး စစ်ဆေးရန်လိုသည်</Typography></Box><IconButton aria-label="ပိတ်မည်" onClick={() => setLowStockOpen(false)}><CloseRoundedIcon /></IconButton></DialogTitle>
+      <DialogContent className="low-stock-dialog-content">{lowStock.length ? <Box className="low-stock-item-list">{lowStock.map((item) => <LowStockRow key={item.inventoryBatchId || item.productId} item={item} />)}</Box> : <Typography className="dashboard-empty">လက်ကျန်နည်းသောပစ္စည်း မရှိသေးပါ</Typography>}</DialogContent>
+      <DialogActions className="low-stock-dialog-actions"><Button variant="outlined" onClick={() => setLowStockOpen(false)}>ပိတ်မည်</Button></DialogActions>
+    </Dialog>
+  </Box>
 }

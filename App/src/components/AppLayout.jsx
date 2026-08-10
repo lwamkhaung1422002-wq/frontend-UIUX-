@@ -1,8 +1,10 @@
 import {
   AppBar,
+  Avatar,
+  Badge,
+  Box,
   BottomNavigation,
   BottomNavigationAction,
-  Box,
   Button,
   Drawer,
   IconButton,
@@ -27,13 +29,15 @@ import LocalShippingRoundedIcon from '@mui/icons-material/LocalShippingRounded'
 import LightModeRoundedIcon from '@mui/icons-material/LightModeRounded'
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded'
 import MenuRoundedIcon from '@mui/icons-material/MenuRounded'
+import MoreHorizRoundedIcon from '@mui/icons-material/MoreHorizRounded'
+import NotificationsRoundedIcon from '@mui/icons-material/NotificationsRounded'
 import ReceiptLongRoundedIcon from '@mui/icons-material/ReceiptLongRounded'
 import RocketLaunchRoundedIcon from '@mui/icons-material/RocketLaunchRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
 import StoreRoundedIcon from '@mui/icons-material/StoreRounded'
 import StickyNote2RoundedIcon from '@mui/icons-material/StickyNote2Rounded'
 import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded'
-import { preloadRoute } from '../routes.js'
+import { preloadRoute } from '../app/routes.js'
 import { AppHeaderActionsContext } from '../contexts/AppHeaderActionsContext.jsx'
 
 const drawerWidth = 256
@@ -50,10 +54,11 @@ const navItems = [
   { key: 'purchases', label: 'ကုန်ပစ္စည်းအဝယ်စာရင်း', icon: <LocalShippingRoundedIcon /> },
 ]
 
-// Keep fast, everyday actions in the bottom bar. Detail/management pages live
-// in the hamburger drawer so mobile navigation has no duplicated entries.
-const primaryMobileKeys = ['home', 'products', 'order', 'balance', 'purchases']
-const mobileDrawerKeys = ['sales', 'suppliers', 'finance', 'pricing']
+const navGroupByKey = {
+  home: 'ရောင်းချမှု', order: 'ရောင်းချမှု', sales: 'ရောင်းချမှု',
+  products: 'ကုန်ပစ္စည်း', suppliers: 'ကုန်ပစ္စည်း', purchases: 'ကုန်ပစ္စည်း', pricing: 'ကုန်ပစ္စည်း',
+  finance: 'ငွေကြေး', balance: 'ငွေကြေး',
+}
 
 export default function AppLayout({
   page,
@@ -78,50 +83,48 @@ export default function AppLayout({
       ? 'ပစ္စည်းသွင်းသူ စီမံခန့်ခွဲမှု'
       : page === 'purchases'
         ? 'အဝယ်စာရင်း စီမံခန့်ခွဲမှု'
-      : (page === 'home' ? shopName : current.label)
+      : (page === 'home' ? 'အရောင်းဒိုင်ခွက်' : current.label)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [shopAnchor, setShopAnchor] = useState(null)
   const [headerActions, setHeaderActions] = useState(null)
-  // Map from the preferred key order rather than filtering navItems: filter preserves
-  // the desktop menu's order and would put the sales page in the second position.
-  const mobilePrimary = primaryMobileKeys
-    .map((key) => navItems.find((item) => item.key === key))
-    .filter(Boolean)
-  const mobileDrawerItems = navItems.filter((item) => mobileDrawerKeys.includes(item.key))
-
   const navigate = (nextPage) => {
     onNavigate(nextPage)
     setMobileOpen(false)
   }
 
-  const navList = (items, compact = false) => (
-    <List component="nav" aria-label="အဓိက မီနူး" sx={{ px: compact ? 1 : 1.25, py: compact ? 0 : 1 }}>
-      {items.map((item) => (
-        <ListItemButton
-          key={item.key}
-          selected={page === item.key}
-          onClick={() => navigate(item.key)}
-          onMouseEnter={() => preloadRoute(item.key)}
-          onFocus={() => preloadRoute(item.key)}
-          sx={{
-            mb: 0.5,
-            borderRadius: 2.5,
-            color: desktop ? 'rgba(255,255,255,.78)' : 'text.primary',
-            '& .MuiListItemIcon-root': { color: 'inherit', minWidth: 38 },
-            '&.Mui-selected': {
-              color: desktop ? '#fff' : '#047857',
-              bgcolor: desktop ? 'rgba(167,243,208,.18)' : '#dcfce7',
-              boxShadow: desktop ? 'inset 3px 0 #6ee7b7' : 'none',
-            },
-            '&.Mui-selected:hover, &:hover': { bgcolor: desktop ? 'rgba(255,255,255,.09)' : '#f0fdf4' },
-          }}
-        >
-          <ListItemIcon>{item.icon}</ListItemIcon>
-          <ListItemText primary={item.label} slotProps={{ primary: { fontWeight: 750 } }} />
-        </ListItemButton>
-      ))}
-    </List>
-  )
+  const navList = (items, compact = false) => {
+    let lastGroup = ''
+    return (
+      <List component="nav" className={desktop ? 'prototype-side-nav' : 'prototype-drawer-nav'} sx={{ px: compact ? 0 : 0.25, py: compact ? 0 : 0.5 }}>
+        {items.map((item) => {
+          const group = navGroupByKey[item.key]
+          const showTitle = group && group !== lastGroup
+          lastGroup = group
+          return <Box key={item.key}>
+            {showTitle ? <Typography className="prototype-nav-title">{group}</Typography> : null}
+            <ListItemButton
+              selected={page === item.key}
+              onClick={() => navigate(item.key)}
+              onMouseEnter={() => preloadRoute(item.key)}
+              onFocus={() => preloadRoute(item.key)}
+              className="prototype-nav-link"
+              sx={{
+                mb: 0.25,
+                borderRadius: 2.75,
+                color: desktop ? 'rgba(223,249,237,.92)' : 'text.primary',
+                '& .MuiListItemIcon-root': { color: 'inherit', minWidth: 38 },
+                '&.Mui-selected': { color: desktop ? '#fff' : '#047857', bgcolor: desktop ? 'rgba(255,255,255,.18)' : '#dcfce7', boxShadow: desktop ? 'inset 3px 0 #6ee7b7' : 'none' },
+                '&.Mui-selected:hover, &:hover': { bgcolor: desktop ? 'rgba(255,255,255,.10)' : '#f0fdf4' },
+              }}
+            >
+              <ListItemIcon>{item.icon}</ListItemIcon>
+              <ListItemText primary={item.label} slotProps={{ primary: { fontWeight: 750 } }} />
+            </ListItemButton>
+          </Box>
+        })}
+      </List>
+    )
+  }
 
   const accountArea = (
     <Box className="drawer-account-area">
@@ -211,9 +214,13 @@ export default function AppLayout({
             </>
           ) : null}
           {headerActions ? <Box className="app-header-actions">{headerActions}</Box> : null}
-          <IconButton aria-label={colorMode === 'dark' ? 'အလင်းရောင်ပုံစံသို့ ပြောင်းရန်' : 'အမှောင်ရောင်ပုံစံသို့ ပြောင်းရန်'} onClick={onToggleColorMode}>
+          <IconButton className="app-notification-button" aria-label="အသိပေးချက်များ">
+            <Badge color="error" variant="dot"><NotificationsRoundedIcon /></Badge>
+          </IconButton>
+          <IconButton className="app-color-mode-toggle" aria-label={colorMode === 'dark' ? 'အလင်းရောင်ပုံစံသို့ ပြောင်းရန်' : 'အမှောင်ရောင်ပုံစံသို့ ပြောင်းရန်'} onClick={onToggleColorMode}>
             {colorMode === 'dark' ? <LightModeRoundedIcon /> : <DarkModeRoundedIcon />}
           </IconButton>
+          <Avatar className="app-user-avatar" aria-label="အသုံးပြုသူ">{shopName.slice(0, 1)}</Avatar>
         </Toolbar>
       </AppBar>
 
@@ -244,7 +251,7 @@ export default function AppLayout({
               <Typography fontWeight={850} noWrap>{shopName}</Typography>
             </Box>
           </Toolbar>
-          {navList(mobileDrawerItems, true)}
+          {navList(navItems, true)}
           <Box sx={{ mt: 'auto', borderTop: '1px solid', borderColor: 'divider', pt: 1 }}>
             {settingsItem}
             {colorModeItem}
@@ -256,14 +263,17 @@ export default function AppLayout({
       <Box component="main" className="app-main" sx={{ ml: desktop ? `${drawerWidth}px` : 0, pt: { xs: '80px', md: '88px' } }}>
         <Box className="content-wrap">{children}</Box>
       </Box>
-
-      {!desktop ? (
-        <BottomNavigation value={primaryMobileKeys.includes(page) ? page : false} onChange={(_, nextPage) => navigate(nextPage)} showLabels className="mobile-bottom-nav">
-          {mobilePrimary.map((item) => (
-            <BottomNavigationAction key={item.key} label={item.label} value={item.key} icon={item.icon} onMouseEnter={() => preloadRoute(item.key)} onFocus={() => preloadRoute(item.key)} />
-          ))}
-        </BottomNavigation>
-      ) : null}
+      {!desktop ? <BottomNavigation
+        value={['home', 'order', 'products'].includes(page) ? page : false}
+        showLabels
+        className="mobile-bottom-navigation"
+        aria-label="အဓိက စာမျက်နှာများ"
+      >
+        <BottomNavigationAction value="home" label="ပင်မ" icon={<DashboardRoundedIcon />} onClick={() => navigate('home')} />
+        <BottomNavigationAction value="order" label="အရောင်း" icon={<AddShoppingCartRoundedIcon />} onClick={() => navigate('order')} />
+        <BottomNavigationAction value="products" label="စာရင်း" icon={<CategoryRoundedIcon />} onClick={() => navigate('products')} />
+        <BottomNavigationAction value="more" label="ပိုမို" icon={<MoreHorizRoundedIcon />} onClick={() => setMobileOpen(true)} />
+      </BottomNavigation> : null}
     </Box>
     </AppHeaderActionsContext.Provider>
   )

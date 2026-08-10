@@ -174,12 +174,14 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
     const inventoryValuation = balances.reduce((sum, balance) =>
       sum + Number(balance.onHand) * Number(balance.product.cost ?? 0), 0);
     const cashBalance = cashReceived - refunds - purchasePayments - operatingExpenses;
+    const cashOut = purchasePayments + operatingExpenses + refunds;
     const stockUnits = balances.reduce((sum, balance) => sum + Math.max(0, Number(balance.onHand)), 0);
 
     const lowStock = lowStockBatches
       .map((batch) => ({
         inventoryBatchId: batch.id,
         productId: batch.productId,
+        productCode: batch.product.sku,
         productName: batch.product.name,
         variantId: batch.variantId,
         variantName: batch.variant?.name ?? null,
@@ -188,15 +190,25 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
       .filter((batch) => batch.availableQuantity <= 5)
       .sort((a, b) => a.availableQuantity - b.availableQuantity);
 
+    const paymentMethodForOrder = (orderId: string) => payments
+      .filter((payment) => {
+        if (payment.type !== "payment" || payment.scope === "cod-settlement-void") return false;
+        if (payment.orderId === orderId) return true;
+        return parseJsonArray(payment.orderIds).some((entry) => entry === orderId);
+      })
+      .sort((a, b) => b.paidAt.getTime() - a.paidAt.getTime())[0]?.method ?? "ငွေသား";
+
     const recentSales = recognizedOrders
       .sort((a, b) => (recognizedAt(b)?.getTime() ?? 0) - (recognizedAt(a)?.getTime() ?? 0))
-      .slice(0, 6)
+      .slice(0, 10)
       .map((order) => ({
         id: order.id,
         invoiceNumber: order.orderNumber ?? order.id.slice(-6).toUpperCase(),
         customerName: order.customer?.name ?? "လမ်းလျှောက်ဝယ်သူ",
         amount: order.total,
         paymentStatus: order.paymentStatus,
+        paymentMethod: paymentMethodForOrder(order.id),
+        itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
         completedAt: recognizedAt(order),
       }));
 
@@ -224,6 +236,7 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
         cashReceived,
         purchasePayments,
         refunds,
+        cashOut,
         cashBalance,
         inventoryValuation,
         salesCount: recognizedOrders.length,

@@ -5,6 +5,7 @@ import '@fontsource/roboto/latin-500.css'
 import '@fontsource/roboto/latin-700.css'
 import '@fontsource/noto-sans-myanmar/400.css'
 import '@fontsource/noto-sans-myanmar/700.css'
+import './styles/tokens.css'
 import App from './App.jsx'
 import './index.css'
 

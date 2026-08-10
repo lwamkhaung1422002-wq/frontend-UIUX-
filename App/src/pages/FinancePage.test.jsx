@@ -22,7 +22,9 @@ describe('Finance dashboard', () => {
     const html = renderToStaticMarkup(<FinancePage refresh={vi.fn()} />)
     expect(html).toContain('45,000 Ks')
     expect(html).toContain('finance-summary-grid')
-    expect(html).toContain('finance-due-card')
+    expect(html).toContain('အမျိုးအစား / အမည် / ဘောက်ချာ')
+    expect(html).toContain('လုပ်ဆောင်ချက်')
+    expect(html).not.toContain('finance-due-card')
   })
 
   it('renders compact ledger on mobile', () => {

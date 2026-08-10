@@ -535,6 +535,7 @@ model Expense {
   title     String
   category  String?
   method    String?
+  transactionId String?
   amount    Int
   spentAt   DateTime @default(now())
   note      String?
