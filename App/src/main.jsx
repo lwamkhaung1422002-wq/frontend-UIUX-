@@ -1,18 +1,22 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import '@fontsource/roboto/latin-400.css'
-import '@fontsource/roboto/latin-500.css'
-import '@fontsource/roboto/latin-700.css'
-import '@fontsource/noto-sans-myanmar/400.css'
-import '@fontsource/noto-sans-myanmar/700.css'
-import '@fontsource/inter/400.css'
-import '@fontsource/inter/700.css'
-import './styles/tokens.css'
-import App from './App.jsx'
-import './index.css'
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
+import "@fontsource/noto-sans-myanmar/400.css";
+import "@fontsource/noto-sans-myanmar/500.css";
+import "@fontsource/noto-sans-myanmar/600.css";
+import "@fontsource/noto-sans-myanmar/700.css";
+
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter/700.css";
+import "@fontsource/inter/800.css";
+
+import AppProvider from "./AppProvider";
+import "./index.css";
+
+createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    <AppProvider />
+  </StrictMode>,
+);

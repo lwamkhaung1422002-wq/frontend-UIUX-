@@ -1,49 +1,16 @@
-# POS Shop Owner Frontend
+# React + Vite
 
-Responsive POS, inventory, order, payment, expense, and profit workspace for a general shop owner.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-This frontend uses the `Api` project for auth and production data through REST API calls.
+Currently, two official plugins are available:
 
-## Local Development
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-For the full safe local-first workflow, including local API setup, sample data,
-smoke tests, mobile checks, and production preview, see `../LOCAL_DEVELOPMENT.md`.
+## React Compiler
 
-```bash
-npm install
-npm run dev
-```
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-Create `.env.local` when the API is not running on the default URL:
+## Expanding the ESLint configuration
 
-```env
-VITE_API_BASE_URL=http://localhost:3000
-```
-
-## Verification
-
-```bash
-npm run lint
-npm run typecheck
-npm run test
-npm run build
-```
-
-## Netlify Deployment
-
-- Base directory: `App`
-- Build command: `npm run build`
-- Publish directory: `dist`
-- Required environment variable:
-
-```env
-VITE_API_BASE_URL=https://your-railway-api.up.railway.app
-```
-
-## Production Notes
-
-- Register and login are handled by the `Api` project.
-- Production data is loaded from the API, not browser-only demo data.
-- The shop name returned by the API is used as the app title and brand.
-- The app includes a minimal web app manifest for PWA/mobile install testing.
-- Deploy the backend and database first, then set `VITE_API_BASE_URL` before deploying this frontend.
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.

@@ -8,17 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-.firebase-emulators/
-.firebase-config/
-firebase-debug.log
-firestore-debug.log
-test-results/
-playwright-report/
 dist
 dist-ssr
-.netlify
 *.local
-!.env.local.example
 
 # Editor directories and files
 .vscode/*
