@@ -1,23 +1,16 @@
+import { createContext, useContext, useMemo, useState } from "react";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
-import { useState, useMemo } from "react";
-
 import AppRouter from "./AppRouter";
-import { AppContext } from "./hooks/useApp";
+
+const AppPreferenceContext = createContext(null);
+export const useAppPreferences = () => useContext(AppPreferenceContext);
 
 export default function AppProvider() {
-  const [mode, setMode] = useState("light");
-  const [openDrawer, setOpenDrawer] = useState(false);
-
-  const theme = useMemo(() => {
-    return createTheme({ palette: { mode } });
-  }, [mode]);
-  return (
-    <AppContext.Provider value={{ mode, setMode, openDrawer, setOpenDrawer }}>
-      <ThemeProvider theme={theme}>
-        <CssBaseline />
-        <AppRouter />
-      </ThemeProvider>
-    </AppContext.Provider>
-  );
+  const [themeMode, setThemeMode] = useState(() => localStorage.getItem("pos-theme-mode") || "light");
+  const [shop, setShopState] = useState(() => JSON.parse(localStorage.getItem("pos-shop-details") || '{"name":"POS System","address":"","logo":""}'));
+  const setMode = (mode) => { setThemeMode(mode); localStorage.setItem("pos-theme-mode", mode); };
+  const setShop = (nextShop) => { setShopState(nextShop); localStorage.setItem("pos-shop-details", JSON.stringify(nextShop)); };
+  const theme = useMemo(() => createTheme({ palette: { mode: themeMode, primary: { main: "#1976d2", dark: "#1565c0" }, background: { default: themeMode === "dark" ? "#101827" : "#f8fafc" } } }), [themeMode]);
+  return <AppPreferenceContext.Provider value={{ themeMode, setThemeMode: setMode, shop, setShop }}><ThemeProvider theme={theme}><CssBaseline /><AppRouter /></ThemeProvider></AppPreferenceContext.Provider>;
 }
