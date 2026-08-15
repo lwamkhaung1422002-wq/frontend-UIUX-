@@ -17,10 +17,7 @@ import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import RocketLaunchRoundedIcon from "@mui/icons-material/RocketLaunchRounded";
 import ShoppingCartCheckoutRoundedIcon from "@mui/icons-material/ShoppingCartCheckoutRounded";
-import AccountBalanceWalletRoundedIcon from "@mui/icons-material/AccountBalanceWalletRounded";
 import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
-import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
-import ReceiptLongRoundedIcon from "@mui/icons-material/ReceiptLongRounded";
 import TrendingUpRoundedIcon from "@mui/icons-material/TrendingUpRounded";
 import { useNavigate } from "react-router";
 import { demoOrders, getDashboardSummary } from "../../data/dashboardData";
@@ -28,6 +25,22 @@ import { demoOrders, getDashboardSummary } from "../../data/dashboardData";
 const setupStorageKey = "pos:dashboard-setup-dismissed";
 const formatKyat = (amount) =>
   `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
+
+const paymentMethodChipSx = (paymentMethod) => {
+  const tones = {
+    Cash: { bgcolor: "#e8f6ec", color: "#38924e" },
+    KPay: { bgcolor: "#eaf2ff", color: "#2367d8" },
+    Wave: { bgcolor: "#fff0e7", color: "#df6b19" },
+  };
+
+  return {
+    ...(tones[paymentMethod] || tones.Cash),
+    fontWeight: 700,
+    height: 26,
+    fontSize: 13,
+    borderRadius: 3,
+  };
+};
 
 function MetricCard({ label, value, color, borderColor }) {
   return (
@@ -328,14 +341,9 @@ export default function HomePage() {
                   {formatKyat(order.amount)}
                 </Typography>
                 <Chip
-                  label="Done"
+                  label={order.paymentMethod}
                   size="small"
-                  sx={{
-                    bgcolor: "#e8f6ec",
-                    color: "#38924e",
-                    fontWeight: 700,
-                    height: 26,
-                  }}
+                  sx={paymentMethodChipSx(order.paymentMethod)}
                 />
               </Stack>
             </CardContent>
@@ -348,88 +356,90 @@ export default function HomePage() {
 
 function DesktopDashboard({ summary, orders, navigate }) {
   const metrics = [
-    { label: "Today's Sales", value: formatKyat(summary.todaySales), icon: <TrendingUpRoundedIcon />, tone: "primary.main", soft: "#eaf3ff" },
-    { label: "Today's Expense", value: formatKyat(summary.todayExpense), icon: <AccountBalanceWalletRoundedIcon />, tone: "warning.main", soft: "#fff5e5" },
-    { label: "Low Stock Items", value: summary.lowStockItems, icon: <Inventory2RoundedIcon />, tone: "error.main", soft: "#fff0ef" },
-    { label: "Today's Profit", value: formatKyat(summary.todayProfit), icon: <ReceiptLongRoundedIcon />, tone: "success.main", soft: "#eaf8ed" },
+    { label: "Today's Sales", value: formatKyat(summary.todaySales), trend: "12.5%", tone: "#1769e0", soft: "#f3f7ff" },
+    { label: "Today's Expense", value: formatKyat(summary.todayExpense), trend: "8.3%", tone: "#f36b2b", soft: "#fff8f1", down: true },
+    { label: "Low Stock Items", value: summary.lowStockItems, action: "See more", tone: "#7648e9", soft: "#faf7ff" },
+    { label: "Today's Profit", value: formatKyat(summary.todayProfit), trend: "18.7%", tone: "#24934a", soft: "#f4fbf6" },
+  ];
+  const topSellingProducts = [
+    { name: "Jasmine Perfume", qty: 28, initials: "JP", color: "#f4c4d4", textColor: "#a63d61" },
+    { name: "Nivea Roll On", qty: 19, initials: "NR", color: "#dce9fb", textColor: "#2f6bb8" },
+    { name: "Coca-Cola 330ml", qty: 16, initials: "CC", color: "#ffe0df", textColor: "#c63d35" },
+    { name: "Oishi Green Tea", qty: 13, initials: "OG", color: "#e4f3dc", textColor: "#538b37" },
+    { name: "Royal-D 500ml", qty: 11, initials: "RD", color: "#fff1c7", textColor: "#b88212" },
   ];
 
   return (
-    <Box sx={{ maxWidth: 1440, mx: "auto", py: 1 }}>
-      <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", mb: 4 }}>
-        <Box>
-          <Typography color="text.secondary" sx={{ fontSize: 15, mb: 0.75 }}>Overview</Typography>
-          <Typography color="text.primary" sx={{ fontSize: 30, fontWeight: 700 }}>Good evening, LI</Typography>
-          <Typography color="text.secondary" sx={{ fontSize: 15, mt: 0.75 }}>Here is what is happening in your store today.</Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => navigate("/sale/create")} sx={{ minHeight: 44, px: 2.25, borderRadius: 2, textTransform: "none", fontWeight: 700 }}>Create Order</Button>
-      </Box>
-
-      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 2.25, mb: 3.25 }}>
+    <Box sx={{ width: "100%", maxWidth: "none", mx: 0, py: 0.5 }}>
+      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 2.25, mb: 4 }}>
         {metrics.map((metric) => <DesktopMetricCard key={metric.label} {...metric} />)}
+        <Card sx={{ ...desktopCardSx, minHeight: 168 }}>
+          <CardContent sx={{ height: "100%", boxSizing: "border-box", p: 2, display: "grid", gap: 1.25, "&:last-child": { pb: 2 } }}>
+            <Button variant="contained" startIcon={<ShoppingCartCheckoutRoundedIcon />} onClick={() => navigate("/sale/create")} sx={{ minHeight: 56, textTransform: "none", fontWeight: 700, borderRadius: 1.75, whiteSpace: "nowrap" }}>Create Order</Button>
+            <Button variant="outlined" startIcon={<AddRoundedIcon />} onClick={() => navigate("/stock/add")} sx={{ minHeight: 56, textTransform: "none", fontWeight: 700, borderRadius: 1.75, whiteSpace: "nowrap" }}>Add Product</Button>
+          </CardContent>
+        </Card>
       </Box>
 
-      <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.65fr) minmax(300px, 0.85fr)", gap: 3 }}>
-        <Card sx={desktopCardSx}>
-          <CardContent sx={{ p: 3, "&:last-child": { pb: 3 } }}>
-            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2.5 }}>
-              <Box><Typography sx={{ fontSize: 20, fontWeight: 700 }}>Recent Orders</Typography><Typography color="text.secondary" sx={{ fontSize: 14, mt: 0.5 }}>Latest completed sales</Typography></Box>
-              <Button endIcon={<ArrowForwardRoundedIcon />} onClick={() => navigate("/sale")} sx={{ color: "primary.main", textTransform: "none", fontWeight: 700 }}>View all</Button>
+      <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.28fr) minmax(370px, 0.98fr)", gap: 2.25 }}>
+        <Card sx={{ ...desktopCardSx, height: 474 }}>
+          <CardContent sx={{ height: "100%", boxSizing: "border-box", p: 2.75, display: "flex", flexDirection: "column", "&:last-child": { pb: 2.75 } }}>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 3 }}>
+              <Typography sx={{ fontSize: 20, fontWeight: 700 }}>Recent Orders</Typography>
+              <Button endIcon={<ArrowForwardRoundedIcon />} onClick={() => navigate("/sale")} sx={{ minWidth: 0, p: 0, color: "primary.main", textTransform: "none", fontWeight: 700 }}>View all</Button>
             </Box>
-            <Box sx={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.85fr", px: 1.5, pb: 1.25 }}>
-              <Typography color="text.secondary" sx={{ fontSize: 13, fontWeight: 700 }}>ORDER</Typography>
-              <Typography color="text.secondary" sx={{ fontSize: 13, fontWeight: 700 }}>STATUS</Typography>
-              <Typography color="text.secondary" sx={{ fontSize: 13, fontWeight: 700, textAlign: "right" }}>AMOUNT</Typography>
+            <Box sx={{ display: "grid", gridTemplateColumns: "104px minmax(170px, 1fr) 58px 112px 128px", columnGap: 1.5, px: 0.5, pb: 1.25 }}>
+              <Typography color="text.secondary" sx={desktopTableHeaderSx}>STATUS</Typography>
+              <Typography color="text.secondary" sx={desktopTableHeaderSx}>ORDER</Typography>
+              <Typography color="text.secondary" sx={desktopTableHeaderSx}>QTY</Typography>
+              <Typography color="text.secondary" sx={desktopTableHeaderSx}>PAYMENT</Typography>
+              <Typography color="text.secondary" sx={{ ...desktopTableHeaderSx, textAlign: "right" }}>AMOUNT</Typography>
             </Box>
             <Divider />
-            {orders.map((order) => <Box key={order.id} sx={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.85fr", alignItems: "center", px: 1.5, py: 2 }}>
-              <Typography sx={{ fontSize: 15, fontWeight: 700 }}>{order.id}</Typography>
-              <Chip label="Done" size="small" sx={{ justifySelf: "start", bgcolor: "#e8f6ec", color: "success.main", fontWeight: 700, height: 26 }} />
-              <Typography sx={{ fontSize: 15, fontWeight: 700, textAlign: "right" }}>{formatKyat(order.amount)}</Typography>
-            </Box>)}
+            <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", pr: 0.75, mr: -0.75, "&::-webkit-scrollbar": { width: 6 }, "&::-webkit-scrollbar-thumb": { bgcolor: "#cbd5e1", borderRadius: 99 }, "&::-webkit-scrollbar-track": { bgcolor: "transparent" } }}>
+              {orders.map((order) => <Box key={order.id} sx={{ display: "grid", gridTemplateColumns: "104px minmax(170px, 1fr) 58px 112px 128px", columnGap: 1.5, alignItems: "center", px: 0.5, py: 1.75, borderBottom: "1px solid", borderColor: "divider" }}>
+                <Chip label="Done" size="small" sx={{ justifySelf: "start", bgcolor: "#e8f6ec", color: "#38924e", fontWeight: 700, height: 30, borderRadius: 1.5 }} />
+                <Typography noWrap sx={{ fontSize: 14, fontWeight: 600 }}>{order.id}</Typography>
+                <Typography sx={{ fontSize: 14, fontWeight: 700 }}>{order.quantity}</Typography>
+                <Chip label={order.paymentMethod} size="small" sx={{ justifySelf: "start", ...paymentMethodChipSx(order.paymentMethod) }} />
+                <Typography noWrap sx={{ fontSize: 14, fontWeight: 700, textAlign: "right" }}>{formatKyat(order.amount)}</Typography>
+              </Box>)}
+            </Box>
           </CardContent>
         </Card>
 
-        <Box sx={{ display: "grid", gap: 3, alignContent: "start" }}>
-          <Card sx={desktopCardSx}>
-            <CardContent sx={{ p: 3, "&:last-child": { pb: 3 } }}>
-              <Typography sx={{ fontSize: 20, fontWeight: 700, mb: 2.25 }}>Quick Actions</Typography>
-              <Box sx={{ display: "grid", gap: 1.25 }}>
-                <DesktopAction icon={<ShoppingCartCheckoutRoundedIcon />} title="Create Order" description="Start a new sale" onClick={() => navigate("/sale/create")} />
-                <DesktopAction icon={<AddRoundedIcon />} title="Add Product" description="Add inventory to your store" onClick={() => navigate("/stock/add")} />
-                <DesktopAction icon={<Inventory2RoundedIcon />} title="View Inventory" description="Manage products and stock" onClick={() => navigate("/stock")} />
-              </Box>
-            </CardContent>
-          </Card>
-          <Card sx={{ ...desktopCardSx, bgcolor: "#f1f7ff", border: "1px solid #d5e6fb" }}>
-            <CardContent sx={{ p: 3, "&:last-child": { pb: 3 } }}>
-              <Typography color="primary.main" sx={{ fontSize: 15, fontWeight: 700 }}>INVENTORY SNAPSHOT</Typography>
-              <Typography sx={{ fontSize: 28, fontWeight: 700, mt: 1 }}>{summary.totalProducts} Products</Typography>
-              <Typography color="text.secondary" sx={{ fontSize: 15, mt: 0.75 }}>Your stock levels are up to date.</Typography>
-              <Button onClick={() => navigate("/stock")} sx={{ mt: 1.5, px: 0, color: "primary.main", textTransform: "none", fontWeight: 700 }}>Open Inventory</Button>
-            </CardContent>
-          </Card>
-        </Box>
+        <Card sx={{ ...desktopCardSx, height: 474 }}>
+          <CardContent sx={{ height: "100%", boxSizing: "border-box", p: 2.75, "&:last-child": { pb: 2.75 } }}>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2.25 }}>
+              <Typography sx={{ fontSize: 20, fontWeight: 700 }}>Daily Top Selling Products</Typography>
+              <Button endIcon={<ArrowForwardRoundedIcon />} onClick={() => navigate("/stock")} sx={{ minWidth: 0, p: 0, color: "primary.main", textTransform: "none", fontWeight: 700 }}>View all</Button>
+            </Box>
+            <Box>
+              {topSellingProducts.map((product, index) => <Box key={product.name} sx={{ display: "grid", gridTemplateColumns: "28px 42px minmax(0, 1fr) auto", alignItems: "center", columnGap: 1.25, py: 1.7, borderBottom: index === topSellingProducts.length - 1 ? 0 : "1px solid", borderColor: "divider" }}>
+                <Typography sx={{ color: "text.secondary", fontSize: 14, fontWeight: 700 }}>{index + 1}</Typography>
+                <Box sx={{ width: 36, height: 36, borderRadius: 1.5, display: "grid", placeItems: "center", bgcolor: product.color, color: product.textColor, fontSize: 11, fontWeight: 800 }}>{product.initials}</Box>
+                <Typography noWrap sx={{ fontSize: 15, fontWeight: 600 }}>{product.name}</Typography>
+                <Box sx={{ minWidth: 64, px: 1.25, py: 0.6, borderRadius: 99, bgcolor: "#f2f6fd", color: "#335e9e", textAlign: "center" }}><Typography component="span" sx={{ fontSize: 13, fontWeight: 800 }}>{product.qty}</Typography><Typography component="span" sx={{ ml: 0.5, fontSize: 12, fontWeight: 600 }}>sold</Typography></Box>
+              </Box>)}
+            </Box>
+          </CardContent>
+        </Card>
       </Box>
     </Box>
   );
 }
 
-function DesktopMetricCard({ label, value, icon, tone, soft }) {
+function DesktopMetricCard({ label, value, trend, action, tone, soft, down = false }) {
   return (
-    <Card sx={{ ...desktopCardSx, minHeight: 148 }}>
+    <Card sx={{ ...desktopCardSx, minHeight: 168, bgcolor: soft, borderColor: `${tone}24` }}>
       <CardContent sx={{ p: 2.75, "&:last-child": { pb: 2.75 } }}>
-        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <Box><Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600 }}>{label}</Typography><Typography sx={{ mt: 1.75, fontSize: 25, lineHeight: 1.1, fontWeight: 700 }}>{value}</Typography></Box>
-          <Box sx={{ width: 42, height: 42, display: "grid", placeItems: "center", borderRadius: 2, bgcolor: soft, color: tone }}>{icon}</Box>
-        </Box>
+        <Typography sx={{ minHeight: 21, color: tone, fontSize: 15, fontWeight: 700, textAlign: "left" }}>{label}</Typography>
+        <Typography noWrap sx={{ mt: 2, fontSize: 27, lineHeight: 1.1, fontWeight: 700, textAlign: "left" }}>{value}</Typography>
+        {action ? <Button endIcon={<ArrowForwardRoundedIcon />} sx={{ mt: 2.5, minWidth: 0, p: 0, color: tone, textTransform: "none", fontWeight: 700 }}>{action}</Button> : <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 2.5, color: tone }}><TrendingUpRoundedIcon sx={{ fontSize: 23, transform: down ? "rotate(90deg)" : "none" }} /><Typography sx={{ fontSize: 14, fontWeight: 700 }}>{trend}</Typography></Stack>}
       </CardContent>
     </Card>
   );
 }
 
-function DesktopAction({ icon, title, description, onClick }) {
-  return <Button onClick={onClick} sx={{ width: "100%", minHeight: 68, px: 1.5, display: "grid", gridTemplateColumns: "42px minmax(0, 1fr) auto", alignItems: "center", textAlign: "left", color: "text.primary", textTransform: "none", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}><Box sx={{ width: 38, height: 38, display: "grid", placeItems: "center", color: "primary.main", bgcolor: "#eaf3ff", borderRadius: 1.5 }}>{icon}</Box><Box><Typography sx={{ fontSize: 15, fontWeight: 700 }}>{title}</Typography><Typography color="text.secondary" sx={{ fontSize: 13, mt: 0.25 }}>{description}</Typography></Box><ArrowForwardRoundedIcon sx={{ color: "text.secondary", fontSize: 20 }} /></Button>;
-}
-
 const desktopCardSx = { borderRadius: 3, bgcolor: "background.paper", boxShadow: "0 3px 12px rgba(15,23,42,0.07)", border: "1px solid", borderColor: "divider" };
+const desktopTableHeaderSx = { fontSize: 12, fontWeight: 700, letterSpacing: 0.15 };

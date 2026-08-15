@@ -1,10 +1,8 @@
-import { createContext, useContext, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import AppRouter from "./AppRouter";
-
-const AppPreferenceContext = createContext(null);
-export const useAppPreferences = () => useContext(AppPreferenceContext);
+import { AppPreferenceContext } from "./context/AppPreferenceContext";
 
 export default function AppProvider() {
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("pos-theme-mode") || "light");

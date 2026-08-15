@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { AppBar, Box, Button, Dialog, DialogContent, Divider, Fab, IconButton, InputAdornment, MenuItem, Paper, Stack, TextField, Toolbar, Typography, useMediaQuery } from "@mui/material";
+import { AppBar, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, IconButton, InputAdornment, MenuItem, Paper, Stack, TextField, Toolbar, Typography, useMediaQuery } from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import AddPhotoAlternateRoundedIcon from "@mui/icons-material/AddPhotoAlternateRounded";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
@@ -19,7 +19,6 @@ import SellRoundedIcon from "@mui/icons-material/SellRounded";
 import ShoppingBagRoundedIcon from "@mui/icons-material/ShoppingBagRounded";
 import StraightenRoundedIcon from "@mui/icons-material/StraightenRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
-import { DesktopPage, DesktopPanel } from "../../components/Desktop/DesktopUI";
 
 export default function AddProductPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
@@ -54,12 +53,12 @@ export default function AddProductPage() {
 }
 
 function DesktopAddProduct({ form, update, categoryDialogOpen, setCategoryDialogOpen, selectCategory, navigate, isEditMode }) {
-  return <><DesktopPage title="Add Product" subtitle="Create a product and add it to your inventory." actionLabel="Save Product" onAction={() => navigate("/stock")} actionIcon={<CheckRoundedIcon />}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.25fr) minmax(340px, 0.75fr)", gap: 3 }}><DesktopPanel><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2.25 }}><Box sx={{ gridColumn: "1 / -1" }}><Field label="Product Name" placeholder="Enter product name" value={form.name} onChange={update("name")} icon={<ShoppingBagRoundedIcon />} /></Box><Box sx={{ gridColumn: "1 / -1" }}><Field label="Description (Optional)" placeholder="Enter product description" value={form.description} onChange={update("description")} icon={<DocumentScannerRoundedIcon />} multiline minRows={3} /></Box><Field label="SKU (Optional)" placeholder="Enter SKU" value={form.sku} onChange={update("sku")} icon={<NumbersRoundedIcon />} endIcon={<AutoAwesomeRoundedIcon />} /><Field label="Barcode (Optional)" placeholder="Scan barcode" value={form.barcode} onChange={update("barcode")} icon={<QrCode2RoundedIcon />} endIcon={<IconButton size="small"><QrCodeScannerRoundedIcon /></IconButton>} /><Box sx={{ gridColumn: "1 / -1" }}><CategorySelector value={form.category} onClick={() => setCategoryDialogOpen(true)} /></Box>{!isEditMode && <><Field label="Cost Price" value={form.cost} onChange={update("cost")} icon={<CurrencyExchangeRoundedIcon />} /><Field label="Selling Price" value={form.price} onChange={update("price")} icon={<SellRoundedIcon />} /><Field label="Stock Quantity" value={form.stock} onChange={update("stock")} icon={<Inventory2RoundedIcon />} /></>}<Field label="Unit" select value={form.unit} onChange={update("unit")} icon={<StraightenRoundedIcon />}><MenuItem value="pcs">pcs</MenuItem><MenuItem value="box">box</MenuItem></Field><Box sx={{ gridColumn: "1 / -1" }}><Field label="Minimum Stock Alert Level (Optional)" value={form.minimum} onChange={update("minimum")} icon={<WarningAmberRoundedIcon />} /></Box></Box></DesktopPanel><DesktopPanel sx={{ height: "fit-content" }}><Typography sx={{ fontSize: 19, fontWeight: 700, mb: 2 }}>Product image</Typography><Box sx={{ height: 280, display: "grid", placeItems: "center", border: "1px dashed", borderColor: "divider", borderRadius: 2.5, bgcolor: "#f8fafc", color: "text.secondary" }}><Stack sx={{ alignItems: "center", gap: 1.5 }}><AddPhotoAlternateRoundedIcon sx={{ fontSize: 58 }} /><Button startIcon={<PhotoCameraRoundedIcon />} sx={{ textTransform: "none" }}>Upload product image</Button></Stack></Box><Typography color="text.secondary" sx={{ fontSize: 14, lineHeight: 1.6, mt: 2 }}>Use a clear square image to help identify products quickly at checkout.</Typography></DesktopPanel></Box></DesktopPage><CategoryDialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} onSelect={selectCategory} /></>;
+  return <><Dialog open fullWidth maxWidth="md" onClose={() => navigate("/stock")} slotProps={{ paper: { sx: { maxWidth: 980, borderRadius: 3, maxHeight: "88vh" } } }}><DialogTitle sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider" }}><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>{isEditMode ? "Edit Product" : "Create Product"}</Typography><Typography color="text.secondary" sx={{ mt: .2, fontSize: 13 }}>Product details, pricing, and stock information.</Typography></Box></DialogTitle><DialogContent dividers sx={{ p: 2.5 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.25fr) minmax(240px, .75fr)", gap: 2 }}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25 }}><Box sx={{ gridColumn: "1 / -1" }}><Field label="Product Name" placeholder="Enter product name" value={form.name} onChange={update("name")} icon={<ShoppingBagRoundedIcon />} /></Box><Box sx={{ gridColumn: "1 / -1" }}><Field label="Description (Optional)" placeholder="Enter product description" value={form.description} onChange={update("description")} icon={<DocumentScannerRoundedIcon />} multiline minRows={3} /></Box><Field label="SKU (Optional)" placeholder="Enter SKU" value={form.sku} onChange={update("sku")} icon={<NumbersRoundedIcon />} endIcon={<AutoAwesomeRoundedIcon />} /><Field label="Barcode (Optional)" placeholder="Scan barcode" value={form.barcode} onChange={update("barcode")} icon={<QrCode2RoundedIcon />} endIcon={<IconButton size="small" aria-label="Scan barcode"><QrCodeScannerRoundedIcon /></IconButton>} /><Box sx={{ gridColumn: "1 / -1" }}><CategorySelector value={form.category} onClick={() => setCategoryDialogOpen(true)} /></Box>{!isEditMode && <><Field label="Cost Price" value={form.cost} onChange={update("cost")} icon={<CurrencyExchangeRoundedIcon />} /><Field label="Selling Price" value={form.price} onChange={update("price")} icon={<SellRoundedIcon />} /><Field label="Stock Quantity" value={form.stock} onChange={update("stock")} icon={<Inventory2RoundedIcon />} /></>}<Field label="Unit" select value={form.unit} onChange={update("unit")} icon={<StraightenRoundedIcon />}><MenuItem value="pcs">pcs</MenuItem><MenuItem value="box">box</MenuItem></Field><Box sx={{ gridColumn: "1 / -1" }}><Field label="Minimum Stock Alert Level (Optional)" value={form.minimum} onChange={update("minimum")} icon={<WarningAmberRoundedIcon />} /></Box></Box><Box><Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1 }}>Product image</Typography><Box sx={{ height: 170, display: "grid", placeItems: "center", border: "1px dashed", borderColor: "divider", borderRadius: 2, bgcolor: "#f8fafc", color: "text.secondary" }}><Stack sx={{ alignItems: "center", gap: .5 }}><AddPhotoAlternateRoundedIcon sx={{ fontSize: 42 }} /><Button startIcon={<PhotoCameraRoundedIcon />} sx={{ textTransform: "none" }}>Upload image</Button></Stack></Box></Box></Box></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}><Button onClick={() => navigate("/stock")} sx={{ textTransform: "none" }}>Cancel</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => navigate("/stock")} sx={{ minHeight: 40, textTransform: "none", fontWeight: 700 }}>Save Product</Button></DialogActions></Dialog><CategoryDialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} onSelect={selectCategory} /></>;
 }
 
 function CategorySelector({ value, onClick }) {
   return (
-    <Box sx={{ mb: 2 }}>
+    <Box sx={{ mb: { xs: 2, md: 1.25 } }}>
       <Typography color="text.primary" fontSize={16} fontWeight={700} sx={{ mb: 0.75 }}>Category (Optional)</Typography>
       <Button
         fullWidth
@@ -101,7 +100,7 @@ function CategoryDialog({ open, onClose, onSelect }) {
 
 function Field({ label, icon, endIcon, multiline, minRows, selectPlaceholder, children, ...props }) {
   return (
-    <Box sx={{ mb: 2 }}>
+    <Box sx={{ mb: { xs: 2, md: 1.25 } }}>
       <Typography color="text.primary" fontSize={16} fontWeight={700} sx={{ mb: 0.75 }}>{label}</Typography>
       <TextField
         fullWidth
@@ -120,7 +119,7 @@ function Field({ label, icon, endIcon, multiline, minRows, selectPlaceholder, ch
         }}
         sx={{
           "& .MuiOutlinedInput-root": {
-            minHeight: multiline ? 116 : 64,
+            minHeight: multiline ? { xs: 116, md: 96 } : { xs: 64, md: 56 },
             borderRadius: 1.5,
             fontSize: 16,
             alignItems: multiline ? "flex-start" : "center",

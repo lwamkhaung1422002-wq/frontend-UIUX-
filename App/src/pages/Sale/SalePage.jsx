@@ -16,6 +16,7 @@ import {
   InputAdornment,
   Menu,
   MenuItem,
+  Popover,
   Stack,
   TextField,
   Typography,
@@ -23,6 +24,7 @@ import {
 } from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
+import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import CreditCardRoundedIcon from "@mui/icons-material/CreditCardRounded";
@@ -33,7 +35,6 @@ import ReceiptLongRoundedIcon from "@mui/icons-material/ReceiptLongRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import { demoOrders } from "../../data/dashboardData";
-import { DesktopPage, DesktopPanel, DesktopSearch, DesktopStat } from "../../components/Desktop/DesktopUI";
 
 const initialFilters = {
   range: "all",
@@ -164,7 +165,7 @@ export default function SalePage() {
     setMenuOrder(null);
   };
 
-  if (!isMobile) return <DesktopOrdersPage orders={filteredOrders} search={search} setSearch={setSearch} totalAmount={totalAmount} navigate={navigate} clearFilters={() => setFilters(initialFilters)} />;
+  if (!isMobile) return <DesktopOrdersPage orders={filteredOrders} search={search} setSearch={setSearch} totalAmount={totalAmount} filters={filters} setFilters={setFilters} onDelete={(id) => setOrders((currentOrders) => currentOrders.filter((order) => order.id !== id))} />;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f8fafc", px: 3, py: 3 }}>
@@ -271,7 +272,7 @@ export default function SalePage() {
       </Fab>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
-        <MenuItem onClick={() => setMenuAnchor(null)}>
+        <MenuItem onClick={() => { navigate(`/sale/${menuOrder?.id}`); setMenuAnchor(null); }}>
           <VisibilityRoundedIcon sx={{ mr: 1.5 }} />View Details
         </MenuItem>
         <MenuItem onClick={removeOrder} sx={{ color: "error.main" }}>
@@ -354,8 +355,69 @@ export default function SalePage() {
   );
 }
 
-function DesktopOrdersPage({ orders, search, setSearch, totalAmount, navigate, clearFilters }) {
-  return <DesktopPage title="Orders" subtitle="Review sales, payments, and order status." actionLabel="Create Order" onAction={() => navigate("/sale/create")}><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2.25, mb: 3 }}><DesktopStat label="Orders" value={orders.length} helper="Visible transactions" /><DesktopStat label="Collected" value={formatKyat(totalAmount)} color="success.main" helper="Paid order value" /><DesktopStat label="Payment Status" value="Paid" color="primary.main" helper="All current orders" /></Box><DesktopPanel><Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, mb: 3 }}><DesktopSearch value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by order number" /><Button variant="outlined" onClick={clearFilters} sx={{ minHeight: 44, textTransform: "none" }}>Clear filters</Button></Box><Box sx={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 0.8fr 0.75fr auto", alignItems: "center", px: 2, pb: 1.25 }}><TableHeader>ORDER</TableHeader><TableHeader>DATE</TableHeader><TableHeader>STATUS</TableHeader><TableHeader>PAYMENT</TableHeader><TableHeader align="right">AMOUNT</TableHeader></Box><Divider /><Box>{orders.map((order) => <Box key={order.id} sx={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 0.8fr 0.75fr auto", alignItems: "center", px: 2, py: 2, borderBottom: "1px solid", borderColor: "divider" }}><Typography fontWeight={700}>{order.id}</Typography><Typography color="text.secondary">{order.date}</Typography><Chip label="Done" size="small" color="success" sx={{ justifySelf: "start" }} /><Chip label={order.paymentStatus} size="small" variant="outlined" color="success" sx={{ justifySelf: "start" }} /><Typography color="primary.main" sx={{ fontWeight: 700, textAlign: "right" }}>{formatKyat(order.amount)}</Typography></Box>)}</Box></DesktopPanel></DesktopPage>;
+function DesktopOrdersPage({ orders, search, setSearch, totalAmount, filters, setFilters, onDelete }) {
+  const updateFilter = (field, value) => setFilters((current) => ({ ...current, [field]: value }));
+  const [dateFilterAnchor, setDateFilterAnchor] = useState(null);
+  const [detailOrder, setDetailOrder] = useState(null);
+  const clearDesktopFilters = () => {
+    setSearch("");
+    setFilters(initialFilters);
+  };
+  const setDesktopDateRange = (range) => {
+    setFilters((current) => ({
+      ...current,
+      range,
+      ...(range === "custom" ? {} : { from: "", to: "" }),
+    }));
+  };
+  const orderStatusTone = (status) => status === "Done" ? { bgcolor: "#e8f6ec", color: "#278a45" } : { bgcolor: "#fff1f0", color: "#d14343" };
+  const paymentTone = (status) => status === "Paid" ? { bgcolor: "#eaf3ff", color: "#1769e0" } : status === "Partial" ? { bgcolor: "#fff5e6", color: "#e47616" } : { bgcolor: "#fff1f0", color: "#d14343" };
+  return <Box sx={{ width: "100%" }}>
+    <Card sx={desktopOrdersPanelSx}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
+      <Box sx={{ display: "grid", gridTemplateColumns: "minmax(250px, 1fr) 145px 166px 190px auto", gap: 1, alignItems: "center" }}>
+        <TextField value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by order number" InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ "& .MuiOutlinedInput-root": { minHeight: 44, borderRadius: 1.5 } }} />
+        <TextField select value={filters.orderStatus} onChange={(event) => updateFilter("orderStatus", event.target.value)} size="small" sx={desktopFilterSx}><MenuItem value="all">All status</MenuItem><MenuItem value="done">Done</MenuItem><MenuItem value="cancelled">Cancel</MenuItem></TextField>
+        <TextField select value={filters.paymentStatus} onChange={(event) => updateFilter("paymentStatus", event.target.value)} size="small" sx={desktopFilterSx}><MenuItem value="all">All payment</MenuItem><MenuItem value="paid">Paid</MenuItem><MenuItem value="unpaid">Unpaid</MenuItem><MenuItem value="partial">Partial</MenuItem></TextField>
+        <Button onClick={(event) => setDateFilterAnchor(event.currentTarget)} startIcon={<CalendarMonthRoundedIcon />} variant="outlined" sx={{ ...desktopDateFilterSx, justifyContent: "flex-start" }}>Date and time</Button>
+        <Button onClick={clearDesktopFilters} variant="contained" sx={{ minHeight: 42, textTransform: "none", whiteSpace: "nowrap", px: 2 }}>Clear</Button>
+      </Box>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mt: 2.25, mb: 1.75, px: 1, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}><Typography sx={{ fontSize: 16, fontWeight: 700 }}>Qty {orders.length} orders</Typography><Typography sx={{ fontSize: 16, fontWeight: 800 }}>Total Amount&nbsp;&nbsp;{formatKyat(totalAmount)}</Typography></Box>
+      <Box sx={desktopTableHeaderSx}><TableHeader>NO.</TableHeader><TableHeader>ORDER</TableHeader><TableHeader>DATE & TIME</TableHeader><TableHeader>STATUS</TableHeader><TableHeader>PAYMENT</TableHeader><TableHeader align="right" sx={desktopAmountSx}>AMOUNT</TableHeader><TableHeader align="right">ACTIONS</TableHeader></Box>
+      <Divider />
+      <Box>{orders.map((order, index) => <Box key={order.id} sx={desktopTableRowSx}><Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600 }}>{index + 1}</Typography><Typography noWrap sx={{ fontSize: 14, fontWeight: 700 }}>{order.id}</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 1.25, whiteSpace: "nowrap" }}><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><CalendarMonthRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.date.split("-").reverse().join("/")}</Typography></Stack><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><AccessTimeRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.time}</Typography></Stack></Box><Chip label={order.status} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...orderStatusTone(order.status) }} /><Chip label={order.paymentStatus} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...paymentTone(order.paymentStatus) }} /><Typography noWrap sx={{ ...desktopAmountSx, fontSize: 14, fontWeight: 700, textAlign: "right", justifySelf: "end", whiteSpace: "nowrap" }}>{formatKyat(order.amount)}</Typography><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}><IconButton aria-label={`View ${order.id} details`} onClick={() => setDetailOrder(order)} color="primary" size="small" sx={desktopOrderActionSx}><VisibilityRoundedIcon fontSize="small" /></IconButton><IconButton aria-label={`Delete ${order.id}`} onClick={() => onDelete(order.id)} color="error" size="small" sx={desktopOrderActionSx}><DeleteOutlineRoundedIcon fontSize="small" /></IconButton></Box></Box>)}</Box>
+    </CardContent></Card>
+    <Popover open={Boolean(dateFilterAnchor)} anchorEl={dateFilterAnchor} onClose={() => setDateFilterAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} slotProps={{ paper: { sx: { width: 360, p: 2, borderRadius: 2 } } }}>
+      <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Date and time</Typography>
+      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1 }}><FilterChoiceButton active={filters.range === "all"} onClick={() => setDesktopDateRange("all")}>All</FilterChoiceButton><FilterChoiceButton active={filters.range === "today"} onClick={() => setDesktopDateRange("today")}>Today</FilterChoiceButton><FilterChoiceButton active={filters.range === "custom"} onClick={() => setDesktopDateRange("custom")}>Custom</FilterChoiceButton></Box>
+      {filters.range === "custom" && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mt: 1.5 }}><Box><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: .5 }}>From</Typography><TextField fullWidth type="date" size="small" value={filters.from} onChange={(event) => updateFilter("from", event.target.value)} slotProps={{ htmlInput: { "aria-label": "From date" } }} /></Box><Box><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: .5 }}>To</Typography><TextField fullWidth type="date" size="small" value={filters.to} onChange={(event) => updateFilter("to", event.target.value)} slotProps={{ htmlInput: { "aria-label": "To date" } }} /></Box></Box>}
+      <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1.75 }}><Button size="small" onClick={() => setDesktopDateRange("all")}>Reset</Button><Button variant="contained" size="small" onClick={() => setDateFilterAnchor(null)}>Apply</Button></Stack>
+    </Popover>
+    <DesktopOrderDetailsModal order={detailOrder} onClose={() => setDetailOrder(null)} onDelete={() => { onDelete(detailOrder?.id); setDetailOrder(null); }} />
+  </Box>;
 }
 
-function TableHeader({ children, align }) { return <Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700, textAlign: align }}>{children}</Typography>; }
+const desktopOrdersPanelSx = { borderRadius: 2.5, border: "1px solid", borderColor: "divider", boxShadow: "0 3px 12px rgba(15,23,42,0.07)" };
+const desktopFilterSx = { "& .MuiOutlinedInput-root": { minHeight: 44, borderRadius: 1.5, bgcolor: "background.paper" } };
+const desktopDateFilterSx = { minHeight: 44, borderRadius: 1.5, borderColor: "divider", color: "text.primary", textTransform: "none", fontWeight: 500, whiteSpace: "nowrap", "&:hover": { borderColor: "primary.main", bgcolor: "action.hover" } };
+const desktopTableGrid = { display: "grid", gridTemplateColumns: "56px minmax(230px, 1.15fr) minmax(275px, 1.2fr) 96px 112px minmax(145px, .6fr) 132px", columnGap: "20px", alignItems: "center", px: "20px" };
+const desktopTableHeaderSx = { ...desktopTableGrid, py: "16px" };
+const desktopTableRowSx = { ...desktopTableGrid, py: "14px", minHeight: "68px", borderBottom: "1px solid", borderColor: "divider" };
+const desktopAmountSx = { pr: 8 };
+const desktopOrderActionSx = { width: 44, height: 44, border: "1px solid", borderColor: "divider", borderRadius: 1.5 };
+
+function TableHeader({ children, align, sx }) { return <Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700, textAlign: align, ...sx }}>{children}</Typography>; }
+
+function DesktopOrderDetailsModal({ order, onClose, onDelete }) {
+  if (!order) return null;
+  const itemName = order.quantity > 1 ? "Store items" : "Store item";
+  return <Dialog open={Boolean(order)} onClose={onClose} fullWidth maxWidth="md" PaperProps={{ sx: { borderRadius: 3, maxWidth: 860 } }}>
+    <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>Order Details</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 14 }}>{order.id}</Typography></Box><Chip label="Done" icon={<CheckRoundedIcon />} sx={{ bgcolor: "#e8f6ec", color: "#278a45", fontWeight: 700 }} /></Stack></DialogTitle>
+    <DialogContent sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(270px, .78fr)", gap: 2.5 }}>
+      <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontWeight: 800, fontSize: 17 }}>Order items ({order.quantity})</Typography><Divider sx={{ my: 1.75 }} /><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2 }}><Box><Typography sx={{ fontWeight: 700 }}>{itemName}</Typography><Typography color="text.secondary" sx={{ mt: .5, fontSize: 14 }}>{formatKyat(order.amount)} × {order.quantity}</Typography></Box><Typography sx={{ fontWeight: 800, fontSize: 18 }}>{formatKyat(order.amount)}</Typography></Box></CardContent></Card>
+      <Stack spacing={2}><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order information</Typography><Stack spacing={1.1}><DesktopDetailRow label="Order date" value={`${order.date.split("-").reverse().join("/")} · ${order.time}`} /><DesktopDetailRow label="Payment status" value={order.paymentStatus} tone="#278a45" /><DesktopDetailRow label="Payment method" value={order.paymentMethod} /></Stack></CardContent></Card><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order summary</Typography><Stack spacing={1.1}><DesktopDetailRow label="Subtotal" value={formatKyat(order.amount)} /><DesktopDetailRow label="Discount" value={formatKyat(0)} /><Divider /><DesktopDetailRow label="Total" value={formatKyat(order.amount)} tone="primary.main" strong /></Stack></CardContent></Card></Stack>
+    </Box></DialogContent>
+    <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid", borderColor: "divider", justifyContent: "space-between" }}><Button color="error" startIcon={<DeleteOutlineRoundedIcon />} onClick={onDelete} sx={{ textTransform: "none", fontWeight: 700 }}>Delete order</Button><Stack direction="row" spacing={1}><Button onClick={onClose} sx={{ textTransform: "none" }}>Close</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => window.print()} sx={{ textTransform: "none" }}>Print receipt</Button></Stack></DialogActions>
+  </Dialog>;
+}
+
+function DesktopDetailRow({ label, value, tone = "text.primary", strong = false }) { return <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 14 }}>{label}</Typography><Typography color={tone} sx={{ fontSize: 14, textAlign: "right", fontWeight: strong ? 800 : 700 }}>{value}</Typography></Box>; }

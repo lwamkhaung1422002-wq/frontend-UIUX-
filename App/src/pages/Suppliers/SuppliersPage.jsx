@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
   Chip,
   Dialog,
+  DialogActions,
   DialogContent,
+  DialogTitle,
+  Divider,
   IconButton,
   InputAdornment,
   Menu,
   MenuItem,
   Paper,
+  Popover,
   Stack,
   TextField,
   Typography,
@@ -24,19 +28,139 @@ import CreditCardRoundedIcon from "@mui/icons-material/CreditCardRounded";
 import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
+import DrawOutlinedIcon from "@mui/icons-material/DrawOutlined";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
-import { DesktopPlaceholder } from "../../components/Desktop/DesktopUI";
 import { useNavigate } from "react-router";
 
 const supplierRecords = [
-  { id: "125978", name: "Pahtama Group", amount: 374000, status: "Credit", dateLabel: "Due", date: "2026-05-20" },
-  { id: "111548", name: "Unilever", amount: 16000, status: "Paid", dateLabel: "Paid", date: "2026-06-11" },
+  {
+    id: "125978",
+    name: "Pahtama Group",
+    amount: 374000,
+    status: "Credit",
+    dateLabel: "Due",
+    date: "2026-05-20",
+  },
+  {
+    id: "111548",
+    name: "Unilever",
+    amount: 16000,
+    status: "Paid",
+    dateLabel: "Paid",
+    date: "2026-06-11",
+  },
+];
+const desktopSupplierRecords = [
+  {
+    id: "125978",
+    name: "Pahtama Group",
+    amount: 374000,
+    status: "Credit",
+    receiveDate: "2026-05-10",
+    dateLabel: "Due",
+    date: "2026-05-20",
+  },
+  {
+    id: "111548",
+    name: "Unilever",
+    amount: 16000,
+    status: "Paid",
+    method: "KBZPay",
+    settlement: { username: "Unilever Finance", account: "09 765 432 100", transactionId: "KBZ-0611-16000", paidDate: "2026-06-11" },
+    receiveDate: "2026-06-11",
+    dateLabel: "Paid",
+    date: "2026-06-11",
+  },
+  {
+    id: "114220",
+    name: "KB Trading",
+    amount: 45000,
+    status: "Credit",
+    receiveDate: "2026-06-13",
+    dateLabel: "Due",
+    date: "2026-06-25",
+  },
+  {
+    id: "117654",
+    name: "Shwe Moe",
+    amount: 21000,
+    status: "Cancel",
+    receiveDate: "2026-06-18",
+    dateLabel: "",
+    date: "",
+  },
+  {
+    id: "118904",
+    name: "Royal Distribution",
+    amount: 58000,
+    status: "Paid",
+    method: "Cash",
+    settlement: { receiver: "Ko Aung", signature: "Ko Aung", paidDate: "2026-06-24" },
+    receiveDate: "2026-06-24",
+    dateLabel: "Paid",
+    date: "2026-06-24",
+  },
+  {
+    id: "119105",
+    name: "Golden Nest",
+    amount: 89000,
+    status: "Credit",
+    receiveDate: "2026-07-01",
+    dateLabel: "Due",
+    date: "2026-07-14",
+  },
+  {
+    id: "120312",
+    name: "Aung Family Supply",
+    amount: 32500,
+    status: "Paid",
+    method: "Cash",
+    settlement: { receiver: "Ko Aung", signature: "Ko Aung", paidDate: "2026-07-05" },
+    receiveDate: "2026-07-05",
+    dateLabel: "Paid",
+    date: "2026-07-05",
+  },
+  {
+    id: "121768",
+    name: "Sunrise Wholesale",
+    amount: 76000,
+    status: "Credit",
+    receiveDate: "2026-07-09",
+    dateLabel: "Due",
+    date: "2026-07-21",
+  },
+  {
+    id: "122001",
+    name: "Myanmar Choice",
+    amount: 18500,
+    status: "Cancel",
+    receiveDate: "2026-07-12",
+    dateLabel: "",
+    date: "",
+  },
+  {
+    id: "123445",
+    name: "Evergreen Mart",
+    amount: 64200,
+    status: "Paid",
+    method: "KBZPay",
+    settlement: { username: "Evergreen Accounts", account: "09 456 789 234", transactionId: "KBZ-0716-64200", paidDate: "2026-07-16" },
+    receiveDate: "2026-07-16",
+    dateLabel: "Paid",
+    date: "2026-07-16",
+  },
 ];
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
+const desktopHistoryRecords = [
+  { id: "TRX-20260611-0001", supplier: "Unilever", invoice: "111548", amount: 16000, method: "KPay", kind: "mobile", paymentDate: "11/06/2026", relativeTime: "about an hour ago", timestamp: "11/08/2026 11:20 PM" },
+  { id: "PAY-20260520-0001", supplier: "Pahtama Group", invoice: "125978", amount: 100000, method: "Cash", kind: "cash", signature: "Ko Aung", paymentDate: "20/05/2026", relativeTime: "2 days ago", timestamp: "11/08/2026 09:45 AM" },
+  { id: "EXP-20260701-0001", supplier: "Expense record", amount: 250000, method: "Cash", kind: "expense", dateLabel: "Expense Date", paymentDate: "01/07/2026", relativeTime: "1 week ago", timestamp: "01/07/2026 08:30 AM" },
+];
 
 export default function SuppliersPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
@@ -55,65 +179,1444 @@ export default function SuppliersPage() {
     return () => window.removeEventListener("suppliers-filter", openFilter);
   }, []);
 
-  const visibleRecords = useMemo(() => supplierRecords.filter((record) => {
-    const query = search.trim().toLowerCase();
-    return (status === "All" || record.status === status)
-      && (!query || record.name.toLowerCase().includes(query) || record.id.includes(query))
-      && (!from || record.date >= from)
-      && (!to || record.date <= to);
-  }), [from, search, status, to]);
+  const visibleRecords = useMemo(
+    () =>
+      supplierRecords.filter((record) => {
+        const query = search.trim().toLowerCase();
+        return (
+          (status === "All" || record.status === status) &&
+          (!query ||
+            record.name.toLowerCase().includes(query) ||
+            record.id.includes(query)) &&
+          (!from || record.date >= from) &&
+          (!to || record.date <= to)
+        );
+      }),
+    [from, search, status, to],
+  );
   const total = visibleRecords.reduce((sum, record) => sum + record.amount, 0);
-  const clearDateFilter = () => { setFrom(""); setTo(""); };
-  const today = () => { const value = new Date().toISOString().slice(0, 10); setFrom(value); setTo(value); };
+  const clearDateFilter = () => {
+    setFrom("");
+    setTo("");
+  };
+  const today = () => {
+    const value = new Date().toISOString().slice(0, 10);
+    setFrom(value);
+    setTo(value);
+  };
 
-  if (!isMobile) return <DesktopPlaceholder title="Suppliers" description="Manage vendor contacts and purchasing relationships." primaryLabel="Add Supplier"><Box sx={{ display: "grid", placeItems: "center", minHeight: 310, textAlign: "center" }}><Box><Typography sx={{ fontSize: 20, fontWeight: 700 }}>No suppliers yet</Typography><Typography color="text.secondary" sx={{ mt: 1 }}>Add a supplier to organize purchases and stock receipts.</Typography><Button variant="outlined" sx={{ mt: 2, textTransform: "none" }}>Add Supplier</Button></Box></Box></DesktopPlaceholder>;
+  if (!isMobile)
+    return <DesktopSuppliers initialRecords={desktopSupplierRecords} />;
 
-  return <Box sx={{ minHeight: "100dvh", pb: "104px", bgcolor: "background.default", fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif" }}>
-    <Box sx={{ height: 68, px: 1.5, bgcolor: "primary.main", color: "common.white", display: "grid", gridTemplateColumns: "48px minmax(0, 1fr) 48px", alignItems: "center", boxShadow: "0 2px 5px rgba(0,0,0,0.16)" }}><IconButton aria-label="Back to settings" onClick={() => navigate("/settings")} sx={{ width: 48, height: 48, color: "inherit" }}><ArrowBackRoundedIcon sx={{ fontSize: 31 }} /></IconButton><Typography align="center" sx={{ fontSize: 21, fontWeight: 600 }}>Suppliers</Typography><IconButton aria-label="Filter suppliers" onClick={() => setFilterOpen(true)} sx={{ width: 48, height: 48, color: "inherit" }}><FilterAltOutlinedIcon sx={{ fontSize: 29 }} /></IconButton></Box>
-    <Box sx={{ px: 2.5, pt: 1.5 }}><TextField fullWidth value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search suppliers by name or invoice number" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment> } }} sx={searchSx} />
+  return (
+    <Box
+      sx={{
+        minHeight: "100dvh",
+        pb: "104px",
+        bgcolor: "background.default",
+        fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif",
+      }}
+    >
+      <Box
+        sx={{
+          height: 68,
+          px: 1.5,
+          bgcolor: "primary.main",
+          color: "common.white",
+          display: "grid",
+          gridTemplateColumns: "48px minmax(0, 1fr) 48px",
+          alignItems: "center",
+          boxShadow: "0 2px 5px rgba(0,0,0,0.16)",
+        }}
+      >
+        <IconButton
+          aria-label="Back to settings"
+          onClick={() => navigate("/settings")}
+          sx={{ width: 48, height: 48, color: "inherit" }}
+        >
+          <ArrowBackRoundedIcon sx={{ fontSize: 31 }} />
+        </IconButton>
+        <Typography align="center" sx={{ fontSize: 21, fontWeight: 600 }}>
+          Suppliers
+        </Typography>
+        <IconButton
+          aria-label="Filter suppliers"
+          onClick={() => setFilterOpen(true)}
+          sx={{ width: 48, height: 48, color: "inherit" }}
+        >
+          <FilterAltOutlinedIcon sx={{ fontSize: 29 }} />
+        </IconButton>
+      </Box>
+      <Box sx={{ px: 2.5, pt: 1.5 }}>
+        <TextField
+          fullWidth
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search suppliers by name or invoice number"
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchRoundedIcon color="action" />
+                </InputAdornment>
+              ),
+            },
+          }}
+          sx={searchSx}
+        />
 
-    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1, mt: 2.25 }}>
-      <StatusButton label="All" active={status === "All"} onClick={() => setStatus("All")} />
-      <StatusButton label="Credit" active={status === "Credit"} onClick={() => setStatus("Credit")} icon={<CreditCardRoundedIcon />} color="warning.main" />
-      <StatusButton label="Paid" active={status === "Paid"} onClick={() => setStatus("Paid")} icon={<CheckCircleOutlineRoundedIcon />} color="success.main" />
-      <StatusButton label="Cancel" active={status === "Cancel"} onClick={() => setStatus("Cancel")} icon={<CancelOutlinedIcon />} color="error.main" />
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 1,
+            mt: 2.25,
+          }}
+        >
+          <StatusButton
+            label="All"
+            active={status === "All"}
+            onClick={() => setStatus("All")}
+          />
+          <StatusButton
+            label="Credit"
+            active={status === "Credit"}
+            onClick={() => setStatus("Credit")}
+            icon={<CreditCardRoundedIcon />}
+            color="warning.main"
+          />
+          <StatusButton
+            label="Paid"
+            active={status === "Paid"}
+            onClick={() => setStatus("Paid")}
+            icon={<CheckCircleOutlineRoundedIcon />}
+            color="success.main"
+          />
+          <StatusButton
+            label="Cancel"
+            active={status === "Cancel"}
+            onClick={() => setStatus("Cancel")}
+            icon={<CancelOutlinedIcon />}
+            color="error.main"
+          />
+        </Box>
+
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            mt: 3.25,
+            mb: 2,
+          }}
+        >
+          <Typography sx={{ fontSize: 15, fontWeight: 500, lineHeight: 1.3 }}>
+            {visibleRecords.length} Suppliers
+          </Typography>
+          <Typography sx={{ fontSize: 20, fontWeight: 600, lineHeight: 1.2 }}>
+            {money(total)}
+          </Typography>
+        </Box>
+        <Stack spacing={1.75}>
+          {visibleRecords.map((record) => (
+            <SupplierCard
+              key={record.id}
+              record={record}
+              onClick={() => navigate(`/suppliers/${record.id}`)}
+              onMenu={(event) => {
+                event.stopPropagation();
+                setMenuAnchor(event.currentTarget);
+                setMenuRecord(record);
+              }}
+            />
+          ))}
+        </Stack>
+      </Box>
+
+      <Paper
+        elevation={5}
+        sx={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          px: 2.5,
+          py: 2,
+          bgcolor: "background.paper",
+          borderTop: "1px solid",
+          borderColor: "divider",
+        }}
+      >
+        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+          <Button
+            variant="contained"
+            startIcon={<AddRoundedIcon />}
+            onClick={() => navigate("/suppliers/add")}
+            sx={footerButtonSx}
+          >
+            Add Supplier
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<HistoryRoundedIcon />}
+            onClick={() => navigate("/suppliers/history")}
+            sx={{
+              ...footerButtonSx,
+              color: "primary.main",
+              borderColor: "divider",
+              bgcolor: "background.paper",
+            }}
+          >
+            History
+          </Button>
+        </Box>
+      </Paper>
+
+      <Dialog
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        fullWidth
+        slotProps={{
+          paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } },
+        }}
+      >
+        <DialogContent sx={{ p: 2.5 }}>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              mb: 2.5,
+            }}
+          >
+            <Typography sx={{ fontSize: 20, fontWeight: 600 }}>
+              Filter suppliers
+            </Typography>
+            <IconButton
+              aria-label="Close filters"
+              onClick={() => setFilterOpen(false)}
+            >
+              <CloseRoundedIcon />
+            </IconButton>
+          </Box>
+          <Box
+            sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}
+          >
+            <Button
+              variant="outlined"
+              onClick={clearDateFilter}
+              sx={quickFilterSx}
+            >
+              All
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={today}
+              startIcon={<CalendarTodayOutlinedIcon />}
+              sx={quickFilterSx}
+            >
+              Today
+            </Button>
+          </Box>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 1.5,
+              mt: 2,
+            }}
+          >
+            <TextField
+              label="From"
+              type="date"
+              value={from}
+              onChange={(event) => setFrom(event.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={dateSx}
+            />
+            <TextField
+              label="To"
+              type="date"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={dateSx}
+            />
+          </Box>
+          <Button
+            fullWidth
+            variant="contained"
+            onClick={() => setFilterOpen(false)}
+            sx={{
+              mt: 2,
+              minHeight: 54,
+              borderRadius: 1.5,
+              textTransform: "none",
+              fontSize: 16,
+              fontWeight: 600,
+            }}
+          >
+            Apply filters
+          </Button>
+        </DialogContent>
+      </Dialog>
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={() => {
+          setMenuAnchor(null);
+          setMenuRecord(null);
+        }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        slotProps={{
+          paper: {
+            sx: {
+              minWidth: 164,
+              mt: 0.75,
+              borderRadius: 1.5,
+              boxShadow: "0 8px 22px rgba(15,23,42,0.24)",
+              overflow: "hidden",
+            },
+          },
+        }}
+      >
+        {menuRecord?.status !== "Paid" && (
+          <MenuItem
+            onClick={() => {
+              navigate(`/suppliers/${menuRecord?.id}/pay`);
+              setMenuAnchor(null);
+              setMenuRecord(null);
+            }}
+            sx={menuItemSx}
+          >
+            <PaymentsOutlinedIcon
+              sx={{ fontSize: 15, color: "success.main" }}
+            />
+            Pay
+          </MenuItem>
+        )}
+        <MenuItem
+          onClick={() => {
+            navigate(`/suppliers/add?edit=${menuRecord?.id}`);
+            setMenuAnchor(null);
+            setMenuRecord(null);
+          }}
+          sx={menuItemSx}
+        >
+          <EditOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />
+          Edit
+        </MenuItem>
+        <MenuItem
+          onClick={() => setMenuAnchor(null)}
+          sx={{ ...menuItemSx, color: "error.main" }}
+        >
+          <DeleteOutlineRoundedIcon
+            sx={{ fontSize: 15, color: "error.main" }}
+          />
+          Delete
+        </MenuItem>
+      </Menu>
     </Box>
-
-    <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", mt: 3.25, mb: 2 }}><Typography sx={{ fontSize: 15, fontWeight: 500, lineHeight: 1.3 }}>{visibleRecords.length} Suppliers</Typography><Typography sx={{ fontSize: 20, fontWeight: 600, lineHeight: 1.2 }}>{money(total)}</Typography></Box>
-    <Stack spacing={1.75}>{visibleRecords.map((record) => <SupplierCard key={record.id} record={record} onClick={() => navigate(`/suppliers/${record.id}`)} onMenu={(event) => { event.stopPropagation(); setMenuAnchor(event.currentTarget); setMenuRecord(record); }} />)}</Stack></Box>
-
-    <Paper elevation={5} sx={{ position: "fixed", left: 0, right: 0, bottom: 0, px: 2.5, py: 2, bgcolor: "background.paper", borderTop: "1px solid", borderColor: "divider" }}>
-      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}><Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => navigate("/suppliers/add")} sx={footerButtonSx}>Add Supplier</Button><Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => navigate("/suppliers/history")} sx={{ ...footerButtonSx, color: "primary.main", borderColor: "divider", bgcolor: "background.paper" }}>History</Button></Box>
-    </Paper>
-
-    <Dialog open={filterOpen} onClose={() => setFilterOpen(false)} fullWidth slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } } }}>
-      <DialogContent sx={{ p: 2.5 }}>
-        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2.5 }}><Typography sx={{ fontSize: 20, fontWeight: 600 }}>Filter suppliers</Typography><IconButton aria-label="Close filters" onClick={() => setFilterOpen(false)}><CloseRoundedIcon /></IconButton></Box>
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}><Button variant="outlined" onClick={clearDateFilter} sx={quickFilterSx}>All</Button><Button variant="outlined" onClick={today} startIcon={<CalendarTodayOutlinedIcon />} sx={quickFilterSx}>Today</Button></Box>
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 2 }}><TextField label="From" type="date" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} sx={dateSx} /><TextField label="To" type="date" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} sx={dateSx} /></Box>
-        <Button fullWidth variant="contained" onClick={() => setFilterOpen(false)} sx={{ mt: 2, minHeight: 54, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 600 }}>Apply filters</Button>
-      </DialogContent>
-    </Dialog>
-    <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => { setMenuAnchor(null); setMenuRecord(null); }} transformOrigin={{ vertical: "top", horizontal: "right" }} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} slotProps={{ paper: { sx: { minWidth: 164, mt: 0.75, borderRadius: 1.5, boxShadow: "0 8px 22px rgba(15,23,42,0.24)", overflow: "hidden" } } }}>
-      {menuRecord?.status !== "Paid" && <MenuItem onClick={() => { navigate(`/suppliers/${menuRecord?.id}/pay`); setMenuAnchor(null); setMenuRecord(null); }} sx={menuItemSx}><PaymentsOutlinedIcon sx={{ fontSize: 15, color: "success.main" }} />Pay</MenuItem>}
-      <MenuItem onClick={() => { navigate(`/suppliers/add?edit=${menuRecord?.id}`); setMenuAnchor(null); setMenuRecord(null); }} sx={menuItemSx}><EditOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />Edit</MenuItem>
-      <MenuItem onClick={() => setMenuAnchor(null)} sx={{ ...menuItemSx, color: "error.main" }}><DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />Delete</MenuItem>
-    </Menu>
-  </Box>;
+  );
 }
 
+function DesktopSuppliers({ initialRecords }) {
+  const [records, setRecords] = useState(initialRecords);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("All");
+  const [dialog, setDialog] = useState(null);
+  const [dateAnchor, setDateAnchor] = useState(null);
+  const [dateRange, setDateRange] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const visibleRecords = records.filter((record) => {
+    const query = search.trim().toLowerCase();
+    return (
+      (status === "All" || record.status === status) &&
+      (!query ||
+        record.name.toLowerCase().includes(query) ||
+        record.id.includes(query)) &&
+      (dateRange !== "today" || record.receiveDate === "2026-08-15") &&
+      (!from || record.receiveDate >= from) &&
+      (!to || record.receiveDate <= to)
+    );
+  });
+  const total = visibleRecords.reduce((sum, record) => sum + record.amount, 0);
+  const open = (mode, record = null) => setDialog({ mode, record });
+  const close = () => setDialog(null);
+  const handleDelete = (record) => {
+    setRecords((current) => current.filter((item) => item.id !== record.id));
+    close();
+  };
+  const chooseRange = (range) => {
+    setDateRange(range);
+    if (range !== "custom") {
+      setFrom("");
+      setTo("");
+    }
+  };
+
+  return (
+    <Box sx={{ maxWidth: 1540, mx: "auto", py: 0.25 }}>
+      <Paper
+        sx={{
+          p: 1.5,
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 2,
+          boxShadow: "0 2px 8px rgba(15,23,42,.04)",
+        }}
+      >
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns:
+              "minmax(320px, 1.25fr) minmax(220px, .64fr) auto",
+            gap: 1.5,
+            alignItems: "center",
+          }}
+        >
+          <TextField
+            fullWidth
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search suppliers by name or invoice number"
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchRoundedIcon />
+                </InputAdornment>
+              ),
+            }}
+            sx={desktopSupplierSearchSx}
+          />
+          <Button
+            variant="outlined"
+            startIcon={<CalendarTodayOutlinedIcon />}
+            onClick={(event) => setDateAnchor(event.currentTarget)}
+            sx={desktopSupplierDateSx}
+          >
+            Date and time
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddRoundedIcon />}
+            onClick={() => open("add")}
+            sx={desktopSupplierAddSx}
+          >
+            Add Supplier
+          </Button>
+        </Box>
+        <Stack direction="row" spacing={1.25} sx={{ mt: 1.5 }}>
+          <DesktopSupplierFilter
+            label="All"
+            active={status === "All"}
+            icon={<FilterAltOutlinedIcon />}
+            onClick={() => setStatus("All")}
+            tone="blue"
+          />
+          <DesktopSupplierFilter
+            label="Credit"
+            active={status === "Credit"}
+            icon={<CreditCardRoundedIcon />}
+            onClick={() => setStatus("Credit")}
+            tone="orange"
+          />
+          <DesktopSupplierFilter
+            label="Paid"
+            active={status === "Paid"}
+            icon={<CheckCircleOutlineRoundedIcon />}
+            onClick={() => setStatus("Paid")}
+            tone="green"
+          />
+          <DesktopSupplierFilter
+            label="Cancel"
+            active={status === "Cancel"}
+            icon={<CancelOutlinedIcon />}
+            onClick={() => setStatus("Cancel")}
+            tone="red"
+          />
+          <DesktopSupplierFilter
+            label="History"
+            icon={<HistoryRoundedIcon />}
+            onClick={() => open("history")}
+            tone="blue"
+          />
+        </Stack>
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            mt: 1.5,
+            pt: 1.25,
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Typography sx={{ fontSize: 15, fontWeight: 700 }}>
+            {visibleRecords.length} Suppliers
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5 }}>
+            <Typography
+              color="text.secondary"
+              sx={{ fontSize: 13, fontWeight: 600 }}
+            >
+              Total Amount
+            </Typography>
+            <Typography sx={{ fontSize: 20, fontWeight: 800 }}>
+              {money(total)}
+            </Typography>
+          </Box>
+        </Box>
+      </Paper>
+      <Paper
+        sx={{
+          mt: 1.75,
+          overflow: "hidden",
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 2,
+          boxShadow: "0 2px 8px rgba(15,23,42,.05)",
+        }}
+      >
+        <Box sx={desktopSupplierHeaderSx}>
+          <DesktopSupplierHeader>NO.</DesktopSupplierHeader>
+          <DesktopSupplierHeader>SUPPLIER NAME</DesktopSupplierHeader>
+          <DesktopSupplierHeader>INVOICE NUMBER</DesktopSupplierHeader>
+          <DesktopSupplierHeader>STATUS</DesktopSupplierHeader>
+          <DesktopSupplierHeader>RECEIVE DATE</DesktopSupplierHeader>
+          <DesktopSupplierHeader>DUE/PAID DATE</DesktopSupplierHeader>
+          <DesktopSupplierHeader align="right">AMOUNT</DesktopSupplierHeader>
+          <DesktopSupplierHeader align="right"></DesktopSupplierHeader>
+        </Box>
+        {visibleRecords.map((record, index) => (
+          <Box
+            key={record.id}
+            onClick={() => open("details", record)}
+            sx={{
+              ...desktopSupplierRowSx,
+              cursor: "pointer",
+              "&:hover": { bgcolor: "action.hover" },
+            }}
+          >
+            <Typography
+              color="text.secondary"
+              sx={{ fontSize: 15, fontWeight: 600 }}
+            >
+              {index + 1}
+            </Typography>
+            <Typography noWrap sx={{ fontSize: 15.5, fontWeight: 700 }}>
+              {record.name}
+            </Typography>
+            <Typography color="text.secondary" sx={{ fontSize: 15 }}>
+              {record.id}
+            </Typography>
+            <Chip
+              label={record.status}
+              size="small"
+              sx={desktopStatusSx(record.status)}
+            />
+            <Typography color="text.secondary" sx={{ fontSize: 15 }}>
+              {record.receiveDate.split("-").reverse().join("/")}
+            </Typography>
+            <Typography
+              noWrap
+              sx={{
+                fontSize: 15,
+                fontWeight: record.status === "Cancel" ? 500 : 700,
+                color:
+                  record.status === "Paid"
+                    ? "#278a45"
+                    : record.status === "Credit"
+                      ? "#e56b09"
+                      : "text.secondary",
+              }}
+            >
+              {record.date
+                ? `${record.dateLabel}: ${record.date.split("-").reverse().join("/")}`
+                : "--"}
+            </Typography>
+            <Typography
+              noWrap
+              sx={{
+                justifySelf: "end",
+                textAlign: "right",
+                whiteSpace: "nowrap",
+                fontSize: 15.5,
+                fontWeight: 800,
+              }}
+            >
+              {money(record.amount)}
+            </Typography>
+            <Stack
+              direction="row"
+              spacing={0.75}
+              justifySelf="end"
+              width="100%"
+              justifyContent="flex-end"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {record.status === "Paid" ? (
+                <IconButton
+                  aria-label={`Paid ${record.name}`}
+                  disabled
+                  sx={desktopPaidIconSx}
+                >
+                  <CheckCircleOutlineRoundedIcon fontSize="small" />
+                </IconButton>
+              ) : (
+                <IconButton
+                  aria-label={`Pay ${record.name}`}
+                  onClick={() => open("pay", record)}
+                  sx={desktopPayIconSx}
+                >
+                  <PaymentsOutlinedIcon fontSize="small" />
+                </IconButton>
+              )}
+              <IconButton
+                aria-label={`Edit ${record.name}`}
+                onClick={() => open("edit", record)}
+                sx={desktopActionIconSx}
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+              <IconButton
+                aria-label={`Delete ${record.name}`}
+                onClick={() => open("delete", record)}
+                sx={{ ...desktopActionIconSx, color: "error.main" }}
+              >
+                <DeleteOutlineRoundedIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+          </Box>
+        ))}
+        {!visibleRecords.length && (
+          <Box sx={{ py: 6, textAlign: "center" }}>
+            <Typography color="text.secondary">
+              No suppliers match this filter.
+            </Typography>
+          </Box>
+        )}
+      </Paper>
+      <Popover
+        open={Boolean(dateAnchor)}
+        anchorEl={dateAnchor}
+        onClose={() => setDateAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        slotProps={{ paper: { sx: { width: 368, p: 2, borderRadius: 2 } } }}
+      >
+        <Typography sx={{ fontWeight: 800, mb: 1.5 }}>Date and time</Typography>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: 1,
+          }}
+        >
+          {["all", "today", "custom"].map((range) => (
+            <Button
+              key={range}
+              variant="outlined"
+              onClick={() => chooseRange(range)}
+              sx={{
+                minHeight: 42,
+                borderColor: dateRange === range ? "primary.main" : "divider",
+                bgcolor: dateRange === range ? "#eaf3ff" : "transparent",
+                color: dateRange === range ? "primary.main" : "text.primary",
+                textTransform: "uppercase",
+                fontSize: 12,
+              }}
+            >
+              {range}
+            </Button>
+          ))}
+        </Box>
+        {dateRange === "custom" && (
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 1.25,
+              mt: 1.5,
+            }}
+          >
+            <TextField
+              label="From"
+              type="date"
+              size="small"
+              value={from}
+              onChange={(event) => setFrom(event.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+            />
+            <TextField
+              label="To"
+              type="date"
+              size="small"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+            />
+          </Box>
+        )}
+        <Stack
+          direction="row"
+          justifyContent="flex-end"
+          spacing={1}
+          sx={{ mt: 1.5 }}
+        >
+          <Button
+            onClick={() => chooseRange("all")}
+            sx={{ textTransform: "uppercase" }}
+          >
+            Reset
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => setDateAnchor(null)}
+            sx={{ textTransform: "uppercase" }}
+          >
+            Apply
+          </Button>
+        </Stack>
+      </Popover>
+      <DesktopSupplierDialog
+        dialog={dialog}
+        onClose={close}
+        onDelete={handleDelete}
+      />
+    </Box>
+  );
+}
+
+function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
+  if (!dialog) return null;
+  const { mode, record } = dialog;
+  const title =
+    mode === "add"
+      ? "Add Supplier"
+      : mode === "edit"
+        ? "Edit Supplier"
+        : mode === "pay"
+          ? "Record Payment"
+          : mode === "history"
+            ? "Payment History"
+            : mode === "delete"
+              ? "Delete Supplier"
+              : "Supplier Details";
+  const isHistory = mode === "history";
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      fullWidth
+      maxWidth={isHistory ? "md" : mode === "details" ? "sm" : "sm"}
+      slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}
+    >
+      {!isHistory && <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>{title}</DialogTitle>}
+      <DialogContent dividers sx={{ p: mode === "history" ? 2 : 2.5 }}>
+        {mode === "delete" ? (
+          <Typography color="text.secondary">
+            Delete <strong>{record.name}</strong>? This action removes the
+            supplier from this desktop demo list.
+          </Typography>
+        ) : mode === "history" ? (
+          <DesktopSupplierHistory />
+        ) : mode === "details" ? (
+          <Stack spacing={0}>
+            <DesktopDetail label="Supplier Name" value={record.name} />
+            <DesktopDetail label="Phone" value="09 123 456 789" />
+            <DesktopDetail label="Invoice Number" value={record.id} />
+            <DesktopDetail label="Delivery Name" value="Ko Aung" />
+            <DesktopDetail label="Delivery Phone" value="09 987 654 321" />
+            <DesktopDetail label="Receiver Name" value="Store Manager" />
+            <DesktopDetail
+              label="Receive Date"
+              value={record.receiveDate.split("-").reverse().join("/")}
+            />
+            <DesktopDetail label="Total Amount" value={money(record.amount)} />
+            <DesktopDetail
+              label={
+                record.dateLabel ? `${record.dateLabel} Date` : "Payment Status"
+              }
+              value={
+                record.date
+                  ? record.date.split("-").reverse().join("/")
+                : "Cancelled"
+              }
+            />
+            {record.status === "Paid" && record.settlement && <><Divider sx={{ my: 1.25 }} /><Typography sx={{ pt: 0.25, fontWeight: 800 }}>Payment record</Typography><DesktopDetail label="Paid Date" value={record.settlement.paidDate.split("-").reverse().join("/")} /><DesktopDetail label="Payment Method" value={record.method} />{record.method === "Cash" ? <><DesktopDetail label="Receiver Name" value={record.settlement.receiver} /><DesktopDetail label="Receiver Signature" value={record.settlement.signature} /></> : <><DesktopDetail label="User Name" value={record.settlement.username} /><DesktopDetail label="Account Number" value={record.settlement.account} /><DesktopDetail label="Transaction ID" value={record.settlement.transactionId} /></>}</>}
+          </Stack>
+        ) : mode === "pay" ? (
+          <DesktopPaymentFields record={record} />
+        ) : (
+          <DesktopSupplierFields record={record} />
+        )}
+      </DialogContent>
+      <DialogActions sx={{ px: 3, py: 1.75, gap: 1 }}>
+        <Button onClick={onClose} sx={{ textTransform: "none" }}>
+          {isHistory || mode === "details" ? "Close" : "Cancel"}
+        </Button>
+        {mode === "delete" ? (
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => onDelete(record)}
+            sx={{ textTransform: "none" }}
+          >
+            Delete
+          </Button>
+        ) : (
+          !isHistory &&
+          mode !== "details" && (
+            <Button
+              variant="contained"
+              onClick={onClose}
+              sx={{ textTransform: "none" }}
+            >
+              {mode === "pay"
+                ? "Add Payment"
+                : mode === "edit"
+                  ? "Save Supplier"
+                  : "Add Supplier"}
+            </Button>
+          )
+        )}
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function DesktopSupplierFields({ record }) {
+  const fieldSx = {
+    "& .MuiOutlinedInput-root": {
+      minHeight: 50,
+      borderRadius: 1.5,
+      bgcolor: "action.hover",
+      "& fieldset": { border: 0 },
+    },
+  };
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+      <TextField
+        label="Supplier Name *"
+        defaultValue={record?.name ?? ""}
+        fullWidth
+        sx={{ ...fieldSx, gridColumn: "1 / -1" }}
+      />
+      <TextField
+        label="Phone *"
+        defaultValue="09123456789"
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Invoice Number *"
+        defaultValue={record?.id ?? ""}
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Delivery Name *"
+        defaultValue="Ko Aung"
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Delivery Phone *"
+        defaultValue="09987654321"
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Receiver Name *"
+        defaultValue="Store Manager"
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Receive Date *"
+        type="date"
+        defaultValue={record?.receiveDate ?? ""}
+        slotProps={{ inputLabel: { shrink: true } }}
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Due Date *"
+        type="date"
+        defaultValue={record?.date ?? ""}
+        slotProps={{ inputLabel: { shrink: true } }}
+        fullWidth
+        sx={fieldSx}
+      />
+      <TextField
+        label="Amount *"
+        type="number"
+        defaultValue={record?.amount ?? ""}
+        fullWidth
+        sx={fieldSx}
+      />
+    </Box>
+  );
+}
+function DesktopPaymentFields({ record }) {
+  const [method, setMethod] = useState("cash");
+  const [signature, setSignature] = useState(false);
+  const signatureRef = useRef(null);
+  const fieldSx = {
+    "& .MuiOutlinedInput-root": {
+      minHeight: 50,
+      borderRadius: 1.5,
+      bgcolor: "action.hover",
+      "& fieldset": { border: 0 },
+    },
+  };
+  const startSignature = (event) => {
+    const canvas = signatureRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const context = canvas.getContext("2d");
+    context.beginPath();
+    context.moveTo(event.clientX - rect.left, event.clientY - rect.top);
+    canvas.setPointerCapture(event.pointerId);
+  };
+  const drawSignature = (event) => {
+    const canvas = signatureRef.current;
+    if (!canvas?.hasPointerCapture(event.pointerId)) return;
+    const rect = canvas.getBoundingClientRect();
+    const context = canvas.getContext("2d");
+    context.lineWidth = 2;
+    context.lineCap = "round";
+    context.strokeStyle = "#1f2937";
+    context.lineTo(event.clientX - rect.left, event.clientY - rect.top);
+    context.stroke();
+    setSignature(true);
+  };
+  const clearSignature = () => {
+    const canvas = signatureRef.current;
+    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    setSignature(false);
+  };
+  return (
+    <Stack spacing={1.5}>
+      <Paper
+        elevation={0}
+        sx={{
+          p: 1.75,
+          borderRadius: 1.5,
+          bgcolor: "#f4f8ff",
+          border: "1px solid",
+          borderColor: "primary.light",
+        }}
+      >
+        <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+          {record.name} · Outstanding Balance
+        </Typography>
+        <Typography sx={{ mt: 0.25, fontSize: 23, fontWeight: 800 }}>
+          {money(record.amount)}
+        </Typography>
+      </Paper>
+      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+        <TextField
+          select
+          label="Payment Method *"
+          value={method}
+          onChange={(event) => setMethod(event.target.value)}
+          fullWidth
+          sx={fieldSx}
+        >
+          <MenuItem value="cash">Cash</MenuItem>
+          <MenuItem value="mobile">Mobile Payment</MenuItem>
+        </TextField>
+        <TextField
+          label="Amount *"
+          type="number"
+          defaultValue={record.amount}
+          fullWidth
+          sx={fieldSx}
+        />
+      </Box>
+      {method === "cash" ? (
+        <Stack spacing={1.5}>
+          <Box
+            sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}
+          >
+            <TextField
+              label="Receiver Name *"
+              placeholder="Enter receiver name"
+              fullWidth
+              sx={fieldSx}
+            />
+            <TextField
+              label="Receiver Phone *"
+              placeholder="Enter receiver phone"
+              fullWidth
+              sx={fieldSx}
+            />
+          </Box>
+          <Box>
+            <Typography sx={{ mb: 0.75, fontSize: 14, fontWeight: 600 }}>
+              Receiver Signature *
+            </Typography>
+            <Box
+              sx={{
+                position: "relative",
+                height: 142,
+                border: "1px dashed",
+                borderColor: signature ? "primary.main" : "primary.light",
+                borderRadius: 1.5,
+                bgcolor: "#fafcff",
+                overflow: "hidden",
+              }}
+            >
+              <Box
+                component="canvas"
+                ref={signatureRef}
+                width={560}
+                height={142}
+                aria-label="Receiver signature pad"
+                onPointerDown={startSignature}
+                onPointerMove={drawSignature}
+                sx={{
+                  width: "100%",
+                  height: "100%",
+                  touchAction: "none",
+                  cursor: "crosshair",
+                }}
+              />
+              <Button
+                size="small"
+                onClick={clearSignature}
+                sx={{
+                  position: "absolute",
+                  right: 8,
+                  bottom: 6,
+                  textTransform: "none",
+                }}
+              >
+                Clear signature
+              </Button>
+            </Box>
+          </Box>
+        </Stack>
+      ) : (
+        <Stack spacing={1.5}>
+          <TextField
+            select
+            label="Mobile Payment *"
+            defaultValue="KBZPay"
+            fullWidth
+            sx={fieldSx}
+          >
+            <MenuItem value="KBZPay">KBZPay</MenuItem>
+            <MenuItem value="Wave">Wave</MenuItem>
+          </TextField>
+          <Box
+            sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}
+          >
+            <TextField
+              label="Receiver Mobile Payment User Name *"
+              placeholder="Enter user name"
+              fullWidth
+              sx={fieldSx}
+            />
+            <TextField
+              label="Receiver Mobile Payment Number *"
+              placeholder="Enter mobile number"
+              fullWidth
+              sx={fieldSx}
+            />
+          </Box>
+          <TextField
+            label="Transaction ID *"
+            placeholder="Enter transaction ID"
+            fullWidth
+            sx={fieldSx}
+          />
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+export function DesktopSupplierHistory() {
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [dateFilter, setDateFilter] = useState("all");
+  const [paymentMethod, setPaymentMethod] = useState("All");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const visibleRecords = desktopHistoryRecords.filter((record) => (paymentMethod === "All" || record.method === paymentMethod) && (dateFilter !== "custom" || ((!from || record.paymentDate.split("/").reverse().join("-") >= from) && (!to || record.paymentDate.split("/").reverse().join("-") <= to))));
+  const selectDateFilter = (value) => { setDateFilter(value); if (value !== "custom") { setFrom(""); setTo(""); } };
+  return <><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>Payment History</Typography><IconButton aria-label="Filter payment history" onClick={() => setFilterOpen(true)} sx={{ color: "primary.main" }}><FilterAltOutlinedIcon /></IconButton></Box><Stack spacing={2}>{visibleRecords.map((record) => <DesktopHistoryPaymentCard key={record.id} record={record} />)}{!visibleRecords.length && <Typography align="center" color="text.secondary" sx={{ py: 5 }}>No payment records found.</Typography>}</Stack><Dialog open={filterOpen} onClose={() => setFilterOpen(false)} fullWidth maxWidth="xs" slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5 } } }}><DialogContent sx={{ p: 2.5 }}><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2.5 }}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>Filter payments</Typography><IconButton aria-label="Close payment filters" onClick={() => setFilterOpen(false)}><CloseRoundedIcon /></IconButton></Box><Typography sx={desktopHistoryFilterLabelSx}>Date</Typography><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, mt: 1 }}>{[["all", "All"], ["today", "Today"], ["custom", "Custom"]].map(([value, label]) => <DesktopHistoryFilterButton key={value} label={label} active={dateFilter === value} onClick={() => selectDateFilter(value)} />)}</Box>{dateFilter === "custom" && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 1.75 }}><TextField label="From" type="date" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} sx={desktopHistoryDateInputSx} /><TextField label="To" type="date" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} sx={desktopHistoryDateInputSx} /></Box>}<Typography sx={{ ...desktopHistoryFilterLabelSx, mt: 2.5 }}>Payment Method</Typography><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, mt: 1 }}>{["All", "Cash", "KPay", "WavePay"].map((method) => <DesktopHistoryFilterButton key={method} label={method} active={paymentMethod === method} onClick={() => setPaymentMethod(method)} />)}</Box><Button fullWidth variant="contained" onClick={() => setFilterOpen(false)} sx={{ mt: 2.5, minHeight: 54, borderRadius: 1.5, fontSize: 16, fontWeight: 600, textTransform: "none" }}>Apply filters</Button></DialogContent></Dialog></>;
+  /*
+  return (
+    <Stack spacing={1.25}>
+      {items.map((item) => (
+        <Paper
+          key={item.invoice}
+          variant="outlined"
+          sx={{ p: 1.75, borderRadius: 1.5 }}
+        >
+          <Box
+            sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}
+          >
+            <Box>
+              <Typography fontWeight={700}>{item.supplier}</Typography>
+              <Typography
+                color="text.secondary"
+                sx={{ fontSize: 13, mt: 0.35 }}
+              >
+                Invoice: {item.invoice} · {item.date}
+              </Typography>
+            </Box>
+            <Box sx={{ textAlign: "right" }}>
+              <Typography color="success.main" fontWeight={700}>
+                {item.method}
+              </Typography>
+              <Typography fontWeight={800}>{money(item.amount)}</Typography>
+            </Box>
+          </Box>
+        </Paper>
+      ))}
+    </Stack>
+  );
+  */
+}
+
+function DesktopHistoryFilterButton({ label, active, onClick }) { return <Button variant={active ? "contained" : "outlined"} onClick={onClick} sx={{ minHeight: 48, borderRadius: 1.5, borderColor: active ? "primary.main" : "divider", color: active ? "common.white" : "text.primary", fontSize: 14, fontWeight: 600, textTransform: "none" }}>{label}</Button>; }
+const desktopHistoryFilterLabelSx = { fontSize: 14, fontWeight: 600, color: "text.secondary" };
+const desktopHistoryDateInputSx = { "& .MuiOutlinedInput-root": { borderRadius: 1.5, bgcolor: "action.hover", "& fieldset": { border: 0 } } };
+
+function DesktopHistoryDetailRow({ icon, label, value }) {
+  return <Box sx={{ minHeight: 38, display: "grid", gridTemplateColumns: "34px minmax(0, 1fr) auto", gap: 1, alignItems: "center" }}><Box sx={{ color: "primary.main", display: "grid", placeItems: "center", "& .MuiSvgIcon-root": { fontSize: 22 } }}>{icon}</Box><Typography sx={{ color: "text.secondary", fontSize: 13.5 }}>{label}</Typography><Typography noWrap sx={{ maxWidth: 250, color: "text.primary", fontSize: 13.5, fontWeight: 500, textAlign: "right" }}>{value}</Typography></Box>;
+}
+
+function DesktopHistoryPaymentCard({ record }) {
+  const showSignature = Boolean(record.signature);
+  return <Paper elevation={0} sx={{ overflow: "hidden", borderRadius: 1.75, border: "1px solid", borderColor: "#e4e8ed", boxShadow: "0 2px 8px rgba(24, 52, 82, 0.11)" }}><Box sx={{ p: 2.25, pb: 1.875, display: "grid", gridTemplateColumns: "76px minmax(0, 1fr) auto", columnGap: 1.25, alignItems: "start" }}><Chip label="Paid" variant="outlined" sx={{ mt: 0.1, height: 40, minWidth: 72, borderRadius: 1.25, color: "#168437", borderColor: "#36a55a", bgcolor: "#f6fff8", "& .MuiChip-label": { px: 1.4, fontSize: 14, fontWeight: 600 } }} /><Box sx={{ minWidth: 0, pt: 0.15 }}><Typography noWrap sx={{ fontSize: 17.5, lineHeight: 1.3, fontWeight: 600 }}>{record.supplier}</Typography>{record.invoice && <Typography sx={{ mt: 0.95, fontSize: 13.5, lineHeight: 1.2, color: "text.secondary" }}>Invoice: {record.invoice}</Typography>}</Box><Stack direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" sx={{ whiteSpace: "nowrap" }}><Typography sx={{ color: record.method === "Cash" ? "#d87816" : "#238a3a", fontSize: 18, lineHeight: 1.28, fontWeight: 600 }}>{record.method}</Typography><Typography noWrap sx={{ fontSize: 18, lineHeight: 1.28, fontWeight: 600 }}>{money(record.amount)}</Typography></Stack></Box><Divider sx={{ mx: 2.25 }} /><Stack spacing={0.85} sx={{ px: 2.25, py: 1.75 }}>{record.kind === "mobile" && <DesktopHistoryDetailRow icon={<DescriptionOutlinedIcon />} label="Transaction ID" value={record.id} />}<DesktopHistoryDetailRow icon={<CalendarTodayOutlinedIcon />} label={record.dateLabel || "Payment Date"} value={record.paymentDate} /></Stack>{showSignature && <><Divider sx={{ mx: 2.25 }} /><Box sx={{ minHeight: 56, px: 2.25, display: "flex", alignItems: "center", gap: 1.4, color: "primary.main" }}><DrawOutlinedIcon sx={{ fontSize: 23 }} /><Typography sx={{ flex: 1, fontSize: 14, fontWeight: 500 }}>Receiver Signature</Typography><Typography sx={{ color: "text.primary", fontSize: 18, fontFamily: "cursive", fontStyle: "italic" }}>{record.signature}</Typography></Box></>}<Divider /><Box sx={{ minHeight: 58, px: 2.25, display: "flex", alignItems: "center", gap: 1.25, color: "text.secondary" }}><HistoryRoundedIcon sx={{ fontSize: 24, color: "primary.main" }} /><Typography sx={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>{record.relativeTime}</Typography><Typography noWrap sx={{ fontSize: 12.5 }}>{record.timestamp}</Typography></Box></Paper>;
+}
+
+function DesktopDetail({ label, value }) {
+  return (
+    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+      <Typography color="text.secondary">{label}</Typography>
+      <Typography fontWeight={700}>{value}</Typography>
+    </Box>
+  );
+}
+function DesktopSupplierHeader({ children, align }) {
+  return (
+    <Typography
+      color="text.secondary"
+      sx={{ fontSize: 14, fontWeight: 700, textAlign: align }}
+    >
+      {children}
+    </Typography>
+  );
+}
+function DesktopSupplierFilter({ label, active, icon, onClick, tone }) {
+  const colors =
+    tone === "green"
+      ? "#278a45"
+      : tone === "orange"
+        ? "#e56b09"
+        : tone === "red"
+          ? "#dc3d3d"
+          : "#1d73df";
+  return (
+    <Button
+      onClick={onClick}
+      startIcon={icon}
+      sx={{
+        minWidth: 112,
+        minHeight: 44,
+        border: "1px solid",
+        borderColor: active ? "primary.main" : `${colors}66`,
+        borderRadius: 1.25,
+        bgcolor: active ? "primary.main" : "background.paper",
+        color: active ? "common.white" : colors,
+        textTransform: "none",
+        fontWeight: 700,
+        "&:hover": { bgcolor: active ? "primary.main" : "action.hover" },
+      }}
+    >
+      {label}
+    </Button>
+  );
+}
+
+const desktopSupplierGrid =
+  "56px minmax(200px, 1.25fr) minmax(120px, .7fr) 96px minmax(130px, .75fr) minmax(160px, .95fr) minmax(130px, .75fr) 136px";
+const desktopSupplierSearchSx = {
+  "& .MuiOutlinedInput-root": {
+    minHeight: 46,
+    borderRadius: 1.5,
+    bgcolor: "background.paper",
+  },
+};
+const desktopSupplierDateSx = {
+  minHeight: 46,
+  justifyContent: "flex-start",
+  borderRadius: 1.5,
+  textTransform: "none",
+  whiteSpace: "nowrap",
+  color: "text.primary",
+  borderColor: "divider",
+};
+const desktopSupplierAddSx = {
+  minHeight: 46,
+  borderRadius: 1.5,
+  textTransform: "none",
+  px: 2.25,
+  whiteSpace: "nowrap",
+};
+const desktopSupplierHeaderSx = {
+  display: "grid",
+  gridTemplateColumns: desktopSupplierGrid,
+  columnGap: 1.5,
+  alignItems: "center",
+  minHeight: 58,
+  px: 2.5,
+  borderBottom: "1px solid",
+  borderColor: "divider",
+};
+const desktopSupplierRowSx = {
+  display: "grid",
+  gridTemplateColumns: desktopSupplierGrid,
+  columnGap: 1.5,
+  alignItems: "center",
+  minHeight: 74,
+  px: 2.5,
+  borderBottom: "1px solid",
+  borderColor: "divider",
+  "&:last-of-type": { borderBottom: 0 },
+};
+const desktopActionIconSx = {
+  width: 34,
+  height: 34,
+  border: "1px solid",
+  borderColor: "divider",
+  borderRadius: 1.1,
+  color: "primary.main",
+};
+const desktopPayIconSx = {
+  width: 34,
+  height: 34,
+  border: "1px solid",
+  borderColor: "primary.light",
+  borderRadius: 1.1,
+  color: "primary.main",
+};
+const desktopPaidIconSx = {
+  width: 34,
+  height: 34,
+  border: "1px solid",
+  borderColor: "success.light",
+  borderRadius: 1.1,
+  "&.Mui-disabled": {
+    color: "success.main",
+    borderColor: "success.light",
+    opacity: 1,
+  },
+};
+const desktopStatusSx = (status) => ({
+  justifySelf: "start",
+  height: 28,
+  fontWeight: 700,
+  bgcolor:
+    status === "Paid" ? "#e8f6ec" : status === "Cancel" ? "#fff0f0" : "#fff1e4",
+  color:
+    status === "Paid" ? "#278a45" : status === "Cancel" ? "#d94343" : "#e56b09",
+});
+
 function StatusButton({ label, active, onClick, icon, color }) {
-  return <Button onClick={onClick} startIcon={icon} sx={{ minWidth: 0, minHeight: 54, px: 0.75, borderRadius: 1.5, border: "1px solid", borderColor: active ? "primary.main" : "divider", bgcolor: active ? "primary.main" : "background.paper", color: active ? "common.white" : (color ?? "text.primary"), fontSize: 13, fontWeight: 600, textTransform: "none", "& .MuiButton-startIcon": { mr: 0.5, "& .MuiSvgIcon-root": { fontSize: 18 } }, "&:hover": { bgcolor: active ? "primary.main" : "action.hover" } }}>{label}</Button>;
+  return (
+    <Button
+      onClick={onClick}
+      startIcon={icon}
+      sx={{
+        minWidth: 0,
+        minHeight: 54,
+        px: 0.75,
+        borderRadius: 1.5,
+        border: "1px solid",
+        borderColor: active ? "primary.main" : "divider",
+        bgcolor: active ? "primary.main" : "background.paper",
+        color: active ? "common.white" : (color ?? "text.primary"),
+        fontSize: 13,
+        fontWeight: 600,
+        textTransform: "none",
+        "& .MuiButton-startIcon": {
+          mr: 0.5,
+          "& .MuiSvgIcon-root": { fontSize: 18 },
+        },
+        "&:hover": { bgcolor: active ? "primary.main" : "action.hover" },
+      }}
+    >
+      {label}
+    </Button>
+  );
 }
 
 function SupplierCard({ record, onMenu, onClick }) {
   const paid = record.status === "Paid";
   const dateColor = paid ? "success.main" : "#ef6c00";
-  return <Paper elevation={2} onClick={onClick} sx={{ p: 1.5, borderRadius: 1.5, display: "grid", gridTemplateColumns: "68px minmax(0, 1fr) auto", gridTemplateRows: "auto auto", columnGap: 1.5, rowGap: 1.25, alignItems: "center", cursor: "pointer", fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif" }}><Chip label={record.status} size="small" sx={{ gridColumn: 1, gridRow: 1, justifySelf: "start", height: 28, bgcolor: paid ? "#e3f5e6" : "#fff1e4", color: dateColor, fontSize: 13, fontWeight: 600, "& .MuiChip-label": { px: 1.1 }, borderRadius: 1 }} /><Typography sx={{ gridColumn: 1, gridRow: 2, fontSize: 14, fontWeight: 400, lineHeight: 1.3, color: "text.secondary" }}>{record.id}</Typography><Typography noWrap sx={{ gridColumn: 2, gridRow: 1, minWidth: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, color: "text.primary" }}>{record.name}</Typography><Box sx={{ gridColumn: 2, gridRow: 2, display: "flex", minWidth: 0, alignItems: "center", gap: 0.65, color: dateColor }}><CalendarTodayOutlinedIcon sx={{ fontSize: 17, flexShrink: 0 }} /><Typography noWrap component="span" sx={{ fontSize: 13, fontWeight: 400, lineHeight: 1.3, color: "inherit" }}>{record.dateLabel}: <Box component="span" sx={{ color: "inherit", fontSize: 13, fontWeight: 500 }}>{record.date.split("-").reverse().join("/")}</Box></Typography></Box><Typography noWrap sx={{ gridColumn: 3, gridRow: 1, textAlign: "right", fontSize: 18, fontWeight: 600, lineHeight: 1.2, color: "text.primary", whiteSpace: "nowrap" }}>{money(record.amount)}</Typography><IconButton aria-label={`More actions for ${record.name}`} onClick={onMenu} size="small" sx={{ gridColumn: 3, gridRow: 2, justifySelf: "end", p: 0.25 }}><MoreVertRoundedIcon fontSize="small" /></IconButton></Paper>;
+  return (
+    <Paper
+      elevation={2}
+      onClick={onClick}
+      sx={{
+        p: 1.5,
+        borderRadius: 1.5,
+        display: "grid",
+        gridTemplateColumns: "68px minmax(0, 1fr) auto",
+        gridTemplateRows: "auto auto",
+        columnGap: 1.5,
+        rowGap: 1.25,
+        alignItems: "center",
+        cursor: "pointer",
+        fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif",
+      }}
+    >
+      <Chip
+        label={record.status}
+        size="small"
+        sx={{
+          gridColumn: 1,
+          gridRow: 1,
+          justifySelf: "start",
+          height: 28,
+          bgcolor: paid ? "#e3f5e6" : "#fff1e4",
+          color: dateColor,
+          fontSize: 13,
+          fontWeight: 600,
+          "& .MuiChip-label": { px: 1.1 },
+          borderRadius: 1,
+        }}
+      />
+      <Typography
+        sx={{
+          gridColumn: 1,
+          gridRow: 2,
+          fontSize: 14,
+          fontWeight: 400,
+          lineHeight: 1.3,
+          color: "text.secondary",
+        }}
+      >
+        {record.id}
+      </Typography>
+      <Typography
+        noWrap
+        sx={{
+          gridColumn: 2,
+          gridRow: 1,
+          minWidth: 0,
+          fontSize: 17,
+          fontWeight: 600,
+          lineHeight: 1.3,
+          color: "text.primary",
+        }}
+      >
+        {record.name}
+      </Typography>
+      <Box
+        sx={{
+          gridColumn: 2,
+          gridRow: 2,
+          display: "flex",
+          minWidth: 0,
+          alignItems: "center",
+          gap: 0.65,
+          color: dateColor,
+        }}
+      >
+        <CalendarTodayOutlinedIcon sx={{ fontSize: 17, flexShrink: 0 }} />
+        <Typography
+          noWrap
+          component="span"
+          sx={{
+            fontSize: 13,
+            fontWeight: 400,
+            lineHeight: 1.3,
+            color: "inherit",
+          }}
+        >
+          {record.dateLabel}:{" "}
+          <Box
+            component="span"
+            sx={{ color: "inherit", fontSize: 13, fontWeight: 500 }}
+          >
+            {record.date.split("-").reverse().join("/")}
+          </Box>
+        </Typography>
+      </Box>
+      <Typography
+        noWrap
+        sx={{
+          gridColumn: 3,
+          gridRow: 1,
+          textAlign: "right",
+          fontSize: 18,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          color: "text.primary",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {money(record.amount)}
+      </Typography>
+      <IconButton
+        aria-label={`More actions for ${record.name}`}
+        onClick={onMenu}
+        size="small"
+        sx={{ gridColumn: 3, gridRow: 2, justifySelf: "end", p: 0.25 }}
+      >
+        <MoreVertRoundedIcon fontSize="small" />
+      </IconButton>
+    </Paper>
+  );
 }
 
-const searchSx = { "& .MuiOutlinedInput-root": { minHeight: 58, px: 1.5, borderRadius: 2, bgcolor: "action.hover", "& fieldset": { border: 0 } }, "& .MuiInputBase-input": { fontSize: 16 } };
-const dateSx = { "& .MuiOutlinedInput-root": { borderRadius: 1.5, bgcolor: "action.hover", "& fieldset": { border: 0 } } };
-const footerButtonSx = { minHeight: 54, borderRadius: 1.5, fontSize: 16, fontWeight: 600, textTransform: "none" };
-const quickFilterSx = { minHeight: 52, borderRadius: 1.5, textTransform: "none", color: "text.primary", borderColor: "divider", fontSize: 16, fontWeight: 600 };
-const menuItemSx = { minHeight: 44, gap: 1.25, px: 1.75, py: 0.75, fontSize: 15, fontWeight: 600, color: "text.primary" };
+const searchSx = {
+  "& .MuiOutlinedInput-root": {
+    minHeight: 58,
+    px: 1.5,
+    borderRadius: 2,
+    bgcolor: "action.hover",
+    "& fieldset": { border: 0 },
+  },
+  "& .MuiInputBase-input": { fontSize: 16 },
+};
+const dateSx = {
+  "& .MuiOutlinedInput-root": {
+    borderRadius: 1.5,
+    bgcolor: "action.hover",
+    "& fieldset": { border: 0 },
+  },
+};
+const footerButtonSx = {
+  minHeight: 54,
+  borderRadius: 1.5,
+  fontSize: 16,
+  fontWeight: 600,
+  textTransform: "none",
+};
+const quickFilterSx = {
+  minHeight: 52,
+  borderRadius: 1.5,
+  textTransform: "none",
+  color: "text.primary",
+  borderColor: "divider",
+  fontSize: 16,
+  fontWeight: 600,
+};
+const menuItemSx = {
+  minHeight: 44,
+  gap: 1.25,
+  px: 1.75,
+  py: 0.75,
+  fontSize: 15,
+  fontWeight: 600,
+  color: "text.primary",
+};

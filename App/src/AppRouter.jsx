@@ -26,6 +26,7 @@ import CategoryManagement from "./pages/Settings/CategoryManagementPage";
 import PaymentMethodManagement from "./pages/Settings/PaymentMethodManagementPage";
 import ShopDetailsPage from "./pages/Settings/ShopDetailsPage";
 import CreateOrder from "./pages/CreateOrder/CreateOrderPage";
+import OrderDetails from "./pages/Sale/OrderDetailsPage";
 
 const router = createBrowserRouter([
   {
@@ -43,6 +44,10 @@ const router = createBrowserRouter([
       {
         path: "sale/create",
         element: <CreateOrder />,
+      },
+      {
+        path: "sale/:orderId",
+        element: <OrderDetails />,
       },
       {
         path: "stock",

@@ -1,4 +1,5 @@
 import { useLocation, useNavigate } from "react-router";
+import { useAppPreferences } from "../../context/AppPreferenceContext";
 import {
   Avatar,
   Divider,
@@ -8,6 +9,7 @@ import {
   ListItemIcon,
   ListItemText,
   Toolbar,
+  Tooltip,
   Typography,
   useMediaQuery,
 } from "@mui/material";
@@ -15,26 +17,20 @@ import {
   AccountBalanceWalletRounded as PaymentIcon,
   AnalyticsRounded as ReportIcon,
   DashboardRounded as HomeIcon,
-  DescriptionRounded as NoteIcon,
   Inventory2Rounded as InventoryIcon,
   LocalOfferRounded as PriceIcon,
   LogoutRounded as LogoutIcon,
-  ReceiptLongRounded as SaleRecordIcon,
   SettingsRounded as SettingsRoundedIcon,
   ShoppingCartRounded as SaleIcon,
   ShoppingCartSharp as SuppliersIcon,
   StorefrontRounded as StoreIcon,
+  DarkModeRounded as ThemeIcon,
 } from "@mui/icons-material";
 
 const menuItems = [
   { label: "Home", path: "/", icon: <HomeIcon /> },
   { label: "Orders", path: "/sale", icon: <SaleIcon /> },
   { label: "Inventory", path: "/stock", icon: <InventoryIcon /> },
-  {
-    label: "SaleRecords",
-    path: "/sale-record",
-    icon: <SaleRecordIcon />,
-  },
   {
     label: "Suppliers",
     path: "/suppliers",
@@ -53,82 +49,30 @@ const menuItems = [
   },
   { label: "Report", path: "/report", icon: <ReportIcon /> },
 
-  { label: "Note", path: "/note", icon: <NoteIcon /> },
-
   { label: "Settings", path: "/settings", icon: <SettingsRoundedIcon /> },
 ];
 
-export default function AppDrawer() {
+export default function AppDrawer({ expanded, setExpanded }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const isMobile = useMediaQuery("(max-width:768px)");
+  const { themeMode, setThemeMode } = useAppPreferences();
 
   if (isMobile) return null;
 
-  return (
-    <Drawer
-      variant="permanent"
-      sx={{
-        width: 260,
-        flexShrink: 0,
-        "& .MuiDrawer-paper": {
-          width: 260,
-          boxSizing: "border-box",
-          bgcolor: "background.paper",
-          color: "text.primary",
-          borderRight: 1,
-          borderColor: "divider",
-        },
-      }}
-    >
-      <Toolbar sx={{ minHeight: 72, px: 2.5, gap: 1.5 }}>
-        <Avatar sx={{ bgcolor: "primary.main" }}>
-          <StoreIcon />
-        </Avatar>
-        <Typography fontWeight={700} sx={{ fontSize: 18 }}>Belle Store</Typography>
-      </Toolbar>
-      <List sx={{ px: 1.5, py: 2, flexGrow: 1 }}>
-        {menuItems.map((item) => (
-          <ListItemButton
-            key={item.path}
-            selected={pathname === item.path}
-            onClick={() => navigate(item.path)}
-            sx={{
-              mb: 0.5,
-              borderRadius: 1.5,
-              color: "text.secondary",
-              "&.Mui-selected": {
-                bgcolor: "#eaf3ff",
-                color: "primary.main",
-                "&:hover": { bgcolor: "#eaf3ff" },
-              },
-              "&:hover": { bgcolor: "action.hover" },
-            }}
-          >
-            <ListItemIcon sx={{ minWidth: 40, color: "inherit" }}>
-              {item.icon}
-            </ListItemIcon>
-            <ListItemText
-              primary={item.label}
-              slotProps={{ primary: { sx: { fontSize: 14, fontWeight: 600 } } }}
-            />
-          </ListItemButton>
-        ))}
-      </List>
-      <Divider sx={{ borderColor: "rgba(255,255,255,0.2)" }} />
-      <List sx={{ px: 1, py: 1.5 }}>
-        <ListItemButton
-          sx={{ borderRadius: 1.5, color: "text.secondary", mb: 1, "&:hover": { bgcolor: "action.hover" } }}
-        >
-          <ListItemIcon sx={{ minWidth: 40, color: "inherit" }}>
-            <LogoutIcon />
-          </ListItemIcon>
-          <ListItemText
-            primary="Logout"
-            slotProps={{ primary: { sx: { fontSize: 14, fontWeight: 600 } } }}
-          />
-        </ListItemButton>
-      </List>
-    </Drawer>
-  );
+  const drawerWidth = expanded ? 220 : 76;
+  const textSx = { opacity: expanded ? 1 : 0, whiteSpace: "nowrap", transition: "opacity 100ms ease", overflow: "hidden", width: expanded ? "auto" : 0 };
+  const navItemSx = { minHeight: 48, mb: 0.75, px: expanded ? 1.5 : 0, justifyContent: expanded ? "flex-start" : "center", borderRadius: 1.5, color: "rgba(255,255,255,0.94)", "&.Mui-selected": { bgcolor: "rgba(255,255,255,0.14)", color: "#fff", "&:hover": { bgcolor: "rgba(255,255,255,0.18)" } }, "&:hover": { bgcolor: "rgba(255,255,255,0.1)" } };
+  const iconSx = { minWidth: expanded ? 38 : 0, color: "inherit", justifyContent: "center" };
+  const listItem = (item) => <Tooltip key={item.label} title={expanded ? "" : item.label} placement="right"><ListItemButton selected={item.path && pathname === item.path} onClick={() => item.label === "Theme" ? setThemeMode(themeMode === "dark" ? "light" : "dark") : item.path && navigate(item.path)} sx={{ ...navItemSx, mb: item.label === "Logout" ? 0 : navItemSx.mb }}><ListItemIcon sx={iconSx}>{item.icon}</ListItemIcon><ListItemText primary={item.label} sx={textSx} slotProps={{ primary: { sx: { fontSize: 14, fontWeight: 600 } } }} /></ListItemButton></Tooltip>;
+
+  return <Drawer variant="permanent" onMouseEnter={() => setExpanded(true)} onMouseLeave={() => setExpanded(false)} sx={{ width: drawerWidth, flexShrink: 0, transition: "width 180ms ease", "& .MuiDrawer-paper": { width: drawerWidth, boxSizing: "border-box", overflowX: "hidden", background: "linear-gradient(180deg, #106fd5 0%, #0764ca 100%)", color: "#fff", borderRight: 0, transition: "width 180ms ease" } }}>
+    <Toolbar sx={{ minHeight: 76, px: expanded ? 2.75 : 0, justifyContent: expanded ? "flex-start" : "center", gap: 1.5 }}>
+      <Avatar sx={{ width: 40, height: 40, bgcolor: "#fff", color: "#1471d5", boxShadow: "0 3px 10px rgba(0,0,0,.12)" }}><StoreIcon /></Avatar>
+      <Typography fontWeight={700} sx={{ ...textSx, fontSize: 17 }}>Belle Store</Typography>
+    </Toolbar>
+    <List sx={{ px: expanded ? 1.5 : 1.25, py: 1.75, flexGrow: 1 }}>{menuItems.map(listItem)}</List>
+    <Divider sx={{ borderColor: "rgba(255,255,255,0.18)", mx: expanded ? 2.25 : 1.25 }} />
+    <List sx={{ px: expanded ? 1.5 : 1.25, py: 1.5 }}>{listItem({ label: "Theme", icon: <ThemeIcon /> })}{listItem({ label: "Logout", icon: <LogoutIcon /> })}</List>
+  </Drawer>;
 }

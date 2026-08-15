@@ -6,7 +6,7 @@ import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import LocationOnRoundedIcon from "@mui/icons-material/LocationOnRounded";
 import StorefrontRoundedIcon from "@mui/icons-material/StorefrontRounded";
-import { useAppPreferences } from "../../AppProvider";
+import { useAppPreferences } from "../../context/AppPreferenceContext";
 
 export default function ShopDetailsPage() {
   const navigate = useNavigate(); const fileRef = useRef(null); const { shop, setShop } = useAppPreferences(); const [form, setForm] = useState(shop);

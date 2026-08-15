@@ -5,6 +5,10 @@ import {
   Autocomplete,
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Fab,
   IconButton,
   InputAdornment,
@@ -12,6 +16,7 @@ import {
   TextField,
   Toolbar,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import AddCircleOutlineRoundedIcon from "@mui/icons-material/AddCircleOutlineRounded";
@@ -43,6 +48,7 @@ const fieldSx = {
 
 export default function AddStockMovementPage() {
   const navigate = useNavigate();
+  const isMobile = useMediaQuery("(max-width:768px)");
   const [movementType, setMovementType] = useState("in");
   const [adjustmentType, setAdjustmentType] = useState("increase");
   const [query, setQuery] = useState("");
@@ -74,6 +80,8 @@ export default function AddStockMovementPage() {
     if (Object.values(nextErrors).some(Boolean)) return;
     navigate("/stock/history");
   };
+
+  if (!isMobile) return <DesktopAddStockMovement movementType={movementType} setMovementType={setMovementType} adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} query={query} setQuery={setQuery} filteredProducts={filteredProducts} product={product} selectProduct={selectProduct} quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} supplier={supplier} setSupplier={setSupplier} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} onClose={() => navigate("/stock")} onSave={saveMovement} />;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", pb: "128px", fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif" }}>
@@ -118,6 +126,20 @@ export default function AddStockMovementPage() {
       </Paper>
     </Box>
   );
+}
+
+function DesktopAddStockMovement({ movementType, setMovementType, adjustmentType, setAdjustmentType, query, setQuery, filteredProducts, product, selectProduct, quantity, setQuantity, cost, setCost, supplier, setSupplier, notes, setNotes, adjustedBy, setAdjustedBy, errors, onClose, onSave }) {
+  return <Dialog open fullWidth maxWidth="md" onClose={onClose} slotProps={{ paper: { sx: { maxWidth: 920, borderRadius: 3, maxHeight: "88vh" } } }}>
+    <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><Box><Typography sx={{ fontSize: 22, fontWeight: 800 }}>Add Stock Movement</Typography><Typography color="text.secondary" sx={{ mt: .4, fontSize: 14 }}>Record stock in or an inventory adjustment.</Typography></Box><IconButton aria-label="Close stock movement" onClick={onClose}><CloseRoundedIcon /></IconButton></Box></DialogTitle>
+    <DialogContent dividers sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 3 }}>
+      <Box><Typography sx={sectionLabelSx}>SELECT PRODUCT</Typography><Autocomplete freeSolo options={filteredProducts} getOptionLabel={(option) => typeof option === "string" ? option : option.name} inputValue={query} onInputChange={(_, value) => { setQuery(value); if (!value) selectProduct(null); }} onChange={(_, value) => selectProduct(typeof value === "string" ? products.find((item) => item.name === value) ?? null : value)} renderInput={(params) => <TextField {...params} placeholder="Search product" error={Boolean(errors.product)} helperText={errors.product ? "Select a product" : ""} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />} />
+        {product && <SelectedProduct product={product} onClear={() => selectProduct(null)} />}
+        <Typography sx={{ ...sectionLabelSx, mt: 3 }}>MOVEMENT DETAILS</Typography><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mb: 2 }}><MovementButton active={movementType === "in"} onClick={() => setMovementType("in")} icon={<AddCircleOutlineRoundedIcon />} label="Stock IN" tone="success" /><MovementButton active={movementType === "adjustment"} onClick={() => setMovementType("adjustment")} icon={<Inventory2RoundedIcon />} label="Adjustment" tone="primary" /></Box>
+      </Box>
+      <Box>{movementType === "in" ? <StockInForm quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} supplier={supplier} setSupplier={setSupplier} notes={notes} setNotes={setNotes} errors={errors} /> : <AdjustmentForm adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} quantity={quantity} setQuantity={setQuantity} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} />}</Box>
+    </Box></DialogContent>
+    <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid", borderColor: "divider" }}><Button onClick={onClose} sx={{ textTransform: "none" }}>Cancel</Button><Button variant="contained" onClick={onSave} sx={{ minHeight: 42, textTransform: "none", fontWeight: 700 }}>{movementType === "in" ? "Save Stock In" : "Save Adjustment"}</Button></DialogActions>
+  </Dialog>;
 }
 
 function SelectedProduct({ product, onClear }) {

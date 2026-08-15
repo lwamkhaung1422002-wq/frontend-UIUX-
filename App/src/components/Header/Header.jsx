@@ -4,9 +4,10 @@ import FilterListRoundedIcon from "@mui/icons-material/FilterListRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import NotificationsRoundedIcon from "@mui/icons-material/NotificationsRounded";
 import AccountCircleRoundedIcon from "@mui/icons-material/AccountCircleRounded";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import StoreRoundedIcon from "@mui/icons-material/StoreRounded";
-import { useLocation } from "react-router";
-import { useAppPreferences } from "../../AppProvider";
+import { useLocation, useNavigate } from "react-router";
+import { useAppPreferences } from "../../context/AppPreferenceContext";
 
 const pageTitles = {
   "/": "Home",
@@ -24,13 +25,16 @@ const pageTitles = {
 
 export default function Header() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const isMobile = useMediaQuery("(max-width:768px)");
+  const isDesktopStockDetails = pathname.startsWith("/stock/") && !["/stock/add", "/stock/history", "/stock/movement/add"].includes(pathname);
+  const isDesktopStockHistory = pathname === "/stock/history";
   const mobileTitle = pathname === "/" ? "Dashboard" : pageTitles[pathname] ?? "POS System";
   const [sortAnchor, setSortAnchor] = useState(null);
   const { shop } = useAppPreferences();
 
   if (isMobile) {
-    if (pathname === "/sale/create" || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/")) return null;
+    if (pathname.startsWith("/sale/") || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/")) return null;
     const action = pathname === "/stock"
       ? { label: "Sort inventory", icon: <FilterListRoundedIcon />, event: "inventory-sort" }
       : pathname === "/sale"
@@ -58,7 +62,10 @@ export default function Header() {
   return (
     <AppBar position="static" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider" }}>
       <Toolbar sx={{ justifyContent: "space-between", minHeight: 72, px: { md: 4, lg: 5 } }}>
-        <Typography variant="h6" fontWeight={700}>{pathname === "/" ? "Dashboard" : pageTitles[pathname] ?? "POS System"}</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          {(isDesktopStockDetails || isDesktopStockHistory) && <IconButton aria-label="Back to inventory" onClick={() => navigate("/stock")} sx={{ ml: -1 }}><ArrowBackRoundedIcon /></IconButton>}
+          <Typography variant="h6" fontWeight={700}>{pathname === "/" ? "Dashboard" : isDesktopStockDetails ? "Stock Details" : isDesktopStockHistory ? "Stock Movement" : pageTitles[pathname] ?? "POS System"}</Typography>
+        </Box>
         <Stack direction="row" spacing={1}>
           <IconButton aria-label="Notifications"><Badge color="error" variant="dot"><NotificationsRoundedIcon /></Badge></IconButton>
           <IconButton aria-label="Account"><AccountCircleRoundedIcon /></IconButton>
