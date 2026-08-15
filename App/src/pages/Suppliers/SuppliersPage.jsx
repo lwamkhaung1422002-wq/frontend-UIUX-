@@ -36,6 +36,7 @@ import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
 import { useNavigate } from "react-router";
+import { usePosApi } from "../../hooks/useApiResource";
 
 const supplierRecords = [
   {
@@ -162,9 +163,21 @@ const desktopHistoryRecords = [
   { id: "EXP-20260701-0001", supplier: "Expense record", amount: 250000, method: "Cash", kind: "expense", dateLabel: "Expense Date", paymentDate: "01/07/2026", relativeTime: "1 week ago", timestamp: "01/07/2026 08:30 AM" },
 ];
 
+const supplierDate = (value) => value ? new Date(value).toISOString().slice(0, 10) : "";
+async function loadSupplierRecords(api) {
+  const { purchases = [] } = await api.purchases.list({ pageSize: 100 });
+  return purchases.map((purchase) => {
+    const paid = Number(purchase.paidAmount || 0) >= Number(purchase.total || 0);
+    const payment = [...(purchase.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
+    const date = supplierDate(paid ? payment?.paidAt || purchase.updatedAt : purchase.expectedAt || purchase.createdAt);
+    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "" };
+  });
+}
+
 export default function SuppliersPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -172,16 +185,18 @@ export default function SuppliersPage() {
   const [to, setTo] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRecord, setMenuRecord] = useState(null);
+  const [apiRecords, setApiRecords] = useState(null);
 
   useEffect(() => {
     const openFilter = () => setFilterOpen(true);
     window.addEventListener("suppliers-filter", openFilter);
     return () => window.removeEventListener("suppliers-filter", openFilter);
   }, []);
+  useEffect(() => { let active = true; loadSupplierRecords(api).then((records) => { if (active) setApiRecords(records); }).catch(() => {}); return () => { active = false; }; }, [api]);
 
   const visibleRecords = useMemo(
     () =>
-      supplierRecords.filter((record) => {
+      (apiRecords || supplierRecords).filter((record) => {
         const query = search.trim().toLowerCase();
         return (
           (status === "All" || record.status === status) &&
@@ -192,7 +207,7 @@ export default function SuppliersPage() {
           (!to || record.date <= to)
         );
       }),
-    [from, search, status, to],
+    [apiRecords, from, search, status, to],
   );
   const total = visibleRecords.reduce((sum, record) => sum + record.amount, 0);
   const clearDateFilter = () => {
@@ -206,7 +221,7 @@ export default function SuppliersPage() {
   };
 
   if (!isMobile)
-    return <DesktopSuppliers initialRecords={desktopSupplierRecords} />;
+    return <DesktopSuppliers key={(apiRecords || desktopSupplierRecords).map((record) => record.id).join("|")} initialRecords={apiRecords || desktopSupplierRecords} />;
 
   return (
     <Box
@@ -322,7 +337,7 @@ export default function SuppliersPage() {
             <SupplierCard
               key={record.id}
               record={record}
-              onClick={() => navigate(`/suppliers/${record.id}`)}
+              onClick={() => navigate(`/suppliers/${record.apiId || record.id}`)}
               onMenu={(event) => {
                 event.stopPropagation();
                 setMenuAnchor(event.currentTarget);
@@ -484,7 +499,7 @@ export default function SuppliersPage() {
         {menuRecord?.status !== "Paid" && (
           <MenuItem
             onClick={() => {
-              navigate(`/suppliers/${menuRecord?.id}/pay`);
+              navigate(`/suppliers/${menuRecord?.apiId || menuRecord?.id}/pay`);
               setMenuAnchor(null);
               setMenuRecord(null);
             }}
@@ -498,7 +513,7 @@ export default function SuppliersPage() {
         )}
         <MenuItem
           onClick={() => {
-            navigate(`/suppliers/add?edit=${menuRecord?.id}`);
+            navigate(`/suppliers/add?edit=${menuRecord?.apiId || menuRecord?.id}`);
             setMenuAnchor(null);
             setMenuRecord(null);
           }}
