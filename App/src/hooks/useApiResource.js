@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { createPosApi } from "../services/posApi";
 
 export function usePosApi() {
-  const { token, shop } = useAuth();
-  return createPosApi({ token, shopId: shop?.id });
+  const { token, shop, logout } = useAuth();
+  return useMemo(() => createPosApi({ token, shopId: shop?.id, onUnauthorized: logout }), [token, shop?.id, logout]);
 }
 
 export function useApiResource(load) {

@@ -29,6 +29,8 @@ import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import WaterDropRoundedIcon from "@mui/icons-material/WaterDropRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
+import { Alert } from "@mui/material";
+import { usePosApi } from "../../hooks/useApiResource";
 
 const products = [
   { id: "water", name: "Water", category: "Drinking", price: 1000, stock: 100, icon: <WaterDropRoundedIcon />, color: "#38a5dd" },
@@ -50,7 +52,9 @@ const formatMoney = (amount) => `${new Intl.NumberFormat("en-US").format(amount)
 export default function StockPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
   const [inventoryProducts, setInventoryProducts] = useState(() => isMobile ? products : desktopProducts);
+  const [apiError, setApiError] = useState(null);
   const [search, setSearch] = useState("");
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [sort, setSort] = useState("recent");
@@ -62,6 +66,32 @@ export default function StockPage() {
     window.addEventListener("inventory-sort", updateSort);
     return () => window.removeEventListener("inventory-sort", updateSort);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.products.list({ pageSize: 100, status: "active" }), api.categories.list(), api.inventory.list()])
+      .then(([productResult, categoryResult, inventoryResult]) => {
+        if (!active) return;
+        const categoryNames = new Map((categoryResult.categories || []).map((category) => [category.id, category.name]));
+        const totals = new Map();
+        (inventoryResult.inventory || []).forEach((batch) => {
+          const current = totals.get(batch.productId) || 0;
+          totals.set(batch.productId, current + Number(batch.quantity || 0));
+        });
+        setInventoryProducts((productResult.products || []).map((product) => ({
+          id: product.id,
+          name: product.name,
+          category: product.category?.name || categoryNames.get(product.categoryId) || "Uncategorized",
+          price: Number(product.price || 0),
+          stock: totals.get(product.id) || 0,
+          icon: <Inventory2RoundedIcon />,
+          color: "#1976d2",
+        })));
+        setApiError(null);
+      })
+      .catch((error) => { if (active) setApiError(error); });
+    return () => { active = false; };
+  }, [api]);
 
   const visibleProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -78,13 +108,17 @@ export default function StockPage() {
     value: visibleProducts.reduce((total, product) => total + (product.price * product.stock), 0),
   }), [visibleProducts]);
 
+  const deleteProduct = async (id) => {
+    await api.products.remove(id);
+    setInventoryProducts((current) => current.filter((product) => product.id !== id));
+  };
   const removeProduct = () => {
-    setInventoryProducts((current) => current.filter((product) => product.id !== menuProduct?.id));
+    deleteProduct(menuProduct?.id).catch((error) => setApiError(error));
     setMenuAnchor(null);
     setMenuProduct(null);
   };
 
-  if (!isMobile) return <DesktopInventoryPage products={visibleProducts} search={search} setSearch={setSearch} summary={inventorySummary} lowStockOnly={lowStockOnly} setLowStockOnly={setLowStockOnly} navigate={navigate} onDelete={(id) => setInventoryProducts((current) => current.filter((product) => product.id !== id))} />;
+  if (!isMobile) return <><DesktopInventoryPage products={visibleProducts} search={search} setSearch={setSearch} summary={inventorySummary} lowStockOnly={lowStockOnly} setLowStockOnly={setLowStockOnly} navigate={navigate} onDelete={(id) => deleteProduct(id).catch((error) => setApiError(error))} />{apiError && <Alert severity="warning" sx={{ mt: 1.5 }}>Inventory is showing local preview data: {apiError.message}</Alert>}</>;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", px: 3, pt: 2, pb: "174px" }}>
@@ -126,6 +160,7 @@ export default function StockPage() {
       </Box>
 
       <Stack spacing={1.25}>
+        {apiError && <Alert severity="warning">Inventory is showing local preview data: {apiError.message}</Alert>}
         {visibleProducts.map((product) => (
           <Card key={product.id} onClick={() => navigate(`/stock/${product.id}`)} sx={{ minHeight: 112, borderRadius: 2.5, bgcolor: "background.paper", boxShadow: "0 2px 7px rgba(15,23,42,0.16)", cursor: "pointer" }}>
             <CardContent sx={{ height: "100%", boxSizing: "border-box", p: 1.5, "&:last-child": { pb: 1.5 } }}>

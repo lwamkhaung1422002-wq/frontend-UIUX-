@@ -11,8 +11,15 @@ const queryString = (query = {}) => {
 
 const shopPath = (shopId, path) => `/shops/${shopId}${path}`;
 
-export function createPosApi({ token, shopId }) {
-  const request = (path, options) => apiRequest(path, { token, ...options });
+export function createPosApi({ token, shopId, onUnauthorized }) {
+  const request = async (path, options) => {
+    try {
+      return await apiRequest(path, { token, ...options });
+    } catch (error) {
+      if (error.status === 401) onUnauthorized?.();
+      throw error;
+    }
+  };
   const shopRequest = (path, options) => request(shopPath(shopId, path), options);
 
   return {
