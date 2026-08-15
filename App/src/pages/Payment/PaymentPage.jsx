@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   Box,
@@ -31,6 +31,7 @@ import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import { DesktopSupplierHistory } from "../Suppliers/SuppliersPage";
+import { usePosApi } from "../../hooks/useApiResource";
 
 const payments = [
   { id: "125978", supplierId: "125978", name: "Pahtama Group", amount: 374000, status: "Unpaid", method: "Pending", dateLabel: "Due", date: "2026-05-20", isoDate: "2026-05-20", kind: "supplier" },
@@ -53,9 +54,34 @@ const desktopPayments = [
 
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
+const toIsoDate = (value) => value ? new Date(value).toISOString().slice(0, 10) : "";
+const toMethod = (value) => value === "KBZ Pay" ? "KBZPay" : value || "";
+
+async function loadPaymentRecords(api) {
+  const [purchasesResult, expensesResult, ordersResult] = await Promise.all([
+    api.purchases.list({ pageSize: 100 }), api.expenses.list(), api.orders.list({ pageSize: 100 }),
+  ]);
+  const suppliers = (purchasesResult.purchases || []).map((purchase) => {
+    const paid = Number(purchase.paidAmount || 0) >= Number(purchase.total || 0);
+    const payment = [...(purchase.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
+    const date = toIsoDate(paid ? payment?.paidAt || purchase.updatedAt : purchase.expectedAt || purchase.createdAt);
+    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: paid ? "Paid" : "Unpaid", method: toMethod(payment?.method), dateLabel: paid ? "Paid" : "Due", date, isoDate: date, kind: "supplier" };
+  });
+  const expenses = (expensesResult.expenses || []).map((expense) => {
+    const date = toIsoDate(expense.spentAt || expense.createdAt);
+    return { id: expense.id, apiId: expense.id, name: expense.title, amount: Number(expense.amount || 0), status: "Paid", method: toMethod(expense.method), dateLabel: "Paid", date, isoDate: date, kind: "expense", remark: expense.note || "" };
+  });
+  const receivables = (ordersResult.orders || []).filter((order) => order.paymentStatus !== "paid").map((order) => {
+    const date = toIsoDate(order.createdAt);
+    return { id: order.orderNumber || order.id, apiId: order.id, name: order.customer?.name || "Customer", buyer: order.customer?.name || "Customer", qty: (order.items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0), amount: Number(order.total || 0), status: "Unpaid", method: "", dateLabel: "Due", date, isoDate: date, kind: "receivable" };
+  });
+  return [...suppliers, ...expenses, ...receivables].sort((left, right) => String(right.isoDate).localeCompare(String(left.isoDate)));
+}
+
 export default function PaymentPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -67,6 +93,7 @@ export default function PaymentPage() {
   const [menuPayment, setMenuPayment] = useState(null);
   const [paymentRecords, setPaymentRecords] = useState(payments);
   const [mobileDialog, setMobileDialog] = useState(null);
+  useEffect(() => { let active = true; loadPaymentRecords(api).then((records) => { if (active) setPaymentRecords(records); }).catch(() => {}); return () => { active = false; }; }, [api]);
 
   const visiblePayments = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -143,6 +170,7 @@ export default function PaymentPage() {
 }
 
 function DesktopPaymentsPage() {
+  const api = usePosApi();
   const [records, setRecords] = useState(desktopPayments);
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
@@ -151,6 +179,7 @@ function DesktopPaymentsPage() {
   const [to, setTo] = useState("");
   const [dialog, setDialog] = useState(null);
   const [menu, setMenu] = useState(null);
+  useEffect(() => { let active = true; loadPaymentRecords(api).then((nextRecords) => { if (active) setRecords(nextRecords); }).catch(() => {}); return () => { active = false; }; }, [api]);
   const visible = records.filter((record) => {
     const date = record.date;
     return (status === "All" || (status === "Expense" ? record.kind === "expense" : record.status === status)) && (!search || [record.name, record.id].some((value) => value.toLowerCase().includes(search.toLowerCase()))) && (dateMode !== "today" || date === "2026-08-15") && (dateMode !== "custom" || ((!from || date >= from) && (!to || date <= to)));
