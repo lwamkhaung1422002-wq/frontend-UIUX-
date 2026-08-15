@@ -21,6 +21,7 @@ import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
 import TrendingUpRoundedIcon from "@mui/icons-material/TrendingUpRounded";
 import { useNavigate } from "react-router";
 import { demoOrders, getDashboardSummary } from "../../data/dashboardData";
+import { usePosApi } from "../../hooks/useApiResource";
 
 const setupStorageKey = "pos:dashboard-setup-dismissed";
 const formatKyat = (amount) =>
@@ -93,11 +94,25 @@ function MetricCard({ label, value, color, borderColor }) {
 export default function HomePage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [dashboard, setDashboard] = useState(null);
   const [showSetup, setShowSetup] = useState(
     () => localStorage.getItem(setupStorageKey) !== "true",
   );
-  const summary = getDashboardSummary();
+  const fallbackSummary = getDashboardSummary();
+  const summary = dashboard ? {
+    todaySales: Number(dashboard.summary?.revenue || 0),
+    todayExpense: Number(dashboard.summary?.operatingExpenses || 0),
+    todayProfit: Number(dashboard.summary?.netProfit || 0),
+    lowStockItems: dashboard.lowStock?.length || 0,
+  } : fallbackSummary;
+  const orders = dashboard ? (dashboard.recentSales || []).map((order) => ({
+    id: order.invoiceNumber || order.id,
+    amount: Number(order.amount || 0),
+    quantity: Number(order.itemCount || 0),
+    paymentMethod: order.paymentMethod === "KBZ Pay" ? "KPay" : order.paymentMethod || "Cash",
+  })) : demoOrders;
 
   useEffect(() => {
     const refreshDashboard = () => setRefreshKey((value) => value + 1);
@@ -106,13 +121,19 @@ export default function HomePage() {
       window.removeEventListener("dashboard-refresh", refreshDashboard);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    api.dashboard().then((result) => { if (active) setDashboard(result); }).catch(() => { if (active) setDashboard(null); });
+    return () => { active = false; };
+  }, [api, refreshKey]);
+
   const dismissSetup = () => {
     localStorage.setItem(setupStorageKey, "true");
     setShowSetup(false);
   };
 
   if (!isMobile) {
-    return <DesktopDashboard summary={summary} orders={demoOrders} navigate={navigate} />;
+    return <DesktopDashboard summary={summary} orders={orders} navigate={navigate} />;
   }
 
   return (
@@ -316,7 +337,7 @@ export default function HomePage() {
         </Button>
       </Stack>
       <Stack spacing={1.25}>
-        {demoOrders.map((order) => (
+        {orders.map((order) => (
           <Card
             key={order.id}
             sx={{
