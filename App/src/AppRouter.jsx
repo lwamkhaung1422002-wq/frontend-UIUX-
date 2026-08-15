@@ -27,8 +27,11 @@ import PaymentMethodManagement from "./pages/Settings/PaymentMethodManagementPag
 import ShopDetailsPage from "./pages/Settings/ShopDetailsPage";
 import CreateOrder from "./pages/CreateOrder/CreateOrderPage";
 import OrderDetails from "./pages/Sale/OrderDetailsPage";
+import AuthPage from "./pages/Auth/AuthPage";
 
 const router = createBrowserRouter([
+  { path: "/login", element: <AuthPage mode="login" /> },
+  { path: "/register", element: <AuthPage mode="register" /> },
   {
     path: "/",
     element: <App />,

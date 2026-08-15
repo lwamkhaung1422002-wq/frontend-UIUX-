@@ -1,14 +1,69 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import AppRouter from "./AppRouter";
 import { AppPreferenceContext } from "./context/AppPreferenceContext";
+import { AuthContext } from "./context/AuthContext";
+import { apiRequest } from "./lib/api";
+
+const sessionStorageKey = "pos:api-session";
+
+function readSession() {
+  try {
+    return JSON.parse(localStorage.getItem(sessionStorageKey) || "null");
+  } catch {
+    return null;
+  }
+}
 
 export default function AppProvider() {
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem("pos-theme-mode") || "light");
   const [shop, setShopState] = useState(() => JSON.parse(localStorage.getItem("pos-shop-details") || '{"name":"POS System","address":"","logo":""}'));
-  const setMode = (mode) => { setThemeMode(mode); localStorage.setItem("pos-theme-mode", mode); };
-  const setShop = (nextShop) => { setShopState(nextShop); localStorage.setItem("pos-shop-details", JSON.stringify(nextShop)); };
+  const [session, setSession] = useState(readSession);
+  const [authReady, setAuthReady] = useState(false);
+  const setMode = useCallback((mode) => { setThemeMode(mode); localStorage.setItem("pos-theme-mode", mode); }, []);
+  const setShop = useCallback((nextShop) => { setShopState(nextShop); localStorage.setItem("pos-shop-details", JSON.stringify(nextShop)); }, []);
+  const saveSession = useCallback((nextSession) => {
+    setSession(nextSession);
+    localStorage.setItem(sessionStorageKey, JSON.stringify(nextSession));
+    if (nextSession.shop) setShop({ name: nextSession.shop.name, address: nextSession.shop.address || "", logo: nextSession.shop.logoUrl || "" });
+  }, [setShop]);
+  const logout = useCallback(() => {
+    setSession(null);
+    localStorage.removeItem(sessionStorageKey);
+  }, []);
+  const authenticate = useCallback(async (path, body) => {
+    const result = await apiRequest(path, { method: "POST", body });
+    const selectedShop = result.shop || result.user?.shops?.[0];
+    if (!result.token || !selectedShop) throw new Error("Your account does not have a shop yet.");
+    saveSession({ token: result.token, user: result.user, shop: selectedShop });
+    return result;
+  }, [saveSession]);
+  const login = useCallback((credentials) => authenticate("/auth/login", credentials), [authenticate]);
+  const register = useCallback((details) => authenticate("/auth/register", details), [authenticate]);
+
+  useEffect(() => {
+    let active = true;
+    const restoreSession = async () => {
+      if (!session?.token) {
+        if (active) setAuthReady(true);
+        return;
+      }
+      try {
+        const result = await apiRequest("/auth/me", { token: session.token });
+        const selectedShop = result.user?.shops?.find((item) => item.id === session.shop?.id) || result.user?.shops?.[0];
+        if (!selectedShop) throw new Error("No shop found.");
+        if (active) saveSession({ token: session.token, user: result.user, shop: selectedShop });
+      } catch {
+        if (active) logout();
+      } finally {
+        if (active) setAuthReady(true);
+      }
+    };
+    restoreSession();
+    return () => { active = false; };
+  }, [logout, saveSession, session?.shop?.id, session?.token]);
   const theme = useMemo(() => createTheme({ palette: { mode: themeMode, primary: { main: "#1976d2", dark: "#1565c0" }, background: { default: themeMode === "dark" ? "#101827" : "#f8fafc" } } }), [themeMode]);
-  return <AppPreferenceContext.Provider value={{ themeMode, setThemeMode: setMode, shop, setShop }}><ThemeProvider theme={theme}><CssBaseline /><AppRouter /></ThemeProvider></AppPreferenceContext.Provider>;
+  const auth = useMemo(() => ({ session, user: session?.user || null, shop: session?.shop || null, token: session?.token || null, isAuthenticated: Boolean(session?.token), authReady, login, register, logout, selectShop: (nextShop) => saveSession({ ...session, shop: nextShop }) }), [session, authReady, login, register, logout, saveSession]);
+  return <AppPreferenceContext.Provider value={{ themeMode, setThemeMode: setMode, shop, setShop }}><AuthContext.Provider value={auth}><ThemeProvider theme={theme}><CssBaseline /><AppRouter /></ThemeProvider></AuthContext.Provider></AppPreferenceContext.Provider>;
 }
