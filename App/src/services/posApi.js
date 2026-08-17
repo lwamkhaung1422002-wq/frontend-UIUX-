@@ -11,8 +11,9 @@ const queryString = (query = {}) => {
 
 const shopPath = (shopId, path) => `/shops/${shopId}${path}`;
 
-export function createPosApi({ token, shopId, onUnauthorized }) {
+export function createPosApi({ token, shopId, onUnauthorized, isGuest = false }) {
   const request = async (path, options) => {
+    if (isGuest) throw new Error("Create an account to sync business data.");
     try {
       return await apiRequest(path, { token, ...options });
     } catch (error) {

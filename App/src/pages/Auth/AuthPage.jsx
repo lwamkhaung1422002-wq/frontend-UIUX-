@@ -21,7 +21,7 @@ export default function AuthPage({ mode }) {
   const isRegister = mode === "register";
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, register } = useAuth();
+  const { login, register, continueAsGuest } = useAuth();
   const [form, setForm] = useState({ name: "", shopName: "", email: "", password: "" });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -57,6 +57,7 @@ export default function AuthPage({ mode }) {
               <TextField required type="email" autoComplete="email" label="Email" value={form.email} onChange={update("email")} sx={fieldSx} />
               <TextField required type="password" autoComplete={isRegister ? "new-password" : "current-password"} inputProps={{ minLength: isRegister ? 8 : undefined }} label="Password" value={form.password} onChange={update("password")} helperText={isRegister ? "At least 8 characters" : undefined} sx={fieldSx} />
               <Button type="submit" variant="contained" disabled={submitting} sx={{ minHeight: 52, borderRadius: 1.5, fontWeight: 700, textTransform: "none" }}>{submitting ? "Please wait…" : isRegister ? "Create account" : "Sign in"}</Button>
+              {!isRegister && <Button variant="outlined" onClick={() => { continueAsGuest(); navigate("/", { replace: true }); }} sx={{ minHeight: 48, borderRadius: 1.5, fontWeight: 700, textTransform: "none" }}>Continue as guest</Button>}
               <Typography variant="body2" textAlign="center" color="text.secondary">{isRegister ? "Already have an account?" : "New to General POS?"} <Link component={RouterLink} to={isRegister ? "/login" : "/register"} underline="hover" fontWeight={700}>{isRegister ? "Sign in" : "Create an account"}</Link></Typography>
             </Stack>
           </CardContent>

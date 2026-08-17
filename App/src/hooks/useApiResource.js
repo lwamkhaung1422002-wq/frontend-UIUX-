@@ -3,8 +3,8 @@ import { useAuth } from "../context/AuthContext";
 import { createPosApi } from "../services/posApi";
 
 export function usePosApi() {
-  const { token, shop, logout } = useAuth();
-  return useMemo(() => createPosApi({ token, shopId: shop?.id, onUnauthorized: logout }), [token, shop?.id, logout]);
+  const { token, shop, logout, isGuest } = useAuth();
+  return useMemo(() => createPosApi({ token, shopId: shop?.id, onUnauthorized: token ? logout : undefined, isGuest }), [token, shop?.id, logout, isGuest]);
 }
 
 export function useApiResource(load) {
