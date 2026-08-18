@@ -212,6 +212,23 @@ purchasesRouter.patch("/:shopId/suppliers/:supplierId", async (request, response
   } catch (error) { next(error); }
 });
 
+// Suppliers with purchase history remain in the audit trail; deletion archives them instead.
+purchasesRouter.delete("/:shopId/suppliers/:supplierId", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request);
+    const { shopId } = params.parse(request.params);
+    await assertUserOwnsShop(auth.id, shopId);
+    const supplier = await prisma.supplier.findFirst({ where: { id: request.params.supplierId, shopId } });
+    if (!supplier) throw notFound("Supplier not found.");
+    const archived = await prisma.$transaction(async (tx) => {
+      const updated = await tx.supplier.update({ where: { id: supplier.id }, data: { isActive: false } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "supplier.archive", entity: "Supplier", entityId: supplier.id, metadata: { name: supplier.name } });
+      return updated;
+    });
+    response.json({ supplier: archived, archived: true });
+  } catch (error) { next(error); }
+});
+
 purchasesRouter.get("/:shopId/purchases", async (request, response, next) => {
   try {
     const auth = getAuthUser(request);

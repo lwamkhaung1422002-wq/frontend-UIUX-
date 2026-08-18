@@ -22,6 +22,7 @@ import { shopsRouter } from "./routes/shops.routes.js";
 import { storeConfigRouter } from "./routes/store-config.routes.js";
 import { capabilityInventoryRouter } from "./routes/capability-inventory.routes.js";
 import { advancedCapabilitiesRouter } from "./routes/advanced-capabilities.routes.js";
+import { auditRouter } from "./routes/audit.routes.js";
 import { pricingRouter } from "./routes/pricing.routes.js";
 import { requestContext } from "./middleware/request-context.middleware.js";
 
@@ -87,6 +88,7 @@ app.use("/shops", shopsRouter);
 app.use("/shops", storeConfigRouter);
 app.use("/shops", capabilityInventoryRouter);
 app.use("/shops", advancedCapabilitiesRouter);
+app.use("/shops", auditRouter);
 app.use("/shops", pricingRouter);
 app.use("/shops", shopSettingsRouter);
 app.use("/shops", customersRouter);

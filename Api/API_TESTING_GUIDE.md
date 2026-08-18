@@ -53,6 +53,31 @@ curl -X POST http://localhost:3000/shops/SHOP_ID/categories ^
   -d "{\"name\":\"General\"}"
 ```
 
+The category list returns `_count.products` for management screens:
+
+```bash
+curl http://localhost:3000/shops/SHOP_ID/categories ^
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+## Shop Profile, Archive, and Audit History
+
+```bash
+# Update shop name/address/logo URL
+curl -X PATCH http://localhost:3000/shops/SHOP_ID ^
+  -H "Content-Type: application/json" ^
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" ^
+  -d "{\"name\":\"Main Shop\",\"address\":\"Yangon\",\"logoUrl\":\"https://cdn.example.com/logo.png\"}"
+
+# Archive a supplier. It is kept for purchase/payment history.
+curl -X DELETE http://localhost:3000/shops/SHOP_ID/suppliers/SUPPLIER_ID ^
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+# Read price/promotion audit history
+curl "http://localhost:3000/shops/SHOP_ID/audit-logs?entity=PriceEntry" ^
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
 ## 5. Create Product
 
 ```bash

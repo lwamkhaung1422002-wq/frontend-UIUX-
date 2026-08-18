@@ -36,7 +36,7 @@ const catalogSettingsSchema = z.object({
   lowStockDefault: z.coerce.number().int().min(0).max(100000).optional(),
   currencyCode: z.enum(["MMK", "USD", "THB"]).optional(),
   dateFormat: z.enum(["yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy"]).optional(),
-  locale: z.enum(["en-MM", "my-MM", "en-US", "th-TH"]).optional(),
+  locale: z.enum(["en-MM", "my-MM", "en-US", "th-TH", "zh-CN"]).optional(),
   timeZone: z.enum(["Asia/Yangon", "Asia/Bangkok", "UTC"]).optional(),
   receiptFooter: z.string().trim().max(300).optional(),
   notifyLowStock: z.boolean().optional(),

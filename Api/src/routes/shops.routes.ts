@@ -3,12 +3,20 @@ import { z } from "zod";
 
 import { prisma } from "../lib/prisma.js";
 import { applyTemplateDefaults } from "../lib/store-capabilities.js";
-import { type AuthenticatedRequest, requireAuth } from "../middleware/auth.middleware.js";
+import { writeAuditLog } from "../lib/audit-log.js";
+import { assertUserOwnsShop } from "../lib/shop-access.js";
+import { getAuthUser, type AuthenticatedRequest, requireAuth } from "../middleware/auth.middleware.js";
 
 export const shopsRouter = Router();
 
 const createShopSchema = z.object({
   name: z.string().trim().min(1, "Shop name is required."),
+});
+const shopParamsSchema = z.object({ shopId: z.string().min(1) });
+const updateShopSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  address: z.string().trim().max(500).nullable().optional(),
+  logoUrl: z.url().max(2_000).nullable().optional(),
 });
 
 shopsRouter.use(requireAuth);
@@ -51,6 +59,43 @@ shopsRouter.post("/", async (request, response, next) => {
     });
 
     response.status(201).json({ shop });
+  } catch (error) {
+    next(error);
+  }
+});
+
+shopsRouter.get("/:shopId", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = shopParamsSchema.parse(request.params);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId }, include: { setting: true } });
+    response.json({ shop });
+  } catch (error) {
+    next(error);
+  }
+});
+
+shopsRouter.patch("/:shopId", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = shopParamsSchema.parse(request.params);
+    const input = updateShopSchema.parse(request.body);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const shop = await prisma.$transaction(async (tx) => {
+      const updated = await tx.shop.update({
+        where: { id: shopId },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.address !== undefined ? { address: input.address || null } : {}),
+          ...(input.logoUrl !== undefined ? { logoUrl: input.logoUrl || null } : {}),
+        },
+        include: { setting: true },
+      });
+      await writeAuditLog(tx, { shopId, actorId: authUser.id, action: "shop.update", entity: "Shop", entityId: shopId, metadata: input });
+      return updated;
+    });
+    response.json({ shop });
   } catch (error) {
     next(error);
   }

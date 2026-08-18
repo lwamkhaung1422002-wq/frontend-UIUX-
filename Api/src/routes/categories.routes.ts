@@ -26,6 +26,7 @@ categoriesRouter.get("/:shopId/categories", async (request, response, next) => {
 
     const categories = await prisma.category.findMany({
       where: { shopId },
+      include: { _count: { select: { products: true } } },
       orderBy: { name: "asc" },
     });
 

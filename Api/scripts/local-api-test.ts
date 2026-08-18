@@ -76,6 +76,23 @@ async function main(): Promise<void> {
 
     const me = await request(baseUrl, "/auth/me", { token });
     assert.equal(me.user.shops.length, 1);
+    const updatedShop = await request(baseUrl, `/shops/${shopId}`, {
+      method: "PATCH", token,
+      body: { address: "Yangon", logoUrl: "https://cdn.example.test/logo.png" },
+    });
+    assert.equal(updatedShop.shop.address, "Yangon");
+    assert.equal(updatedShop.shop.logoUrl, "https://cdn.example.test/logo.png");
+    const fetchedShop = await request(baseUrl, `/shops/${shopId}`, { token });
+    assert.equal(fetchedShop.shop.address, "Yangon");
+    const settings = await request(baseUrl, `/shops/${shopId}/settings`, {
+      method: "PATCH", token, body: { locale: "zh-CN" },
+    });
+    assert.equal(settings.settings.locale, "zh-CN");
+    const categoryResult = await request(baseUrl, `/shops/${shopId}/categories`, {
+      method: "POST", token, body: { name: `API Category ${stamp}` },
+    });
+    const categories = await request(baseUrl, `/shops/${shopId}/categories`, { token });
+    assert.equal(categories.categories.find((category: { id: string }) => category.id === categoryResult.category.id)._count.products, 0);
     const tamperedToken = `${token.slice(0, -1)}${token.endsWith("a") ? "b" : "a"}`;
     assert.equal((await rawRequest(baseUrl, "/auth/me", { token: tamperedToken })).status, 401);
     const expiredToken = jwt.sign(
@@ -608,6 +625,14 @@ async function main(): Promise<void> {
       body: { purchaseReceiptId: received.purchase.receipts[0].id, quantity: 1, reason: "Damaged test unit" },
     });
     assert.equal(returned.purchase.returns.length, 1);
+    const archivedSupplier = await request(baseUrl, `/shops/${shopId}/suppliers`, {
+      method: "POST", token, body: { name: `Archive Supplier ${stamp}` },
+    });
+    const archiveResult = await request(baseUrl, `/shops/${shopId}/suppliers/${archivedSupplier.supplier.id}`, {
+      method: "DELETE", token,
+    });
+    assert.equal(archiveResult.archived, true);
+    assert.equal(archiveResult.supplier.isActive, false);
     const purchaseAudits = await prisma.auditLog.findMany({ where: { shopId, entityId: purchaseId } });
     for (const action of ["purchase.create", "purchase.send", "purchase.receive", "purchase.payment", "purchase.payment.reverse", "purchase.return"]) {
       assert.ok(purchaseAudits.some((entry) => entry.action === action), `Missing audit action ${action}`);
@@ -762,6 +787,10 @@ async function main(): Promise<void> {
     assert.equal(resolvedPrice.pricing.promotionDiscount, 2000);
     assert.equal(resolvedPrice.pricing.manualDiscount, 100);
     assert.equal(resolvedPrice.pricing.finalUnitPrice, 5900);
+    const priceHistory = await request(baseUrl, `/shops/${shopId}/audit-logs?entity=PriceEntry`, { token });
+    const promotionHistory = await request(baseUrl, `/shops/${shopId}/audit-logs?entity=Promotion`, { token });
+    assert.ok(priceHistory.totalCount >= 1);
+    assert.ok(promotionHistory.totalCount >= 1);
     await assert.rejects(request(baseUrl, `/shops/${shopId}/promotions`, {
       method: "POST", token,
       body: { name: `Overlapping API promotion ${stamp}`, productId, type: "PERCENTAGE", value: 10, startsAt: promotionStart.toISOString(), endsAt: promotionEnd.toISOString(), state: "SCHEDULED" },
@@ -818,6 +847,8 @@ async function main(): Promise<void> {
       ok: true,
       checked: [
         "register/login/me",
+        "shop profile read/update and audit history",
+        "zh-CN settings validation and category product count",
         "expired and modified JWT rejection",
         "generic authentication errors and brute-force rate limiting",
         "product create",
@@ -839,6 +870,7 @@ async function main(): Promise<void> {
         "cancel/delete unpaid order",
         "dashboard",
     "purchase receive/payment/reversal/return audit trail",
+    "supplier soft archive preserves financial history",
     "idempotent purchase receiving",
         "restaurant lifecycle reservation and atomic ingredient consumption",
         "barcode lookup, uniqueness, printable SVG and cross-shop isolation",

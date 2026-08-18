@@ -78,3 +78,28 @@ npm run build
 3. Confirm `https://your-railway-api/health` returns `{ "status": "ok" }`.
 4. Deploy Netlify frontend with `VITE_API_BASE_URL` pointing to Railway.
 5. Register a test shop and verify auth, stock, orders, payments, and expenses.
+
+## API conventions
+
+- Protected `/shops/*` endpoints require `Authorization: Bearer <JWT>`.
+- Every shop-scoped request verifies that the authenticated user owns the shop.
+- Success payloads wrap resources by name, for example `{ "shop": ... }` or `{ "categories": [...] }`.
+- Errors use `{ "message": "..." }`; Zod validation errors additionally include an `errors` object.
+- Production `CORS_ORIGIN` must list only the deployed frontend origin(s). Development accepts localhost and 127.0.0.1 on any port.
+
+## Shop profile and history endpoints
+
+`Shop` supports `name`, optional `address`, and optional `logoUrl`. The API stores only a URL for a logo; image hosting/upload is intentionally owned by a future storage integration.
+
+```bash
+# Read/update the selected shop
+curl http://localhost:3000/shops/SHOP_ID -H "Authorization: Bearer YOUR_JWT_TOKEN"
+curl -X PATCH http://localhost:3000/shops/SHOP_ID ^
+  -H "Content-Type: application/json" ^
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" ^
+  -d "{\"name\":\"Main Shop\",\"address\":\"Yangon\",\"logoUrl\":\"https://cdn.example.com/logo.png\"}"
+
+# Price/promotion activity history
+curl "http://localhost:3000/shops/SHOP_ID/audit-logs?entity=Promotion&page=1&pageSize=25" ^
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
