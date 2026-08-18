@@ -8,6 +8,8 @@ import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
 import MonetizationOnRoundedIcon from "@mui/icons-material/MonetizationOnRounded";
 import AccountBalanceWalletRoundedIcon from "@mui/icons-material/AccountBalanceWalletRounded";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useAuth } from "../../context/AuthContext";
+import { apiRequest } from "../../lib/api";
 
 const reportTabs = ["Overview", "Daily", "Weekly", "Monthly", "Yearly", "Compare"];
 const trendTabs = ["daily", "weekly", "monthly", "yearly"];
@@ -63,6 +65,7 @@ function compactAmount(value) {
 export default function SalesReportPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const api = usePosApi();
+  const { isGuest } = useAuth();
   const [tab, setTab] = useState("Overview");
   const [trend, setTrend] = useState("daily");
   const [dateAnchor, setDateAnchor] = useState(null);
@@ -79,11 +82,14 @@ export default function SalesReportPage() {
   useEffect(() => {
     if (isMobile) return undefined;
     let active = true;
-    api.reports.sales(query)
+    const loadReport = isGuest
+      ? apiRequest(`/shops/sales-analytics-demo-shop/reports/sales?${new URLSearchParams({ ...query, demo: "true" })}`)
+      : api.reports.sales(query);
+    loadReport
       .then((response) => { if (active) { setReport(response); setError(""); } })
       .catch((requestError) => { if (active) { setReport(null); setError(requestError.message || "Could not load sales analytics."); } })
     return () => { active = false; };
-  }, [api, isMobile, query]);
+  }, [api, isGuest, isMobile, query]);
 
   if (isMobile) return null;
 
@@ -102,8 +108,7 @@ export default function SalesReportPage() {
   const rangeLabel = report?.range ? `${formatDate(report.range.from)} – ${formatDate(report.range.to)}` : "This month to date";
 
   return <Box sx={{ maxWidth: 1500, mx: "auto", py: 1 }}>
-    <Typography sx={{ fontSize: 30, lineHeight: 1.2, fontWeight: 700 }}>Sales Reports &amp; Analytics</Typography>
-    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mt: 2.5, mb: 2.5 }}>
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2.5 }}>
       <Stack direction="row" spacing={0.5}>{reportTabs.map((item) => <Button key={item} variant={tab === item ? "contained" : "text"} onClick={() => selectTab(item)} sx={{ minHeight: 40, px: 1.75, borderRadius: 1.5, textTransform: "none", color: tab === item ? "common.white" : "text.secondary", fontWeight: tab === item ? 700 : 600 }}>{item}</Button>)}</Stack>
       <Stack direction="row" spacing={1}><Button variant="outlined" startIcon={<CalendarMonthRoundedIcon />} onClick={(event) => { setDraftRange(range); setDateAnchor(event.currentTarget); }} sx={toolbarButtonSx}>{rangeLabel}</Button><Button variant="outlined" startIcon={<FilterListRoundedIcon />} aria-label="Filter sales" onClick={(event) => { setDraftPayment(payment); setFilterAnchor(event.currentTarget); }} sx={toolbarButtonSx}>Filter</Button></Stack>
     </Box>

@@ -9,6 +9,7 @@ import { authRouter } from "./routes/auth.routes.js";
 import { categoriesRouter } from "./routes/categories.routes.js";
 import { customersRouter } from "./routes/customers.routes.js";
 import { dashboardRouter } from "./routes/dashboard.routes.js";
+import { publicDemoRouter } from "./routes/public-demo.routes.js";
 import { expensesRouter } from "./routes/expenses.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { inventoryRouter } from "./routes/inventory.routes.js";
@@ -81,6 +82,7 @@ app.get("/", (_req, res) => {
 
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
+app.use("/shops", publicDemoRouter);
 app.use("/shops", shopsRouter);
 app.use("/shops", storeConfigRouter);
 app.use("/shops", capabilityInventoryRouter);

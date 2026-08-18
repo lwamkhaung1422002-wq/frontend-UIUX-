@@ -154,8 +154,6 @@ function growth(current: number, previous: number) {
   };
 }
 
-dashboardRouter.use(requireAuth);
-
 function dateRange(input: z.infer<typeof querySchema>) {
   if (!input.from && !input.to) return undefined;
 
@@ -236,7 +234,7 @@ function paidAmountForOrder(orderId: string, payments: Array<{
   }, 0);
 }
 
-dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
+dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response, next) => {
   try {
     const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
@@ -393,13 +391,18 @@ dashboardRouter.get("/:shopId/dashboard", async (request, response, next) => {
   }
 });
 
-dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) => {
+export async function salesReportHandler(request: Parameters<typeof dashboardRouter.get>[1] extends (...args: infer Args) => unknown ? Args[0] : never, response: Parameters<typeof dashboardRouter.get>[1] extends (...args: infer Args) => unknown ? Args[1] : never, next: Parameters<typeof dashboardRouter.get>[1] extends (...args: infer Args) => unknown ? Args[2] : never) {
   try {
-    const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
     const query = salesReportQuerySchema.parse(request.query);
+    const isLocalDemoRequest = process.env.NODE_ENV !== "production"
+      && shopId === "sales-analytics-demo-shop"
+      && request.query.demo === "true";
 
-    await assertUserOwnsShop(authUser.id, shopId);
+    if (!isLocalDemoRequest) {
+      const authUser = getAuthUser(request);
+      await assertUserOwnsShop(authUser.id, shopId);
+    }
 
     const range = selectedReportRange(query);
 
@@ -534,4 +537,6 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
   } catch (error) {
     next(error);
   }
-});
+}
+
+dashboardRouter.get("/:shopId/reports/sales", salesReportHandler);
