@@ -31,6 +31,7 @@
     "inventory:reconcile": "tsx scripts/inventory-reconcile.ts",
     "financial:reconcile": "tsx scripts/financial-reconcile.ts",
     "performance:check": "tsx scripts/performance-check.ts",
+    "demo:seed:sales-analytics": "tsx scripts/seed-sales-analytics-demo.ts",
     "demo:seed:eight": "tsx scripts/seed-eight-store-demo.ts",
     "uat:eight-stores": "tsx scripts/eight-store-transaction-uat.ts",
     "catalog:backfill-default-variants": "tsx scripts/backfill-default-variants.ts",

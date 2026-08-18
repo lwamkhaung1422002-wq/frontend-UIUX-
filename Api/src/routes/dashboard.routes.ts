@@ -16,6 +16,144 @@ const querySchema = z.object({
   to: z.coerce.date().optional(),
 });
 
+const salesReportQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  trend: z.enum(["daily", "weekly", "monthly", "yearly"]).default("daily"),
+  payment: z.string().trim().min(1).optional(),
+});
+
+const yangonTimeZone = "Asia/Yangon";
+
+type SalesMetrics = {
+  totalSales: number;
+  orders: number;
+  itemsSold: number;
+  totalCostPrice: number;
+  grossProfit: number;
+};
+
+type SalesOrder = {
+  id: string;
+  total: number;
+  fulfillmentStatus: string;
+  completedAt: Date | null;
+  items: Array<{
+    quantity: number;
+    unitCost: number;
+    lineTotal: number;
+    recognizedAt: Date | null;
+    product: { category: { name: string } | null };
+  }>;
+};
+
+type ReportPayment = {
+  id: string;
+  orderId: string | null;
+  orderIds: string | null;
+  allocations: string | null;
+  originalPaymentId: string | null;
+  type: string;
+  scope: string | null;
+  method: string;
+  amount: number;
+  paidAt: Date;
+};
+
+function yangonDateKey(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: yangonTimeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function yangonStart(key: string): Date {
+  return new Date(`${key}T00:00:00.000+06:30`);
+}
+
+function yangonEnd(key: string): Date {
+  return new Date(`${key}T23:59:59.999+06:30`);
+}
+
+function addCalendarDays(key: string, days: number): string {
+  const date = yangonStart(key);
+  date.setUTCDate(date.getUTCDate() + days);
+  return yangonDateKey(date);
+}
+
+function startOfMonth(key: string): string {
+  return `${key.slice(0, 7)}-01`;
+}
+
+function startOfWeek(key: string): string {
+  const weekday = yangonStart(key).getUTCDay();
+  return addCalendarDays(key, -((weekday + 6) % 7));
+}
+
+function previousMonthStart(key: string): string {
+  const thisMonth = yangonStart(startOfMonth(key));
+  thisMonth.setUTCMonth(thisMonth.getUTCMonth() - 1);
+  return yangonDateKey(thisMonth);
+}
+
+function previousMonthEnd(key: string): string {
+  return addCalendarDays(startOfMonth(key), -1);
+}
+
+function selectedReportRange(input: z.infer<typeof salesReportQuerySchema>) {
+  const today = yangonDateKey(new Date());
+  const from = input.from ?? startOfMonth(today);
+  const to = input.to ?? today;
+  const start = yangonStart(from);
+  const end = yangonEnd(to);
+  const days = Math.max(1, Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1);
+  const previousEnd = new Date(start.getTime() - 1);
+  const previousStart = new Date(previousEnd.getTime() - (days - 1) * 86_400_000);
+  return {
+    from,
+    to,
+    start,
+    end,
+    previous: {
+      from: yangonDateKey(previousStart),
+      to: yangonDateKey(previousEnd),
+      start: previousStart,
+      end: previousEnd,
+    },
+  };
+}
+
+function isDateWithin(value: Date | null, start: Date, end: Date): boolean {
+  return Boolean(value && value >= start && value <= end);
+}
+
+function reportMetrics(orders: SalesOrder[]): SalesMetrics {
+  const totalSales = orders.reduce((sum, order) => sum + order.total, 0);
+  const itemsSold = orders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0);
+  const totalCostPrice = orders.reduce((sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.unitCost * item.quantity, 0), 0);
+  return {
+    totalSales,
+    orders: orders.length,
+    itemsSold,
+    totalCostPrice,
+    grossProfit: totalSales - totalCostPrice,
+  };
+}
+
+function growth(current: number, previous: number) {
+  const change = current - previous;
+  return {
+    current,
+    previous,
+    change,
+    percentage: previous === 0 ? null : Number(((change / previous) * 100).toFixed(1)),
+  };
+}
+
 dashboardRouter.use(requireAuth);
 
 function dateRange(input: z.infer<typeof querySchema>) {
@@ -259,50 +397,136 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
   try {
     const authUser = getAuthUser(request);
     const { shopId } = paramsSchema.parse(request.params);
-    const query = querySchema.parse(request.query);
+    const query = salesReportQuerySchema.parse(request.query);
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const recognitionRange = dateRange(query);
+    const range = selectedReportRange(query);
 
-    const orders = await prisma.order.findMany({
+    const [orders, payments] = await Promise.all([
+      prisma.order.findMany({
       where: { shopId },
       include: {
-        customer: true,
-        items: true,
-        payments: true,
+        items: {
+          include: {
+            product: { include: { category: true } },
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
+      }),
+      prisma.payment.findMany({ where: { shopId } }),
+    ]);
+
+    const completedOrders = orders.filter((order) => isRecognizedSale(order));
+    const completedOrderIds = new Set(completedOrders.map((order) => order.id));
+    const paymentOrderIds = (payment: ReportPayment): string[] => {
+      if (payment.orderId) return [payment.orderId];
+      const allocationIds = parseJsonArray(payment.allocations)
+        .flatMap((entry) => typeof entry === "object" && entry !== null && "orderId" in entry && typeof entry.orderId === "string" ? [entry.orderId] : []);
+      if (allocationIds.length) return allocationIds;
+      return parseJsonArray(payment.orderIds).filter((entry): entry is string => typeof entry === "string");
+    };
+    const matchingOrderIdsForMethod = new Set(
+      payments
+        .filter((payment) => payment.type === "payment" && payment.scope !== "cod-settlement-void" && (!query.payment || payment.method === query.payment))
+        .flatMap((payment) => paymentOrderIds(payment as ReportPayment)),
+    );
+    const inRange = (order: SalesOrder, start: Date, end: Date) => isDateWithin(recognizedAt(order), start, end);
+    const selectOrders = (start: Date, end: Date) => completedOrders.filter((order) =>
+      inRange(order, start, end) && (!query.payment || matchingOrderIdsForMethod.has(order.id)),
+    );
+    const currentOrders = selectOrders(range.start, range.end);
+    const previousOrders = selectOrders(range.previous.start, range.previous.end);
+    const currentMetrics = reportMetrics(currentOrders);
+    const previousMetrics = reportMetrics(previousOrders);
+
+    const trendKey = (date: Date): string => {
+      const key = yangonDateKey(date);
+      if (query.trend === "daily") return key;
+      if (query.trend === "weekly") return startOfWeek(key);
+      if (query.trend === "monthly") return key.slice(0, 7);
+      return key.slice(0, 4);
+    };
+    const trend = [...currentOrders.reduce((buckets, order) => {
+      const recognized = recognizedAt(order);
+      if (!recognized) return buckets;
+      const key = trendKey(recognized);
+      const current = buckets.get(key) ?? { key, sales: 0, orders: 0 };
+      current.sales += order.total;
+      current.orders += 1;
+      buckets.set(key, current);
+      return buckets;
+    }, new Map<string, { key: string; sales: number; orders: number }>()).values()].sort((left, right) => left.key.localeCompare(right.key));
+
+    const categories = [...currentOrders.flatMap((order) => order.items).reduce((groups, item) => {
+      const name = item.product.category?.name ?? "Uncategorized";
+      groups.set(name, (groups.get(name) ?? 0) + item.lineTotal);
+      return groups;
+    }, new Map<string, number>()).entries()]
+      .map(([name, amount]) => ({ name, amount, percentage: currentMetrics.totalSales === 0 ? 0 : Number(((amount / currentMetrics.totalSales) * 100).toFixed(1)) }))
+      .sort((left, right) => right.amount - left.amount);
+
+    const paymentCollections = [...payments.reduce((groups, payment) => {
+      if (payment.scope === "cod-settlement-void" || !isDateWithin(payment.paidAt, range.start, range.end)) return groups;
+      const linkedOrderIds = paymentOrderIds(payment as ReportPayment).filter((orderId) => completedOrderIds.has(orderId));
+      if (!linkedOrderIds.length || (query.payment && payment.method !== query.payment)) return groups;
+      const sign = payment.type === "refund" ? -1 : payment.type === "payment" ? 1 : 0;
+      if (sign === 0) return groups;
+      groups.set(payment.method, (groups.get(payment.method) ?? 0) + sign * payment.amount);
+      return groups;
+    }, new Map<string, number>()).entries()]
+      .filter(([, amount]) => amount !== 0)
+      .map(([method, amount]) => ({ method, amount }))
+      .sort((left, right) => right.amount - left.amount);
+    const collectionTotal = paymentCollections.reduce((sum, entry) => sum + entry.amount, 0);
+
+    const todayKey = yangonDateKey(new Date());
+    const weekStart = startOfWeek(todayKey);
+    const lastWeekEnd = addCalendarDays(weekStart, -1);
+    const lastWeekStart = addCalendarDays(lastWeekEnd, -6);
+    const monthStart = startOfMonth(todayKey);
+    const lastMonthStart = previousMonthStart(todayKey);
+    const lastMonthEnd = previousMonthEnd(todayKey);
+    const summaryRange = (label: string, from: string, to: string) => ({
+      label,
+      ...reportMetrics(selectOrders(yangonStart(from), yangonEnd(to))),
     });
+    const salesSummary = [
+      summaryRange("Today", todayKey, todayKey),
+      summaryRange("This Week", weekStart, todayKey),
+      summaryRange("Last Week", lastWeekStart, lastWeekEnd),
+      summaryRange("This Month", monthStart, todayKey),
+      summaryRange("Last Month", lastMonthStart, lastMonthEnd),
+    ];
+    const comparison = [
+      ["Total Sales", currentMetrics.totalSales, previousMetrics.totalSales],
+      ["Orders", currentMetrics.orders, previousMetrics.orders],
+      ["Items Sold", currentMetrics.itemsSold, previousMetrics.itemsSold],
+      ["Total Cost Price", currentMetrics.totalCostPrice, previousMetrics.totalCostPrice],
+      ["Gross Profit", currentMetrics.grossProfit, previousMetrics.grossProfit],
+    ].map(([metric, current, previous]) => ({
+      metric,
+      ...growth(current as number, previous as number),
+    }));
 
-    const rows = orders
-      .filter((order) => !recognitionRange || isInRange(recognizedAt(order), recognitionRange))
-      .map((order) => {
-      const costOfGoods = order.items.reduce(
-        (sum, item) => sum + item.unitCost * item.quantity,
-        0,
-      );
-      const revenue = isRecognizedSale(order) ? order.total : 0;
-
-      return {
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        customerName: order.customer?.name ?? null,
-        fulfillmentStatus: order.fulfillmentStatus,
-        paymentStatus: order.paymentStatus,
-        subtotal: order.subtotal,
-        discount: order.discount,
-        deliveryFee: order.deliveryFee,
-        total: order.total,
-        revenue,
-        costOfGoods,
-        grossProfit: revenue - costOfGoods,
-        recognizedAt: recognizedAt(order),
-        createdAt: order.createdAt,
-      };
-      });
-
-    response.status(200).json({ rows });
+    response.status(200).json({
+      range: {
+        from: range.from,
+        to: range.to,
+        previous: { from: range.previous.from, to: range.previous.to },
+      },
+      summary: Object.fromEntries(Object.entries(currentMetrics).map(([key, value]) => [key, growth(value, previousMetrics[key as keyof SalesMetrics])])),
+      trend,
+      categories,
+      paymentCollections: paymentCollections.map((entry) => ({
+        ...entry,
+        percentage: collectionTotal === 0 ? 0 : Number(((entry.amount / collectionTotal) * 100).toFixed(1)),
+      })),
+      collectionTotal,
+      salesSummary,
+      comparison,
+    });
   } catch (error) {
     next(error);
   }
