@@ -420,6 +420,7 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
 
     const completedOrders = orders.filter((order) => isRecognizedSale(order));
     const completedOrderIds = new Set(completedOrders.map((order) => order.id));
+    const paymentById = new Map(payments.map((payment) => [payment.id, payment]));
     const paymentOrderIds = (payment: ReportPayment): string[] => {
       if (payment.orderId) return [payment.orderId];
       const allocationIds = parseJsonArray(payment.allocations)
@@ -470,10 +471,13 @@ dashboardRouter.get("/:shopId/reports/sales", async (request, response, next) =>
     const paymentCollections = [...payments.reduce((groups, payment) => {
       if (payment.scope === "cod-settlement-void" || !isDateWithin(payment.paidAt, range.start, range.end)) return groups;
       const linkedOrderIds = paymentOrderIds(payment as ReportPayment).filter((orderId) => completedOrderIds.has(orderId));
-      if (!linkedOrderIds.length || (query.payment && payment.method !== query.payment)) return groups;
+      const method = payment.type === "refund"
+        ? paymentById.get(payment.originalPaymentId ?? "")?.method ?? payment.method
+        : payment.method;
+      if (!linkedOrderIds.length || (query.payment && method !== query.payment)) return groups;
       const sign = payment.type === "refund" ? -1 : payment.type === "payment" ? 1 : 0;
       if (sign === 0) return groups;
-      groups.set(payment.method, (groups.get(payment.method) ?? 0) + sign * payment.amount);
+      groups.set(method, (groups.get(method) ?? 0) + sign * payment.amount);
       return groups;
     }, new Map<string, number>()).entries()]
       .filter(([, amount]) => amount !== 0)
