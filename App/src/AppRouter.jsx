@@ -15,6 +15,8 @@ import AddPrice from "./pages/Price/AddPricePage";
 import AddPromotion from "./pages/Price/AddPromotionPage";
 import PriceHistory from "./pages/Price/PriceHistoryPage";
 import Report from "./pages/Report/ReportPage";
+import ProductReport from "./pages/Report/ProductReportPage";
+import SalesReport from "./pages/Report/SalesReportPage";
 import SaleRecord from "./pages/SaleRecord/SaleRecordPage";
 import Suppliers from "./pages/Suppliers/SuppliersPage";
 import AddSupplier from "./pages/Suppliers/AddSupplierPage";
@@ -68,6 +70,8 @@ const router = createBrowserRouter([
       { path: "price/promotion/add", element: <AddPromotion /> },
       { path: "price/history", element: <PriceHistory /> },
       { path: "report", element: <Report /> },
+      { path: "report/products", element: <ProductReport /> },
+      { path: "report/sales", element: <SalesReport /> },
       { path: "sale-record", element: <SaleRecord /> },
       { path: "suppliers", element: <Suppliers /> },
       { path: "suppliers/add", element: <AddSupplier /> },

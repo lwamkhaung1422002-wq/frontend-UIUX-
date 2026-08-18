@@ -64,7 +64,7 @@ export default function Header() {
       <Toolbar sx={{ justifyContent: "space-between", minHeight: 72, px: { md: 4, lg: 5 } }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           {(isDesktopStockDetails || isDesktopStockHistory) && <IconButton aria-label="Back to inventory" onClick={() => navigate("/stock")} sx={{ ml: -1 }}><ArrowBackRoundedIcon /></IconButton>}
-          <Typography variant="h6" fontWeight={700}>{pathname === "/" ? "Dashboard" : isDesktopStockDetails ? "Stock Details" : isDesktopStockHistory ? "Stock Movement" : pageTitles[pathname] ?? "POS System"}</Typography>
+          <Typography variant="h6" fontWeight={700}>{pathname === "/" ? "Dashboard" : isDesktopStockDetails ? "Stock Details" : isDesktopStockHistory ? "Stock Movement" : pathname === "/report/sales" ? "Reports & Analytics / Sales Reports & Analytics" : pathname.startsWith("/report") ? "Reports & Analytics" : pageTitles[pathname] ?? "POS System"}</Typography>
         </Box>
         <Stack direction="row" spacing={1}>
           <IconButton aria-label="Notifications"><Badge color="error" variant="dot"><NotificationsRoundedIcon /></Badge></IconButton>

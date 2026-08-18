@@ -25,6 +25,9 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
 
   return {
     dashboard: (query) => shopRequest(`/dashboard${queryString(query)}`),
+    reports: {
+      sales: (query) => shopRequest(`/reports/sales${queryString(query)}`),
+    },
     shop: {
       get: () => shopRequest(""),
       update: (body) => shopRequest("", { method: "PATCH", body }),
