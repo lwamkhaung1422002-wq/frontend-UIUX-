@@ -1,16 +1,38 @@
-# React + Vite
+# General POS Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19, Vite, and Material UI web client for General POS. It connects to the
+Express/Prisma API in `../Api` for authentication, catalogue, inventory, sales,
+payments, and barcode lookup.
 
-Currently, two official plugins are available:
+## Requirements
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Node.js 22.12 or later
+- npm
+- A running API and PostgreSQL database (see `../LOCAL_DEVELOPMENT.md`)
 
-## React Compiler
+## Run locally
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+copy .env.example .env
+npm install
+npm run dev
+```
 
-## Expanding the ESLint configuration
+The web client runs at `http://localhost:5173` and, by default, calls the API
+at `http://localhost:3108`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Environment
+
+| Variable | Purpose |
+| --- | --- |
+| `VITE_API_BASE_URL` | Public base URL of the API, without a trailing slash. |
+
+Use the deployed Railway API URL in production. Camera barcode scanning requires
+HTTPS outside localhost.
+
+## Checks
+
+```bash
+npm run lint
+npm run build
+```

@@ -5,7 +5,7 @@ Express API for the `App` frontend, designed for Railway with Neon PostgreSQL.
 ## Local Development
 
 For the full safe local-first workflow, including local PostgreSQL setup, seed data,
-sample account, smoke tests, and reset guard, see `../LOCAL_DEVELOPMENT.md`.
+smoke tests, and reset guard, see [`../LOCAL_DEVELOPMENT.md`](../LOCAL_DEVELOPMENT.md).
 
 ```bash
 npm install
@@ -16,7 +16,7 @@ Create `.env` from `.env.example`:
 
 ```env
 NODE_ENV=development
-PORT=3000
+PORT=3108
 DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
 JWT_SECRET="replace-with-a-long-random-secret-at-least-32-characters"
 CORS_ORIGIN="http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
@@ -93,13 +93,13 @@ npm run build
 
 ```bash
 # Read/update the selected shop
-curl http://localhost:3000/shops/SHOP_ID -H "Authorization: Bearer YOUR_JWT_TOKEN"
-curl -X PATCH http://localhost:3000/shops/SHOP_ID ^
+curl http://localhost:3108/shops/SHOP_ID -H "Authorization: Bearer YOUR_JWT_TOKEN"
+curl -X PATCH http://localhost:3108/shops/SHOP_ID ^
   -H "Content-Type: application/json" ^
   -H "Authorization: Bearer YOUR_JWT_TOKEN" ^
   -d "{\"name\":\"Main Shop\",\"address\":\"Yangon\",\"logoUrl\":\"https://cdn.example.com/logo.png\"}"
 
 # Price/promotion activity history
-curl "http://localhost:3000/shops/SHOP_ID/audit-logs?entity=Promotion&page=1&pageSize=25" ^
+curl "http://localhost:3108/shops/SHOP_ID/audit-logs?entity=Promotion&page=1&pageSize=25" ^
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```

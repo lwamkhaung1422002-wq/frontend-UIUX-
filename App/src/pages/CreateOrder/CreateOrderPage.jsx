@@ -29,32 +29,10 @@ import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SellOutlinedIcon from "@mui/icons-material/SellOutlined";
-import WaterDropRoundedIcon from "@mui/icons-material/WaterDropRounded";
 
 const taxRate = 0.05;
 
-const initialItems = [
-  {
-    id: "water",
-    name: "Water",
-    price: 1000,
-    stock: 100,
-    quantity: 5,
-    promotion: { type: "discount", value: 500 },
-    icon: <WaterDropRoundedIcon />,
-    color: "#38a5dd",
-  },
-  {
-    id: "air-x",
-    name: "Air X",
-    price: 1200,
-    stock: 98,
-    quantity: 2,
-    promotion: { type: "free", text: "2 pcs free" },
-    icon: <Inventory2RoundedIcon />,
-    color: "#1976d2",
-  },
-];
+const initialItems = [];
 
 const formatMoney = (amount) => `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 

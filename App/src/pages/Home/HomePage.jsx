@@ -382,13 +382,7 @@ function DesktopDashboard({ summary, orders, navigate }) {
     { label: "Low Stock Items", value: summary.lowStockItems, action: "See more", tone: "#7648e9", soft: "#faf7ff" },
     { label: "Today's Profit", value: formatKyat(summary.todayProfit), trend: "18.7%", tone: "#24934a", soft: "#f4fbf6" },
   ];
-  const topSellingProducts = [
-    { name: "Jasmine Perfume", qty: 28, initials: "JP", color: "#f4c4d4", textColor: "#a63d61" },
-    { name: "Nivea Roll On", qty: 19, initials: "NR", color: "#dce9fb", textColor: "#2f6bb8" },
-    { name: "Coca-Cola 330ml", qty: 16, initials: "CC", color: "#ffe0df", textColor: "#c63d35" },
-    { name: "Oishi Green Tea", qty: 13, initials: "OG", color: "#e4f3dc", textColor: "#538b37" },
-    { name: "Royal-D 500ml", qty: 11, initials: "RD", color: "#fff1c7", textColor: "#b88212" },
-  ];
+  const topSellingProducts = [];
 
   return (
     <Box sx={{ width: "100%", maxWidth: "none", mx: 0, py: 0.5 }}>

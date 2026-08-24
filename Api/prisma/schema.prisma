@@ -60,6 +60,7 @@ model Shop {
   customerPriceGroups CustomerPriceGroup[]
   customerReturns     CustomerReturn[]
   barcodes            ProductBarcode[]
+  generatedBarcodes   GeneratedBarcode[]
   priceBooks          PriceBook[]
   priceEntries        PriceEntry[]
   promotions          Promotion[]
@@ -161,6 +162,7 @@ model Product {
   priceTiers        PriceTier[]
   customerReturns   CustomerReturn[]
   barcodes          ProductBarcode[]
+  assignedBarcodes  GeneratedBarcode[]
   priceEntries      PriceEntry[]
   promotions        Promotion[]
   supplierLinks     ProductSupplier[]
@@ -917,6 +919,24 @@ model ProductBarcode {
   @@unique([shopId, normalizedValue])
   @@index([shopId, status, normalizedValue])
   @@index([productId, variantId, productUnitId])
+}
+
+model GeneratedBarcode {
+  id                String   @id @default(cuid())
+  shopId            String
+  value             String
+  normalizedValue   String
+  status            String   @default("UNASSIGNED")
+  assignedProductId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  retiredAt         DateTime?
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  assignedProduct   Product? @relation(fields: [assignedProductId], references: [id], onDelete: SetNull)
+
+  @@unique([shopId, normalizedValue])
+  @@index([shopId, status])
+  @@index([assignedProductId])
 }
 
 model PriceBook {

@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest(path, { token, method = "GET", body, signal } = {}) {
+export async function apiRequest(path, { token, method = "GET", body, signal, responseType } = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     signal,
@@ -22,7 +22,7 @@ export async function apiRequest(path, { token, method = "GET", body, signal } =
   });
 
   const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json") ? await response.json() : null;
+  const payload = contentType.includes("application/json") ? await response.json() : responseType === "text" ? await response.text() : null;
 
   if (!response.ok) {
     throw new ApiError(payload?.message || "Unable to complete the request.", {

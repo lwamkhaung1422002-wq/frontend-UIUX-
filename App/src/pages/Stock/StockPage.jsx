@@ -27,25 +27,11 @@ import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
-import WaterDropRoundedIcon from "@mui/icons-material/WaterDropRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { Alert } from "@mui/material";
 import { usePosApi } from "../../hooks/useApiResource";
-
-const products = [
-  { id: "water", name: "Water", category: "Drinking", price: 1000, stock: 100, icon: <WaterDropRoundedIcon />, color: "#38a5dd" },
-  { id: "air-x", name: "Air X", category: "Medicine", price: 1200, stock: 98, icon: <Inventory2RoundedIcon />, color: "#8a8a8a" },
-];
-
-const desktopProducts = [
-  ...products,
-  { id: "coca-cola", name: "Coca-Cola 330ml", category: "Drinking", price: 1000, stock: 8, icon: <Inventory2RoundedIcon />, color: "#e53935" },
-  { id: "jasmine", name: "Jasmine Perfume", category: "Beauty", price: 3500, stock: 5, icon: <Inventory2RoundedIcon />, color: "#db6f9c" },
-  { id: "nivea", name: "Nivea Roll On", category: "Beauty", price: 6500, stock: 7, icon: <Inventory2RoundedIcon />, color: "#3976bb" },
-  { id: "oishi", name: "Oishi Green Tea", category: "Drinking", price: 1800, stock: 4, icon: <Inventory2RoundedIcon />, color: "#4f9b4b" },
-  { id: "royal-d", name: "Royal-D 500ml", category: "Drinking", price: 1500, stock: 9, icon: <Inventory2RoundedIcon />, color: "#deae28" },
-  { id: "cellox", name: "Cellox Facial Tissue", category: "Household", price: 1200, stock: 45, icon: <Inventory2RoundedIcon />, color: "#9a5ab7" },
-];
+import BarcodeManagerDialog from "../../components/Barcode/BarcodeManagerDialog";
+import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
 
 const formatMoney = (amount) => `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 
@@ -53,13 +39,16 @@ export default function StockPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
-  const [inventoryProducts, setInventoryProducts] = useState(() => isMobile ? products : desktopProducts);
+  const [inventoryProducts, setInventoryProducts] = useState([]);
   const [apiError, setApiError] = useState(null);
   const [search, setSearch] = useState("");
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [sort, setSort] = useState("recent");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuProduct, setMenuProduct] = useState(null);
+  const [barcodeGeneratorOpen, setBarcodeGeneratorOpen] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanNotice, setScanNotice] = useState(null);
 
   useEffect(() => {
     const updateSort = (event) => setSort(event.detail);
@@ -69,7 +58,16 @@ export default function StockPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.products.list({ pageSize: 100, status: "active" }), api.categories.list(), api.inventory.list()])
+    const loadAllActiveProducts = async () => {
+      const firstPage = await api.products.list({ page: 1, pageSize: 100, status: "active" });
+      const totalCount = firstPage.totalCount || (firstPage.products || []).length;
+      const remainingPages = Array.from({ length: Math.max(0, Math.ceil(totalCount / 100) - 1) }, (_, index) =>
+        api.products.list({ page: index + 2, pageSize: 100, status: "active" }),
+      );
+      const pages = await Promise.all(remainingPages);
+      return { ...firstPage, products: [firstPage, ...pages].flatMap((page) => page.products || []) };
+    };
+    Promise.all([loadAllActiveProducts(), api.categories.list(), api.inventory.list()])
       .then(([productResult, categoryResult, inventoryResult]) => {
         if (!active) return;
         const categoryNames = new Map((categoryResult.categories || []).map((category) => [category.id, category.name]));
@@ -81,6 +79,8 @@ export default function StockPage() {
         setInventoryProducts((productResult.products || []).map((product) => ({
           id: product.id,
           name: product.name,
+          sku: product.sku || "",
+          barcodeValues: (product.barcodes || []).map((barcode) => barcode.value).filter(Boolean),
           category: product.category?.name || categoryNames.get(product.categoryId) || "Uncategorized",
           price: Number(product.price || 0),
           stock: totals.get(product.id) || 0,
@@ -95,7 +95,11 @@ export default function StockPage() {
 
   const visibleProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const result = inventoryProducts.filter((product) => (!query || product.name.toLowerCase().includes(query)) && (!lowStockOnly || product.stock < 10));
+    const result = inventoryProducts.filter((product) => (
+      !query || [product.name, product.sku, ...(product.barcodeValues || [])]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query))
+    ) && (!lowStockOnly || product.stock < 10));
     if (sort === "name") return [...result].sort((a, b) => a.name.localeCompare(b.name));
     if (sort === "price") return [...result].sort((a, b) => b.price - a.price);
     if (sort === "stock") return [...result].sort((a, b) => a.stock - b.stock);
@@ -117,8 +121,22 @@ export default function StockPage() {
     setMenuAnchor(null);
     setMenuProduct(null);
   };
+  const handleBarcodeDetected = async (value) => {
+    setScannerOpen(false);
+    setScanNotice(null);
+    try {
+      const result = await api.pricing.barcodeLookup(value);
+      if (!result.known || !result.product?.id) {
+        setScanNotice({ severity: "warning", text: `No active product was found for ${value}.` });
+        return;
+      }
+      navigate(`/stock/${result.product.id}`);
+    } catch (error) {
+      setScanNotice({ severity: "error", text: error.message || "Barcode lookup failed. Enter the code manually and try again." });
+    }
+  };
 
-  if (!isMobile) return <><DesktopInventoryPage products={visibleProducts} search={search} setSearch={setSearch} summary={inventorySummary} lowStockOnly={lowStockOnly} setLowStockOnly={setLowStockOnly} navigate={navigate} onDelete={(id) => deleteProduct(id).catch((error) => setApiError(error))} />{apiError && <Alert severity="warning" sx={{ mt: 1.5 }}>Inventory is showing local preview data: {apiError.message}</Alert>}</>;
+  if (!isMobile) return <><DesktopInventoryPage products={visibleProducts} search={search} setSearch={setSearch} summary={inventorySummary} lowStockOnly={lowStockOnly} setLowStockOnly={setLowStockOnly} navigate={navigate} onDelete={(id) => deleteProduct(id).catch((error) => setApiError(error))} onGenerateBarcodes={() => setBarcodeGeneratorOpen(true)} /><BarcodeManagerDialog open={barcodeGeneratorOpen} onClose={() => setBarcodeGeneratorOpen(false)} api={api} standalone />{apiError && <Alert severity="warning" sx={{ mt: 1.5 }}>{apiError.message || "Inventory request failed."}</Alert>}</>;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", px: 3, pt: 2, pb: "174px" }}>
@@ -142,7 +160,7 @@ export default function StockPage() {
             "& .MuiInputAdornment-root": { color: "text.primary", mr: 1 },
           }}
         />
-        <IconButton aria-label="Scan barcode" sx={{ position: "absolute", top: "50%", right: 7, transform: "translateY(-50%)", color: "text.primary" }}><QrCodeScannerRoundedIcon /></IconButton>
+        <IconButton aria-label="Scan barcode" onClick={() => setScannerOpen(true)} sx={{ position: "absolute", top: "50%", right: 7, transform: "translateY(-50%)", color: "text.primary" }}><QrCodeScannerRoundedIcon /></IconButton>
       </Box>
 
       <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 0.75, mt: 2, mb: 1.5 }}>
@@ -160,7 +178,8 @@ export default function StockPage() {
       </Box>
 
       <Stack spacing={1.25}>
-        {apiError && <Alert severity="warning">Inventory is showing local preview data: {apiError.message}</Alert>}
+        {scanNotice && <Alert severity={scanNotice.severity} onClose={() => setScanNotice(null)}>{scanNotice.text}</Alert>}
+        {apiError && <Alert severity="warning">{apiError.message || "Inventory request failed."}</Alert>}
         {visibleProducts.map((product) => (
           <Card key={product.id} onClick={() => navigate(`/stock/${product.id}`)} sx={{ minHeight: 112, borderRadius: 2.5, bgcolor: "background.paper", boxShadow: "0 2px 7px rgba(15,23,42,0.16)", cursor: "pointer" }}>
             <CardContent sx={{ height: "100%", boxSizing: "border-box", p: 1.5, "&:last-child": { pb: 1.5 } }}>
@@ -189,22 +208,24 @@ export default function StockPage() {
       </Menu>
 
       <Paper elevation={5} sx={{ position: "fixed", left: 0, right: 0, bottom: 72, px: 3, py: 2, borderTop: 1, borderColor: "divider", bgcolor: "background.paper", zIndex: 10 }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
+        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1 }}>
           <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => navigate("/stock/add")} sx={{ minHeight: 56, borderRadius: 2, bgcolor: "primary.main", fontSize: 15, textTransform: "none", "&:hover": { bgcolor: "primary.dark" } }}>Add Product</Button>
-          <Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => navigate("/stock/history")} sx={{ minHeight: 56, borderRadius: 2, borderColor: "text.primary", color: "primary.main", fontSize: 15, textTransform: "none" }}>Stock History</Button>
+          <Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => navigate("/stock/history")} sx={{ minHeight: 56, borderRadius: 2, borderColor: "text.primary", color: "primary.main", fontSize: 12, textTransform: "none" }}>History</Button>
+          <Button variant="outlined" onClick={() => setBarcodeGeneratorOpen(true)} sx={{ minHeight: 56, borderRadius: 2, borderColor: "text.primary", color: "primary.main", fontSize: 12, textTransform: "none" }}>Generate Barcodes</Button>
         </Box>
-      </Paper>
+      </Paper><BarcodeManagerDialog open={barcodeGeneratorOpen} onClose={() => setBarcodeGeneratorOpen(false)} api={api} standalone /><BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleBarcodeDetected} />
     </Box>
   );
 }
 
-function DesktopInventoryPage({ products, search, setSearch, summary, lowStockOnly, setLowStockOnly, navigate, onDelete }) {
+function DesktopInventoryPage({ products, search, setSearch, summary, lowStockOnly, setLowStockOnly, navigate, onDelete, onGenerateBarcodes }) {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuProduct, setMenuProduct] = useState(null);
   return <Box sx={{ maxWidth: 1500, mx: "auto", py: 0.5 }}>
-    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) auto auto", gap: 1.5, alignItems: "center" }}>
+    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) auto auto auto", gap: 1.5, alignItems: "center" }}>
       <TextField fullWidth value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by product code, name or barcode..." InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ "& .MuiOutlinedInput-root": { minHeight: 52, borderRadius: 2, bgcolor: "background.paper" } }} />
       <Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => navigate("/stock/add")} sx={desktopPrimaryButtonSx}>Create Product</Button>
+      <Button variant="outlined" onClick={onGenerateBarcodes} sx={desktopSecondaryButtonSx}>Generate Barcodes</Button>
       <Button variant="outlined" startIcon={<ArchiveRoundedIcon />} onClick={() => navigate("/stock/movement/add")} sx={desktopSecondaryButtonSx}>Add Stock</Button>
     </Box>
     <Stack direction="row" spacing={1.5} sx={{ mt: 2.25, mb: 2.5 }}>

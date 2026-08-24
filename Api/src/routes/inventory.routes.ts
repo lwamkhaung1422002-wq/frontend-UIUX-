@@ -114,6 +114,24 @@ inventoryRouter.get("/:shopId/inventory", async (request, response, next) => {
   }
 });
 
+inventoryRouter.get("/:shopId/inventory-movements", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = paramsSchema.parse(request.params);
+    const query = z.object({ productId: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(200).default(100) }).parse(request.query);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const movements = await prisma.inventoryMovement.findMany({
+      where: { shopId, ...(query.productId ? { productId: query.productId } : {}) },
+      include: { product: { include: { barcodes: { where: { status: "ACTIVE" } } } }, variant: true },
+      orderBy: { occurredAt: "desc" },
+      take: query.limit,
+    });
+    response.status(200).json({ movements });
+  } catch (error) {
+    next(error);
+  }
+});
+
 inventoryRouter.post("/:shopId/inventory", async (request, response, next) => {
   try {
     const authUser = getAuthUser(request);

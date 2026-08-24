@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
 
-import type { Prisma } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
 import { assertCapability } from "../lib/store-capabilities.js";
 import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
+import { internalBarcodeCandidate, normalizeBarcode, validateBarcode } from "../lib/barcode.js";
 
 export const productsRouter = Router();
 
@@ -76,6 +77,10 @@ const productSchema = z.object({
     canPurchase: z.boolean().optional(),
     minimumOrderQty: z.coerce.number().positive().optional(),
   })).optional(),
+  barcode: z.object({ value: z.string().trim().optional(), kind: z.enum(["INTERNAL", "MANUFACTURER"]).default("INTERNAL"), symbology: z.enum(["CODE128", "EAN13", "UPCA", "UPCE", "EAN8"]).default("CODE128") }).optional(),
+  shortCode: z.string().trim().regex(/^[A-Z]{2}[0-9]{4}$/, "Short code must use the CK4821 format.").optional(),
+  barcodeReservationId: z.string().trim().min(1).optional(),
+  stockQuantity: z.coerce.number().int().nonnegative().optional(),
 });
 
 const updateProductSchema = productSchema.partial();
@@ -127,6 +132,12 @@ async function assertProductBelongsToShop(productId: string, shopId: string) {
 function badRequest(message: string): Error {
   const error = new Error(message);
   error.name = "BadRequestError";
+  return error;
+}
+
+function conflict(message: string): Error {
+  const error = new Error(message);
+  error.name = "ConflictError";
   return error;
 }
 
@@ -265,6 +276,10 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
       ...(query.search ? { OR: [
         { name: { contains: query.search, mode: "insensitive" as const } },
         { sku: { contains: query.search, mode: "insensitive" as const } },
+        { barcodes: { some: { status: "ACTIVE", OR: [
+          { value: { contains: query.search, mode: "insensitive" as const } },
+          { normalizedValue: { contains: query.search, mode: "insensitive" as const } },
+        ] } } },
       ] } : {}),
     };
     const [products, total] = await prisma.$transaction([prisma.product.findMany({
@@ -273,6 +288,7 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
         category: true,
         variants: true,
         units: { include: { unit: true } },
+        barcodes: { where: { status: "ACTIVE" }, orderBy: { createdAt: "desc" } },
         priceTiers: true,
       },
       orderBy: { [query.sort]: query.direction },
@@ -288,6 +304,25 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+productsRouter.get("/:shopId/products/:productId", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request); const { shopId } = paramsSchema.parse(request.params); const productId = z.string().min(1).parse(request.params.productId);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const product = await prisma.product.findFirst({
+      where: { id: productId, shopId },
+      include: {
+        category: true,
+        variants: true,
+        units: { include: { unit: true } },
+        barcodes: { orderBy: { createdAt: "desc" } },
+        _count: { select: { orderItems: { where: { order: { shopId, cancelledAt: null } } } } },
+      },
+    });
+    if (!product) throw notFound("Product not found.");
+    response.json({ product, activeBarcode: product.barcodes.find((barcode) => barcode.status === "ACTIVE" && barcode.isPrimary) ?? null, hasSaleHistory: product._count.orderItems > 0 });
+  } catch (error) { next(error); }
 });
 
 productsRouter.get("/:shopId/variants", async (request, response, next) => {
@@ -383,6 +418,37 @@ productsRouter.post("/:shopId/products", async (request, response, next) => {
           } });
         }
       }
+      if (input.barcode) {
+        let value = input.barcode.kind === "INTERNAL" ? (input.barcode.value || internalBarcodeCandidate(input.name)) : input.barcode.value;
+        if (input.barcode.kind === "INTERNAL" && !/^[A-Z]{2}\d{4}$/.test(value || "")) throw badRequest("Internal barcode must use the CK4821 format.");
+        if (input.barcode.kind === "INTERNAL" && !input.barcode.value) {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            const candidate = attempt === 0 ? value : internalBarcodeCandidate(input.name);
+            if (!await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: candidate! } } })) { value = candidate; break; }
+          }
+        }
+        if (!value) throw badRequest("Barcode value is required.");
+        const symbology = input.barcode.kind === "INTERNAL" ? "CODE128" : input.barcode.symbology;
+        const message = validateBarcode(value, symbology);
+        if (message) throw badRequest(message);
+        const normalizedValue = normalizeBarcode(value);
+        if (await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } })) throw conflict("Barcode is already linked in this store.");
+        const baseUnit = await tx.productUnit.findFirst({ where: { productId: createdProduct.id, isBase: true } });
+        await tx.productBarcode.create({ data: { shopId, productId: createdProduct.id, value, normalizedValue, symbology, kind: input.barcode.kind, isInternal: input.barcode.kind === "INTERNAL", isPrimary: true, ...(baseUnit ? { productUnitId: baseUnit.id } : {}) } });
+      }
+      if (input.shortCode) {
+        const normalizedValue = normalizeBarcode(input.shortCode);
+        if (await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } })) throw conflict("Short code is already used in this store.");
+        await tx.productBarcode.create({ data: { shopId, productId: createdProduct.id, value: normalizedValue, normalizedValue, symbology: "CODE128", kind: "INTERNAL", isInternal: true, isPrimary: false } });
+      }
+      if (input.barcodeReservationId) {
+        const reservation = await tx.generatedBarcode.findFirst({ where: { id: input.barcodeReservationId, shopId, status: "UNASSIGNED" } });
+        if (!reservation) throw notFound("Selected generated barcode is no longer available.");
+        if (await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: reservation.normalizedValue } } })) throw conflict("Selected barcode is already used in this store.");
+        await tx.productBarcode.updateMany({ where: { shopId, productId: createdProduct.id, isPrimary: true }, data: { isPrimary: false } });
+        await tx.productBarcode.create({ data: { shopId, productId: createdProduct.id, value: reservation.value, normalizedValue: reservation.normalizedValue, symbology: "CODE128", kind: "INTERNAL", isInternal: true, isPrimary: true } });
+        await tx.generatedBarcode.update({ where: { id: reservation.id }, data: { status: "ASSIGNED", assignedProductId: createdProduct.id } });
+      }
       await writeAuditLog(tx, {
         shopId,
         actorId: authUser.id,
@@ -391,12 +457,15 @@ productsRouter.post("/:shopId/products", async (request, response, next) => {
         entityId: createdProduct.id,
         metadata: { name: input.name },
       });
-      return createdProduct;
+      return tx.product.findUniqueOrThrow({
+        where: { id: createdProduct.id },
+        include: { category: true, variants: true, units: { include: { unit: true } }, barcodes: { where: { status: "ACTIVE", isPrimary: true } } },
+      });
     });
 
     response.status(201).json({ product });
   } catch (error) {
-    next(error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") next(conflict("Barcode is already linked in this store.")); else next(error);
   }
 });
 
@@ -410,6 +479,15 @@ productsRouter.patch("/:shopId/products/:productId", async (request, response, n
     await assertUserOwnsShop(authUser.id, shopId);
     await assertProductBelongsToShop(productId, shopId);
     await assertCategoryBelongsToShop(input.categoryId, shopId);
+
+    if (input.stockQuantity !== undefined) {
+      const activeSaleCount = await prisma.orderItem.count({
+        where: { productId, order: { shopId, cancelledAt: null } },
+      });
+      if (activeSaleCount > 0) {
+        throw badRequest("Stock quantity cannot be edited after this product has sale history.");
+      }
+    }
 
     const data: Prisma.ProductUncheckedUpdateInput = {
       ...(input.name !== undefined ? { name: input.name } : {}),
@@ -476,6 +554,23 @@ productsRouter.patch("/:shopId/products/:productId", async (request, response, n
   }
 });
 
+productsRouter.post("/:shopId/products/:productId/short-code/generate", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request); const { shopId } = paramsSchema.parse(request.params); const productId = z.string().min(1).parse(request.params.productId);
+    await assertUserOwnsShop(authUser.id, shopId);
+    const barcode = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findFirst({ where: { id: productId, shopId } }); if (!product) throw notFound("Product not found.");
+      let value = "";
+      for (let attempt = 0; attempt < 30; attempt += 1) { const candidate = internalBarcodeCandidate(product.name); if (!await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: candidate } } })) { value = candidate; break; } }
+      if (!value) throw conflict("Could not generate a unique short code.");
+      const created = await tx.productBarcode.create({ data: { shopId, productId, value, normalizedValue: value, symbology: "CODE128", kind: "INTERNAL", isInternal: true, isPrimary: false } });
+      await writeAuditLog(tx, { shopId, actorId: authUser.id, action: "product.short-code.generate", entity: "ProductBarcode", entityId: created.id, metadata: { productId, value } });
+      return created;
+    });
+    response.status(201).json({ barcode });
+  } catch (error) { next(error); }
+});
+
 productsRouter.delete("/:shopId/products/:productId", async (request, response, next) => {
   try {
     const authUser = getAuthUser(request);
@@ -497,14 +592,18 @@ productsRouter.delete("/:shopId/products/:productId", async (request, response, 
       throw error;
     }
 
+    const activeSaleCount = await prisma.orderItem.count({
+      where: { productId, order: { shopId, cancelledAt: null } },
+    });
+
+    if (activeSaleCount > 0) {
+      throw badRequest("Product cannot be removed while active sale history exists. Cancel or delete those sales first.");
+    }
+
     const availableQuantity = product.inventory.reduce(
       (sum, batch) => sum + Math.max(0, batch.quantity - batch.reservedQuantity),
       0,
     );
-
-    if (availableQuantity > 0) {
-      throw badRequest("Product cannot be removed while stock is still available.");
-    }
 
     const removedProduct = await prisma.$transaction(async (tx) => {
       await tx.productVariant.updateMany({
@@ -526,7 +625,7 @@ productsRouter.delete("/:shopId/products/:productId", async (request, response, 
         action: "product.archive",
         entity: "Product",
         entityId: productId,
-        metadata: { availableQuantity },
+        metadata: { availableQuantity, retainedInventory: availableQuantity > 0 },
       });
       return archivedProduct;
     });

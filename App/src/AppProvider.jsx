@@ -69,7 +69,7 @@ export default function AppProvider() {
     };
     restoreSession();
     return () => { active = false; };
-  }, [logout, saveSession, session?.shop?.id, session?.token]);
+  }, [logout, saveSession, session?.mode, session?.shop?.id, session?.token]);
   const theme = useMemo(() => createTheme({ palette: { mode: themeMode, primary: { main: "#1976d2", dark: "#1565c0" }, background: { default: themeMode === "dark" ? "#101827" : "#f8fafc" } } }), [themeMode]);
   const auth = useMemo(() => ({ session, user: session?.user || null, shop: session?.shop || null, token: session?.token || null, isGuest: session?.mode === "guest", isAuthenticated: Boolean(session?.token || session?.mode === "guest"), authReady, login, register, logout, continueAsGuest, requestRegistration: () => setRegistrationPromptOpen(true), selectShop: (nextShop) => saveSession({ ...session, shop: nextShop }) }), [session, authReady, login, register, logout, continueAsGuest, saveSession]);
   const guardGuestAction = (event) => {

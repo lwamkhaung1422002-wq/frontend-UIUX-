@@ -103,7 +103,14 @@ capabilityInventoryRouter.get("/:shopId/inventory-balances", async (request, res
     const where = {
       shopId,
       ...(query.location ? { locationId: query.location } : {}),
-      ...(query.search ? { product: { name: { contains: query.search, mode: "insensitive" as const } } } : {}),
+      ...(query.search ? { OR: [
+        { product: { name: { contains: query.search, mode: "insensitive" as const } } },
+        { product: { sku: { contains: query.search, mode: "insensitive" as const } } },
+        { product: { barcodes: { some: { status: "ACTIVE", OR: [
+          { value: { contains: query.search, mode: "insensitive" as const } },
+          { normalizedValue: { contains: query.search, mode: "insensitive" as const } },
+        ] } } } },
+      ] } : {}),
     };
     const [balances, totalCount] = await prisma.$transaction([
       prisma.inventoryBalance.findMany({
@@ -124,12 +131,17 @@ capabilityInventoryRouter.get("/:shopId/inventory-movements", async (request, re
       shopId, ...(query.status ? { type: query.status } : {}), ...(query.location ? { locationId: query.location } : {}),
       ...(query.search ? { OR: [
         { product: { name: { contains: query.search, mode: "insensitive" as const } } },
+        { product: { sku: { contains: query.search, mode: "insensitive" as const } } },
+        { product: { barcodes: { some: { status: "ACTIVE", OR: [
+          { value: { contains: query.search, mode: "insensitive" as const } },
+          { normalizedValue: { contains: query.search, mode: "insensitive" as const } },
+        ] } } } },
         { sourceId: { contains: query.search, mode: "insensitive" as const } },
       ] } : {}),
     };
     const [movements, totalCount] = await prisma.$transaction([
       prisma.inventoryMovement.findMany({
-        where, include: { product: true, variant: true, location: true, unit: true },
+        where, include: { product: { include: { barcodes: { where: { status: "ACTIVE" } } } }, variant: true, location: true, unit: true },
         orderBy: { occurredAt: query.direction }, skip: (query.page - 1) * query.pageSize, take: query.pageSize,
       }),
       prisma.inventoryMovement.count({ where }),

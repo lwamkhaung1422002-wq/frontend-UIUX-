@@ -1,6 +1,27 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { AppBar, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Fab, IconButton, InputAdornment, MenuItem, Paper, Stack, TextField, Toolbar, Typography, useMediaQuery } from "@mui/material";
+import {
+  Alert,
+  AppBar,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Fab,
+  IconButton,
+  InputAdornment,
+  MenuItem,
+  Paper,
+  Snackbar,
+  Stack,
+  TextField,
+  Toolbar,
+  Typography,
+  useMediaQuery,
+} from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import AddPhotoAlternateRoundedIcon from "@mui/icons-material/AddPhotoAlternateRounded";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
@@ -19,89 +40,814 @@ import SellRoundedIcon from "@mui/icons-material/SellRounded";
 import ShoppingBagRoundedIcon from "@mui/icons-material/ShoppingBagRounded";
 import StraightenRoundedIcon from "@mui/icons-material/StraightenRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
+import BarcodeManagerDialog from "../../components/Barcode/BarcodeManagerDialog";
+import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
+import { usePosApi } from "../../hooks/useApiResource";
+import { normalizeBarcode } from "../../lib/barcodeScanner";
+
+const emptyForm = {
+  name: "",
+  description: "",
+  sku: "",
+  barcode: "",
+  shortCode: "",
+  categoryId: "",
+  cost: "0",
+  price: "0",
+  stock: "0",
+  unitId: "",
+  minimum: "10",
+};
+const internalCode = /^[A-Z]{2}[0-9]{4}$/;
+function inferSymbology(value) {
+  if (/^\d{13}$/.test(value)) return "EAN13";
+  if (/^\d{12}$/.test(value)) return "UPCA";
+  if (/^\d{8}$/.test(value)) return "EAN8";
+  return "CODE128";
+}
 
 export default function AddProductPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
   const [searchParams] = useSearchParams();
-  const isEditMode = Boolean(searchParams.get("edit"));
-  const [form, setForm] = useState({ name: "", description: "", sku: "", barcode: "", category: "", cost: "0.00", price: "0.00", stock: "0", unit: "pcs", minimum: "10" });
+  const productId = searchParams.get("edit");
+  const isEditMode = Boolean(productId);
+  const [form, setForm] = useState(emptyForm);
+  const [categories, setCategories] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [inventoryBatches, setInventoryBatches] = useState([]);
+  const [initialStock, setInitialStock] = useState(0);
+  const [hasSaleHistory, setHasSaleHistory] = useState(false);
+  const [activeBarcode, setActiveBarcode] = useState(null);
+  const [activeShortCode, setActiveShortCode] = useState(null);
+  const [barcodeDraft, setBarcodeDraft] = useState("");
+  const [barcodeReservationId, setBarcodeReservationId] = useState("");
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
-  const update = (name) => (event) => setForm((current) => ({ ...current, [name]: event.target.value }));
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [barcodeManagerOpen, setBarcodeManagerOpen] = useState(false);
+  const [shortCodeManagerOpen, setShortCodeManagerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(isEditMode);
+  const [message, setMessage] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      api.categories.list(),
+      api.units.list(),
+      api.inventory.list(),
+      productId ? api.products.get(productId) : Promise.resolve(null),
+    ])
+      .then(([categoryResult, unitResult, inventoryResult, productResult]) => {
+        if (!alive) return;
+        const nextUnits = unitResult.units || [];
+        setCategories(categoryResult.categories || []);
+        setUnits(nextUnits);
+        if (productResult?.product) {
+          const product = productResult.product;
+          const baseUnit =
+            product.units?.find((unit) => unit.isBase) || product.units?.[0];
+          const shortCodeRecord = product.barcodes?.find(
+            (item) =>
+              item.status === "ACTIVE" &&
+              !item.isPrimary &&
+              /^[A-Z]{2}[0-9]{4}$/.test(item.value),
+          );
+          const shortCode = shortCodeRecord?.value || "";
+          const batches = (inventoryResult.inventory || []).filter(
+            (batch) => batch.productId === product.id,
+          );
+          const stock = batches.reduce(
+            (total, batch) => total + Number(batch.quantity || 0),
+            0,
+          );
+          setInventoryBatches(batches);
+          setInitialStock(stock);
+          setHasSaleHistory(Boolean(productResult.hasSaleHistory));
+          setForm({
+            name: product.name || "",
+            description: product.description || "",
+            sku: product.sku || "",
+            barcode: productResult.activeBarcode?.value || "",
+            shortCode,
+            categoryId: product.categoryId || "",
+            cost: String(product.cost ?? 0),
+            price: String(product.price ?? 0),
+            stock: String(stock),
+            unitId: baseUnit?.unitId || nextUnits[0]?.id || "",
+            minimum: "10",
+          });
+          setActiveBarcode(productResult.activeBarcode || null);
+          setActiveShortCode(shortCodeRecord || null);
+        } else
+          setForm((current) =>
+            current.unitId
+              ? current
+              : { ...current, unitId: nextUnits[0]?.id || "" },
+          );
+      })
+      .catch(
+        (error) =>
+          alive &&
+          setMessage({
+            severity: "error",
+            text: error.message || "Unable to load product options.",
+          }),
+      )
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [api, productId]);
+
+  const update = (name) => (event) => {
+    const value = event.target.value;
+    setForm((current) => ({ ...current, [name]: value }));
+    if (name === "barcode") {
+      setBarcodeDraft("");
+      setBarcodeReservationId("");
+    }
+  };
+  const selectedCategory = categories.find(
+    (item) => item.id === form.categoryId,
+  );
   const selectCategory = (category) => {
-    setForm((current) => ({ ...current, category }));
+    setForm((current) => ({ ...current, categoryId: category.id }));
     setCategoryDialogOpen(false);
   };
-  const scanBarcode = () => setForm((current) => ({ ...current, barcode: "8886474921025" }));
-  if (!isMobile) return <DesktopAddProduct form={form} update={update} categoryDialogOpen={categoryDialogOpen} setCategoryDialogOpen={setCategoryDialogOpen} selectCategory={selectCategory} navigate={navigate} isEditMode={isEditMode} />;
-  return <Box sx={{ minHeight: "100vh", bgcolor: "#fafafa", pb: "96px" }}>
-    <AppBar position="sticky" elevation={0} sx={{ bgcolor: "#1976d2" }}><Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}><IconButton onClick={() => navigate("/stock")} sx={{ color: "#fff", justifySelf: "start" }}><ArrowBackRoundedIcon /></IconButton><Typography variant="h6" fontWeight={700}>Add Product</Typography><Box /></Toolbar></AppBar>
-    <Box sx={{ px: 3, py: 2.25 }}>
-      <Stack spacing={1.25} sx={{ width: "100%", mb: 3, alignItems: "center" }}><Box sx={{ display: "grid", placeItems: "center", width: 176, height: 176, border: "2px solid #bdbdbd", borderRadius: 2.5, color: "#757575", bgcolor: "#f4f4f4" }}><AddPhotoAlternateRoundedIcon sx={{ fontSize: 48 }} /></Box><Button startIcon={<PhotoCameraRoundedIcon />} sx={{ color: "primary.main", textTransform: "none", fontSize: 16, fontWeight: 600 }}>Add Product Image</Button></Stack>
-      <Field label="Product Name" placeholder="Enter product name" value={form.name} onChange={update("name")} icon={<ShoppingBagRoundedIcon />} />
-      <Field label="Description (Optional)" placeholder="Enter product description" value={form.description} onChange={update("description")} icon={<DocumentScannerRoundedIcon />} multiline minRows={3} />
-      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}><Field label="SKU (Optional)" placeholder="Enter..." value={form.sku} onChange={update("sku")} icon={<NumbersRoundedIcon />} endIcon={<AutoAwesomeRoundedIcon />} /><Field label="Barcode (Optional)" placeholder="Scan ..." value={form.barcode} onChange={update("barcode")} icon={<QrCode2RoundedIcon />} endIcon={<IconButton size="small" aria-label="Scan barcode" onClick={scanBarcode}><QrCodeScannerRoundedIcon /></IconButton>} /></Box>
-      <CategorySelector value={form.category} onClick={() => setCategoryDialogOpen(true)} />
-      {!isEditMode && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}><Field label="Cost Price" value={form.cost} onChange={update("cost")} icon={<CurrencyExchangeRoundedIcon />} /><Field label="Selling Price" value={form.price} onChange={update("price")} icon={<SellRoundedIcon />} /></Box>}
-      <Box sx={{ display: "grid", gridTemplateColumns: isEditMode ? "1fr" : "1fr 1fr", gap: 1.5 }}>{!isEditMode && <Field label="Stock Quantity" value={form.stock} onChange={update("stock")} icon={<Inventory2RoundedIcon />} />}<Field label="Unit" select value={form.unit} onChange={update("unit")} icon={<StraightenRoundedIcon />}><MenuItem value="pcs">pcs</MenuItem><MenuItem value="box">box</MenuItem></Field></Box>
-      <Field label="Minimum Stock Alert Level (Optional)" value={form.minimum} onChange={update("minimum")} icon={<WarningAmberRoundedIcon />} />
+  const handleDetected = useCallback(
+    async (value) => {
+      setScannerOpen(false);
+      const normalized = normalizeBarcode(value);
+      try {
+        const result = await api.pricing.barcodeLookup(normalized);
+        if (result.known) {
+          setMessage({
+            severity: "warning",
+            text: `This barcode is already assigned to ${result.product?.name || "another product"}.`,
+          });
+          return;
+        }
+        setForm((current) => ({ ...current, barcode: normalized }));
+        setBarcodeDraft("");
+      } catch (error) {
+        setForm((current) => ({ ...current, barcode: normalized }));
+        setBarcodeDraft("");
+        setMessage({
+          severity: "warning",
+          text: `Barcode could not be verified: ${error.message}`,
+        });
+      }
+    },
+    [api],
+  );
+  const useDraft = (draft) => {
+    if (draft.type === "shortCode") {
+      setBarcodeReservationId("");
+      setBarcodeDraft("");
+      setForm((current) => ({
+        ...current,
+        barcode: "",
+        shortCode: draft.value,
+      }));
+      return;
+    }
+    setBarcodeReservationId(draft.id);
+    setBarcodeDraft("");
+    setForm((current) => ({ ...current, barcode: draft.value, shortCode: "" }));
+  };
+  const handleBarcodeChanged = (barcode) => {
+    setActiveBarcode(barcode);
+    setBarcodeDraft("");
+    setForm((current) => ({ ...current, barcode: barcode?.value || "" }));
+  };
+  const handleShortCodeChanged = (barcode) => {
+    setActiveShortCode(barcode);
+    setForm((current) => ({ ...current, shortCode: barcode?.value || "" }));
+  };
+
+  const save = async () => {
+    if (!form.name.trim())
+      return setMessage({
+        severity: "error",
+        text: "Product name is required.",
+      });
+    if (!form.unitId)
+      return setMessage({
+        severity: "error",
+        text: "Select a base unit before saving.",
+      });
+    if (
+      ![form.cost, form.price, ...(isEditMode ? [] : [form.stock])].every(
+        (value) => Number.isInteger(Number(value)) && Number(value) >= 0,
+      )
+    )
+      return setMessage({
+        severity: "error",
+        text: "Prices and stock must be whole, non-negative values.",
+      });
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        description: form.description.trim() || undefined,
+        sku: form.sku.trim() || undefined,
+        price: Number(form.price),
+        cost: Number(form.cost),
+        categoryId: form.categoryId || undefined,
+        ...(isEditMode ? { stockQuantity: Number(form.stock) } : {}),
+      };
+      if (isEditMode) {
+        const delta = Number(form.stock) - initialStock;
+        if (delta !== 0 && hasSaleHistory) {
+          throw new Error("Stock quantity cannot be edited after this product has sale history.");
+        }
+        await api.products.update(productId, payload);
+        if (delta !== 0) {
+          const batch = inventoryBatches[0];
+          if (delta > 0 && batch)
+            await api.inventory.adjust(batch.id, {
+              action: "ADD",
+              quantity: delta,
+              reason: "Product edit stock quantity.",
+            });
+          else if (delta > 0)
+            await api.inventory.create({
+              productId,
+              quantity: delta,
+              unitCost: Number(form.cost),
+              note: "Stock quantity set during product edit.",
+            });
+          else {
+            let remaining = Math.abs(delta);
+            for (const currentBatch of inventoryBatches) {
+              if (remaining <= 0) break;
+              const quantity = Math.min(remaining, Number(currentBatch.quantity || 0));
+              if (quantity > 0) await api.inventory.adjust(currentBatch.id, { action: "SUB", quantity, reason: "Product edit stock quantity." });
+              remaining -= quantity;
+            }
+            if (remaining > 0) throw new Error("Stock quantity cannot be negative.");
+          }
+        }
+        setMessage({
+          severity: "success",
+          text: "Product updated successfully.",
+        });
+        window.setTimeout(() => navigate(`/stock/${productId}`), 800);
+        return;
+      }
+      const barcodeValue = barcodeDraft || form.barcode.trim();
+      const barcode =
+        !barcodeReservationId && barcodeValue
+          ? {
+              value: barcodeValue,
+              kind: internalCode.test(barcodeValue)
+                ? "INTERNAL"
+                : "MANUFACTURER",
+              symbology: internalCode.test(barcodeValue)
+                ? "CODE128"
+                : inferSymbology(barcodeValue),
+            }
+          : undefined;
+      const result = await api.products.create({
+        ...payload,
+        units: [
+          {
+            unitId: form.unitId,
+            conversionFactor: 1,
+            isBase: true,
+            canSell: true,
+            canPurchase: true,
+          },
+        ],
+        ...(barcode ? { barcode } : {}),
+        ...(barcodeReservationId ? { barcodeReservationId } : {}),
+        ...(form.shortCode.trim()
+          ? { shortCode: form.shortCode.trim().toUpperCase() }
+          : {}),
+      });
+      if (Number(form.stock) > 0)
+        await api.inventory.create({
+          productId: result.product.id,
+          quantity: Number(form.stock),
+          unitCost: Number(form.cost),
+          note: "Initial stock created with product.",
+        });
+      setMessage({
+        severity: "success",
+        text: barcode
+          ? "Product and barcode saved successfully."
+          : "Product saved successfully.",
+      });
+      window.setTimeout(() => navigate(`/stock/${result.product.id}`), 900);
+    } catch (error) {
+      setMessage({
+        severity: "error",
+        text: error.message || "Unable to save product.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const props = {
+    form,
+    update,
+    categories,
+    units,
+    selectedCategory,
+    categoryDialogOpen,
+    setCategoryDialogOpen,
+    selectCategory,
+    navigate,
+    isEditMode,
+    scannerOpen,
+    setScannerOpen,
+    handleDetected,
+    barcodeManagerOpen,
+    setBarcodeManagerOpen,
+    shortCodeManagerOpen,
+    setShortCodeManagerOpen,
+    activeBarcode,
+    activeShortCode,
+    useDraft,
+    handleBarcodeChanged,
+    handleShortCodeChanged,
+    api,
+    setMessage,
+    save,
+    saving,
+    loading,
+    hasSaleHistory,
+  };
+  if (!isMobile)
+    return (
+      <>
+        <DesktopAddProduct {...props} />
+        <Notice message={message} onClose={() => setMessage(null)} />
+      </>
+    );
+  return (
+    <Box sx={{ minHeight: "100vh", bgcolor: "#fafafa", pb: "96px" }}>
+      <AppBar position="sticky" elevation={0} sx={{ bgcolor: "#1976d2" }}>
+        <Toolbar
+          sx={{
+            minHeight: 64,
+            display: "grid",
+            gridTemplateColumns: "1fr auto 1fr",
+          }}
+        >
+          <IconButton
+            onClick={() => navigate("/stock")}
+            sx={{ color: "#fff", justifySelf: "start" }}
+          >
+            <ArrowBackRoundedIcon />
+          </IconButton>
+          <Typography variant="h6" fontWeight={700}>
+            {isEditMode ? "Edit Product" : "Add Product"}
+          </Typography>
+          <Box />
+        </Toolbar>
+      </AppBar>
+      <Box sx={{ px: 3, py: 2.25 }}>
+        <Stack
+          spacing={1.25}
+          sx={{ width: "100%", mb: 3, alignItems: "center" }}
+        >
+          <Box
+            sx={{
+              display: "grid",
+              placeItems: "center",
+              width: 176,
+              height: 176,
+              border: "2px solid #bdbdbd",
+              borderRadius: 2.5,
+              color: "#757575",
+              bgcolor: "#f4f4f4",
+            }}
+          >
+            <AddPhotoAlternateRoundedIcon sx={{ fontSize: 48 }} />
+          </Box>
+          <Button
+            startIcon={<PhotoCameraRoundedIcon />}
+            sx={{ color: "primary.main", textTransform: "none", fontSize: 16, fontWeight: 600 }}
+          >
+            Add Product Image
+          </Button>
+        </Stack>
+        <ProductFields {...props} />
+        <CategorySelector
+          value={selectedCategory?.name}
+          onClick={() => setCategoryDialogOpen(true)}
+        />
+        <PricingFields form={form} update={update} />
+        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+          <Field
+            label="Stock Quantity"
+            value={form.stock}
+            onChange={update("stock")}
+            icon={<Inventory2RoundedIcon />}
+            disabled={isEditMode && hasSaleHistory}
+            helperText={isEditMode && hasSaleHistory ? "Stock quantity is locked because this product has sale history." : undefined}
+          />
+          <UnitField {...props} />
+        </Box>
+        <Field
+          label="Minimum Stock Alert Level (Optional)"
+          value={form.minimum}
+          onChange={update("minimum")}
+          icon={<WarningAmberRoundedIcon />}
+        />
+      </Box>
+      <SharedDialogs {...props} />
+      <Fab
+        aria-label="Scan barcode"
+        onClick={() => setScannerOpen(true)}
+        sx={{
+          position: "fixed",
+          right: 24,
+          bottom: 88,
+          width: 58,
+          height: 58,
+          bgcolor: "primary.main",
+          color: "common.white",
+        }}
+      >
+        <QrCodeScannerRoundedIcon />
+      </Fab>
+      <Paper
+        elevation={6}
+        sx={{ position: "fixed", left: 0, right: 0, bottom: 0, px: 3, py: 2 }}
+      >
+        <Button
+          fullWidth
+          variant="contained"
+          startIcon={<CheckRoundedIcon />}
+          onClick={save}
+          disabled={saving || loading}
+          sx={{ minHeight: 56, textTransform: "none" }}
+        >
+          {saving ? "Saving…" : isEditMode ? "Save Changes" : "Save"}
+        </Button>
+      </Paper>
+      <Notice message={message} onClose={() => setMessage(null)} />
     </Box>
-    <CategoryDialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} onSelect={selectCategory} />
-    <Fab aria-label="Scan barcode" onClick={scanBarcode} sx={{ position: "fixed", right: 24, bottom: 88, width: 58, height: 58, bgcolor: "primary.main", color: "common.white", boxShadow: "0 5px 14px rgba(25,118,210,0.32)", "&:hover": { bgcolor: "primary.dark" } }}><QrCodeScannerRoundedIcon /></Fab>
-    <Paper elevation={6} sx={{ position: "fixed", left: 0, right: 0, bottom: 0, px: 3, py: 2, borderTop: "1px solid #e5e7eb", bgcolor: "background.paper" }}><Button fullWidth variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => navigate("/stock")} sx={{ minHeight: 56, bgcolor: "primary.main", borderRadius: 2, fontSize: 17, textTransform: "none" }}>Save</Button></Paper>
-  </Box>;
+  );
 }
 
-function DesktopAddProduct({ form, update, categoryDialogOpen, setCategoryDialogOpen, selectCategory, navigate, isEditMode }) {
-  return <><Dialog open fullWidth maxWidth="md" onClose={() => navigate("/stock")} slotProps={{ paper: { sx: { maxWidth: 980, borderRadius: 3, maxHeight: "88vh" } } }}><DialogTitle sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider" }}><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>{isEditMode ? "Edit Product" : "Create Product"}</Typography><Typography color="text.secondary" sx={{ mt: .2, fontSize: 13 }}>Product details, pricing, and stock information.</Typography></Box></DialogTitle><DialogContent dividers sx={{ p: 2.5 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.25fr) minmax(240px, .75fr)", gap: 2 }}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25 }}><Box sx={{ gridColumn: "1 / -1" }}><Field label="Product Name" placeholder="Enter product name" value={form.name} onChange={update("name")} icon={<ShoppingBagRoundedIcon />} /></Box><Box sx={{ gridColumn: "1 / -1" }}><Field label="Description (Optional)" placeholder="Enter product description" value={form.description} onChange={update("description")} icon={<DocumentScannerRoundedIcon />} multiline minRows={3} /></Box><Field label="SKU (Optional)" placeholder="Enter SKU" value={form.sku} onChange={update("sku")} icon={<NumbersRoundedIcon />} endIcon={<AutoAwesomeRoundedIcon />} /><Field label="Barcode (Optional)" placeholder="Scan barcode" value={form.barcode} onChange={update("barcode")} icon={<QrCode2RoundedIcon />} endIcon={<IconButton size="small" aria-label="Scan barcode"><QrCodeScannerRoundedIcon /></IconButton>} /><Box sx={{ gridColumn: "1 / -1" }}><CategorySelector value={form.category} onClick={() => setCategoryDialogOpen(true)} /></Box>{!isEditMode && <><Field label="Cost Price" value={form.cost} onChange={update("cost")} icon={<CurrencyExchangeRoundedIcon />} /><Field label="Selling Price" value={form.price} onChange={update("price")} icon={<SellRoundedIcon />} /><Field label="Stock Quantity" value={form.stock} onChange={update("stock")} icon={<Inventory2RoundedIcon />} /></>}<Field label="Unit" select value={form.unit} onChange={update("unit")} icon={<StraightenRoundedIcon />}><MenuItem value="pcs">pcs</MenuItem><MenuItem value="box">box</MenuItem></Field><Box sx={{ gridColumn: "1 / -1" }}><Field label="Minimum Stock Alert Level (Optional)" value={form.minimum} onChange={update("minimum")} icon={<WarningAmberRoundedIcon />} /></Box></Box><Box><Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1 }}>Product image</Typography><Box sx={{ height: 170, display: "grid", placeItems: "center", border: "1px dashed", borderColor: "divider", borderRadius: 2, bgcolor: "#f8fafc", color: "text.secondary" }}><Stack sx={{ alignItems: "center", gap: .5 }}><AddPhotoAlternateRoundedIcon sx={{ fontSize: 42 }} /><Button startIcon={<PhotoCameraRoundedIcon />} sx={{ textTransform: "none" }}>Upload image</Button></Stack></Box></Box></Box></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}><Button onClick={() => navigate("/stock")} sx={{ textTransform: "none" }}>Cancel</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => navigate("/stock")} sx={{ minHeight: 40, textTransform: "none", fontWeight: 700 }}>Save Product</Button></DialogActions></Dialog><CategoryDialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} onSelect={selectCategory} /></>;
+function ProductFields({
+  form,
+  update,
+  setScannerOpen,
+  setBarcodeManagerOpen,
+  setShortCodeManagerOpen,
+  isEditMode,
+  activeBarcode,
+  activeShortCode,
+}) {
+  return (
+    <>
+      <Field
+        label="Product Name"
+        placeholder="Enter product name"
+        value={form.name}
+        onChange={update("name")}
+        icon={<ShoppingBagRoundedIcon />}
+      />
+      <Field
+        label="Description (Optional)"
+        placeholder="Enter product description"
+        value={form.description}
+        onChange={update("description")}
+        icon={<DocumentScannerRoundedIcon />}
+        multiline
+        minRows={3}
+      />
+      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+        <Field
+          label="SKU (Optional)"
+        placeholder="Enter..."
+        value={form.sku}
+        onChange={update("sku")}
+        icon={<NumbersRoundedIcon />}
+        endIcon={<AutoAwesomeRoundedIcon />}
+        />
+        <Field
+          label="Barcode (Optional)"
+          labelAction={
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setBarcodeManagerOpen(true)}
+              sx={{
+                minHeight: 32,
+                ml: 1.25,
+                px: 1.35,
+                borderRadius: 1.25,
+                borderColor: "primary.main",
+                color: "primary.main",
+                fontSize: 12,
+                fontWeight: 700,
+                lineHeight: 1,
+                textTransform: "none",
+                "&:hover": { borderColor: "primary.dark", bgcolor: "#f4f8ff" },
+              }}
+            >
+              {isEditMode && activeBarcode ? "Manage" : "Create"}
+            </Button>
+          }
+          placeholder="Scan or enter barcode"
+          value={form.barcode}
+          onChange={update("barcode")}
+          icon={<QrCode2RoundedIcon />}
+          endIcon={
+            <IconButton
+              size="small"
+              aria-label="Scan barcode"
+              onClick={() => setScannerOpen(true)}
+            >
+              <QrCodeScannerRoundedIcon />
+            </IconButton>
+          }
+        />
+      </Box>
+      {form.shortCode && (
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="center"
+          sx={{ mt: -1.1, mb: 1.5 }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            Item code: <strong>{form.shortCode}</strong>
+          </Typography>
+          {isEditMode && activeShortCode && (
+            <Button
+              size="small"
+              onClick={() => setShortCodeManagerOpen(true)}
+              sx={{ textTransform: "none" }}
+            >
+              Manage
+            </Button>
+          )}
+        </Stack>
+      )}
+    </>
+  );
 }
-
+function PricingFields({ form, update }) {
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+      <Field
+        label="Cost Price"
+        value={form.cost}
+        onChange={update("cost")}
+        icon={<CurrencyExchangeRoundedIcon />}
+      />
+      <Field
+        label="Selling Price"
+        value={form.price}
+        onChange={update("price")}
+        icon={<SellRoundedIcon />}
+      />
+    </Box>
+  );
+}
+function UnitField({ form, update, units }) {
+  return (
+    <Field
+      label="Unit"
+      select
+      value={form.unitId}
+      onChange={update("unitId")}
+      icon={<StraightenRoundedIcon />}
+    >
+      {units
+        .filter((unit) => unit.isActive !== false)
+        .map((unit) => (
+          <MenuItem key={unit.id} value={unit.id}>
+            {unit.name}
+          </MenuItem>
+        ))}
+    </Field>
+  );
+}
+function DesktopAddProduct(props) {
+  const {
+    form,
+    update,
+    selectedCategory,
+    setCategoryDialogOpen,
+    navigate,
+    save,
+    saving,
+    loading,
+    isEditMode,
+    units,
+    hasSaleHistory,
+  } = props;
+  return (
+    <Dialog open fullWidth maxWidth="md" onClose={() => navigate("/stock")} slotProps={{ paper: { sx: { maxWidth: 980, borderRadius: 3, maxHeight: "88vh" } } }}>
+      <DialogTitle sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Typography sx={{ fontSize: 21, fontWeight: 800 }}>
+          {isEditMode ? "Edit Product" : "Create Product"}
+        </Typography>
+        <Typography color="text.secondary" sx={{ mt: 0.2, fontSize: 13 }}>
+          Product details, pricing, and stock information.
+        </Typography>
+      </DialogTitle>
+      <DialogContent dividers sx={{ p: 2.5 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1.25fr) minmax(220px, .75fr)",
+            gap: 2,
+          }}
+        >
+          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, alignContent: "start" }}>
+            <ProductFields {...props} />
+            <CategorySelector
+              value={selectedCategory?.name}
+              onClick={() => setCategoryDialogOpen(true)}
+            />
+            <Box sx={{ gridColumn: "1 / -1" }}><PricingFields form={form} update={update} /></Box>
+            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, gridColumn: "1 / -1" }}><Field label="Stock Quantity" value={form.stock} onChange={update("stock")} icon={<Inventory2RoundedIcon />} disabled={isEditMode && hasSaleHistory} helperText={isEditMode && hasSaleHistory ? "Locked after sale history." : undefined} /><UnitField form={form} update={update} units={units} /></Box>
+            <Box sx={{ gridColumn: "1 / -1" }}><Field
+              label="Minimum Stock Alert Level (Optional)"
+              value={form.minimum}
+              onChange={update("minimum")}
+              icon={<WarningAmberRoundedIcon />}
+            /></Box>
+          </Box>
+          <Box><Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1 }}>Product image</Typography><Box sx={{ height: 170, display: "grid", placeItems: "center", border: "1px dashed", borderColor: "divider", borderRadius: 2, bgcolor: "#f8fafc", color: "text.secondary" }}>
+            <Stack sx={{ alignItems: "center", gap: 0.5 }}>
+              <AddPhotoAlternateRoundedIcon sx={{ fontSize: 42 }} />
+              <Button
+                startIcon={<PhotoCameraRoundedIcon />}
+                sx={{ textTransform: "none" }}
+              >
+                Upload image
+              </Button>
+            </Stack>
+          </Box></Box>
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 2.5, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
+        <Button onClick={() => navigate("/stock")} sx={{ textTransform: "none" }}>Cancel</Button>
+        <Button
+          variant="contained"
+          startIcon={<CheckRoundedIcon />}
+          onClick={save}
+          disabled={saving || loading}
+          sx={{ minHeight: 40, textTransform: "none", fontWeight: 700 }}
+        >
+          {saving ? "Saving…" : isEditMode ? "Save Changes" : "Save Product"}
+        </Button>
+      </DialogActions>
+      <SharedDialogs {...props} />
+    </Dialog>
+  );
+}
+function SharedDialogs({
+  categoryDialogOpen,
+  setCategoryDialogOpen,
+  categories,
+  selectCategory,
+  scannerOpen,
+  setScannerOpen,
+  handleDetected,
+  barcodeManagerOpen,
+  setBarcodeManagerOpen,
+  shortCodeManagerOpen,
+  setShortCodeManagerOpen,
+  api,
+  form,
+  activeBarcode,
+  activeShortCode,
+  useDraft,
+  handleBarcodeChanged,
+  handleShortCodeChanged,
+  setMessage,
+}) {
+  return (
+    <>
+      <CategoryDialog
+        open={categoryDialogOpen}
+        onClose={() => setCategoryDialogOpen(false)}
+        categories={categories}
+        onSelect={selectCategory}
+      />
+      <BarcodeScannerDialog
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleDetected}
+      />
+      <BarcodeManagerDialog
+        open={barcodeManagerOpen}
+        onClose={() => setBarcodeManagerOpen(false)}
+        api={api}
+        productName={form.name}
+        barcode={activeBarcode}
+        onDraft={useDraft}
+        onChanged={handleBarcodeChanged}
+        onNotice={setMessage}
+      />
+      <BarcodeManagerDialog
+        open={shortCodeManagerOpen}
+        onClose={() => setShortCodeManagerOpen(false)}
+        api={api}
+        productName={form.name}
+        barcode={activeShortCode}
+        onChanged={handleShortCodeChanged}
+        onNotice={setMessage}
+      />
+    </>
+  );
+}
 function CategorySelector({ value, onClick }) {
   return (
     <Box sx={{ mb: { xs: 2, md: 1.25 } }}>
-      <Typography color="text.primary" fontSize={16} fontWeight={700} sx={{ mb: 0.75 }}>Category (Optional)</Typography>
+      <Typography fontSize={16} fontWeight={700} sx={{ mb: 0.75 }}>
+        Category (Optional)
+      </Typography>
       <Button
         fullWidth
         variant="outlined"
         onClick={onClick}
         startIcon={<CategoryRoundedIcon />}
         endIcon={<KeyboardArrowDownRoundedIcon />}
-        sx={{ minHeight: 64, justifyContent: "flex-start", borderRadius: 1.5, borderColor: "#b8b8b8", color: value ? "text.primary" : "text.secondary", fontSize: 16, fontWeight: 400, textTransform: "none", px: 1.75, "& .MuiButton-startIcon": { mr: 1, color: "text.primary" }, "& .MuiButton-endIcon": { ml: "auto", color: "text.secondary" } }}
+        sx={{
+          minHeight: 64,
+          justifyContent: "flex-start",
+          borderRadius: 1.5,
+          borderColor: "#b8b8b8",
+          color: value ? "text.primary" : "text.secondary",
+          fontSize: 16,
+          fontWeight: 400,
+          px: 1.75,
+          textTransform: "none",
+          "& .MuiButton-startIcon": { mr: 1, color: "text.primary" },
+          "& .MuiButton-endIcon": { ml: "auto", color: "text.secondary" },
+        }}
       >
         {value || "Select Category"}
       </Button>
     </Box>
   );
 }
-
-function CategoryDialog({ open, onClose, onSelect }) {
-  const categories = ["Drinking", "Food", "Groceries", "Medicine"];
+function CategoryDialog({ open, onClose, categories, onSelect }) {
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      aria-labelledby="select-category-title"
-      slotProps={{
-        paper: { sx: { width: "calc(100% - 64px)", maxWidth: 448, minHeight: "78vh", m: 0, borderRadius: 4, boxShadow: "0 18px 48px rgba(0,0,0,0.3)", alignSelf: "center" } },
-        backdrop: { sx: { bgcolor: "rgba(0, 0, 0, 0.55)" } },
-      }}
-    >
+    <Dialog open={open} onClose={onClose} aria-labelledby="select-category-title" slotProps={{ paper: { sx: { width: "calc(100% - 64px)", maxWidth: 448, minHeight: "78vh", m: 0, borderRadius: 4, boxShadow: "0 18px 48px rgba(0,0,0,0.3)", alignSelf: "center" } }, backdrop: { sx: { bgcolor: "rgba(0, 0, 0, 0.55)" } } }}>
       <DialogContent sx={{ p: 5, "&:first-of-type": { pt: 5 } }}>
         <Typography id="select-category-title" sx={{ fontSize: 34, fontWeight: 400, lineHeight: 1.15, mb: 4.25 }}>Select Category</Typography>
-        <Button startIcon={<AddRoundedIcon />} onClick={() => {}} sx={{ minHeight: 52, px: 2.5, color: "text.primary", fontSize: 22, fontWeight: 400, textTransform: "none", "& .MuiButton-startIcon": { mr: 2 } }}>Add New Category</Button>
+        <Button startIcon={<AddRoundedIcon />} sx={{ minHeight: 52, px: 2.5, color: "text.primary", fontSize: 22, fontWeight: 400, textTransform: "none", "& .MuiButton-startIcon": { mr: 2 } }}>Add New Category</Button>
         <Divider sx={{ borderColor: "text.primary", my: 1.5 }} />
         <Stack spacing={0.5} sx={{ pt: 1.5 }}>
-          {categories.map((category) => <Button key={category} onClick={() => onSelect(category)} sx={{ justifyContent: "flex-start", minHeight: 72, px: 2.5, color: "text.primary", fontSize: 23, fontWeight: 400, textTransform: "none" }}>{category}</Button>)}
+          {categories.map((category) => (
+            <Button
+              key={category.id}
+              onClick={() => onSelect(category)}
+              sx={{
+                justifyContent: "flex-start",
+                minHeight: 72,
+                px: 2.5,
+                fontSize: 23,
+                fontWeight: 400,
+                textTransform: "none",
+                color: "text.primary",
+              }}
+            >
+              {category.name}
+            </Button>
+          ))}
         </Stack>
       </DialogContent>
     </Dialog>
   );
 }
-
-function Field({ label, icon, endIcon, multiline, minRows, selectPlaceholder, children, ...props }) {
+function Field({
+  label,
+  labelAction,
+  icon,
+  endIcon,
+  multiline,
+  minRows,
+  children,
+  ...props
+}) {
   return (
     <Box sx={{ mb: { xs: 2, md: 1.25 } }}>
-      <Typography color="text.primary" fontSize={16} fontWeight={700} sx={{ mb: 0.75 }}>{label}</Typography>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        sx={{ mb: 0.75 }}
+      >
+        <Typography fontSize={16} fontWeight={700}>
+          {label}
+        </Typography>
+        {labelAction}
+      </Stack>
       <TextField
         fullWidth
         multiline={multiline}
@@ -109,13 +855,20 @@ function Field({ label, icon, endIcon, multiline, minRows, selectPlaceholder, ch
         {...props}
         slotProps={{
           input: {
-            startAdornment: icon ? <InputAdornment position="start" sx={{ color: "text.primary", mr: 1 }}>{icon}</InputAdornment> : undefined,
-            endAdornment: endIcon ? <InputAdornment position="end" sx={{ ml: 0.5 }}>{endIcon}</InputAdornment> : undefined,
+            startAdornment: icon ? (
+              <InputAdornment
+                position="start"
+                sx={
+                  multiline ? { alignSelf: "flex-start", mt: 1.25, color: "text.primary", mr: 1 } : { color: "text.primary", mr: 1 }
+                }
+              >
+                {icon}
+              </InputAdornment>
+            ) : undefined,
+            endAdornment: endIcon ? (
+              <InputAdornment position="end" sx={{ ml: 0.5 }}>{endIcon}</InputAdornment>
+            ) : undefined,
           },
-          select: selectPlaceholder ? {
-            displayEmpty: true,
-            renderValue: (selected) => selected || selectPlaceholder,
-          } : undefined,
         }}
         sx={{
           "& .MuiOutlinedInput-root": {
@@ -131,5 +884,21 @@ function Field({ label, icon, endIcon, multiline, minRows, selectPlaceholder, ch
         {children}
       </TextField>
     </Box>
+  );
+}
+function Notice({ message, onClose }) {
+  return (
+    <Snackbar
+      open={Boolean(message)}
+      autoHideDuration={4000}
+      onClose={onClose}
+      anchorOrigin={{ vertical: "top", horizontal: "center" }}
+    >
+      {message ? (
+        <Alert severity={message.severity} onClose={onClose}>
+          {message.text}
+        </Alert>
+      ) : undefined}
+    </Snackbar>
   );
 }

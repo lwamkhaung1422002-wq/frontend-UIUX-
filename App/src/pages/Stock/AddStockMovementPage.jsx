@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   AppBar,
@@ -28,13 +28,9 @@ import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import RemoveCircleOutlineRoundedIcon from "@mui/icons-material/RemoveCircleOutlineRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import StorefrontRoundedIcon from "@mui/icons-material/StorefrontRounded";
-import WaterDropRoundedIcon from "@mui/icons-material/WaterDropRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
-
-const products = [
-  { id: "water", name: "Water", sku: "N/A", barcode: "8886474921025", stock: 2100, cost: 500, icon: <WaterDropRoundedIcon />, color: "#38a5dd" },
-  { id: "air-x", name: "Air X", sku: "AIR-X-001", barcode: "8886474921026", stock: 98, cost: 800, icon: <Inventory2RoundedIcon />, color: "#707070" },
-];
+import { usePosApi } from "../../hooks/useApiResource";
+import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
 
 const money = (amount) => `${new Intl.NumberFormat("en-US", { minimumFractionDigits: 2 }).format(amount)} ကျပ်`;
 const fieldSx = {
@@ -48,6 +44,7 @@ const fieldSx = {
 
 export default function AddStockMovementPage() {
   const navigate = useNavigate();
+  const api = usePosApi();
   const isMobile = useMediaQuery("(max-width:768px)");
   const [movementType, setMovementType] = useState("in");
   const [adjustmentType, setAdjustmentType] = useState("increase");
@@ -59,16 +56,72 @@ export default function AddStockMovementPage() {
   const [notes, setNotes] = useState("");
   const [adjustedBy, setAdjustedBy] = useState("");
   const [errors, setErrors] = useState({});
+  const [products, setProducts] = useState([]); const [batches, setBatches] = useState([]); const [scannerOpen, setScannerOpen] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [productsError, setProductsError] = useState("");
 
-  const filteredProducts = useMemo(() => products.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()) || item.sku.toLowerCase().includes(query.toLowerCase()) || item.barcode.includes(query)), [query]);
+  useEffect(() => {
+    let active = true;
+    const loadAllActiveProducts = async () => {
+      const firstPage = await api.products.list({ page: 1, pageSize: 100, status: "active" });
+      const totalCount = firstPage.totalCount || (firstPage.products || []).length;
+      const remainingPages = Array.from({ length: Math.max(0, Math.ceil(totalCount / 100) - 1) }, (_, index) =>
+        api.products.list({ page: index + 2, pageSize: 100, status: "active" }),
+      );
+      const pages = await Promise.all(remainingPages);
+      return { ...firstPage, products: [firstPage, ...pages].flatMap((page) => page.products || []) };
+    };
+    setProductsLoading(true); setProductsError("");
+    Promise.all([loadAllActiveProducts(), api.inventory.list()]).then(([productResult, inventoryResult]) => {
+      if (!active) return;
+      const inventory = inventoryResult.inventory || [];
+      const totals = new Map();
+      const productById = new Map((productResult.products || []).map((item) => [item.id, item]));
+      inventory.forEach((batch) => {
+        totals.set(batch.productId, (totals.get(batch.productId) || 0) + Number(batch.quantity || 0));
+        // Include products already in inventory even when they are not returned by the active-catalog filter.
+        if (batch.product && !productById.has(batch.productId)) productById.set(batch.productId, batch.product);
+      });
+      setBatches(inventory);
+      setProducts(Array.from(productById.values()).map((item) => {
+        const barcodeValues = (item.barcodes || []).map((barcode) => barcode.value).filter(Boolean);
+        return { ...item, stock: totals.get(item.id) || 0, cost: item.cost ?? item.weightedCost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
+      }));
+    }).catch((error) => { if (active) setProductsError(error.message || "Unable to load products. Please try again."); }).finally(() => active && setProductsLoading(false)); return () => { active = false; };
+  }, [api]);
+
+  const filteredProducts = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return products;
+    return products.filter((item) => [item.name, item.sku, ...item.barcodeValues]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalizedQuery)));
+  }, [products, query]);
   const selectProduct = (nextProduct) => {
     setProduct(nextProduct);
     setQuery(nextProduct?.name ?? "");
     setCost(nextProduct ? String(nextProduct.cost) : "");
     setErrors((current) => ({ ...current, product: false, cost: false }));
   };
-  const scanBarcode = () => selectProduct(products[0]);
-  const saveMovement = () => {
+  const findProduct = (value) => {
+    const normalizedValue = String(value || "").trim().toLowerCase();
+    return products.find((item) => [item.id, item.name, item.sku, ...item.barcodeValues]
+      .filter(Boolean)
+      .some((candidate) => String(candidate).toLowerCase() === normalizedValue)) || null;
+  };
+  const resolveProductCode = async (value) => { const code = String(value || "").trim(); if (!code) return; const localProduct = findProduct(code); if (localProduct) { selectProduct(localProduct); return; } try { const result = await api.pricing.barcodeLookup(code); const scannedProduct = products.find((item) => item.id === result.product?.id) || (result.known && result.product ? { ...result.product, stock: 0, barcode: result.barcode?.value || code, barcodeValues: [result.barcode?.value || code], icon: <Inventory2RoundedIcon />, color: "#1976d2" } : null); if (!scannedProduct) throw new Error("No active product was found for this code."); selectProduct(scannedProduct); } catch (error) { setProduct(null); setErrors((current) => ({ ...current, product: error.message || "No active product was found for this code." })); } };
+  const scanBarcode = () => setScannerOpen(true);
+  const handleScan = async (value) => { setScannerOpen(false); await resolveProductCode(value); };
+  const handleSearchKeyDown = (event) => { if (event.key !== "Enter") return; event.preventDefault(); void resolveProductCode(query); };
+  const handleProductInputChange = (_, value, reason) => {
+    if (reason === "clear") { selectProduct(null); return; }
+    if (reason !== "input") return;
+    const matchedProduct = findProduct(value);
+    if (matchedProduct) { selectProduct(matchedProduct); return; }
+    setQuery(value);
+    if (product && value !== product.name) setProduct(null);
+  };
+  const saveMovement = async () => {
     const nextErrors = {
       product: !product,
       quantity: !quantity || Number(quantity) <= 0,
@@ -78,10 +131,10 @@ export default function AddStockMovementPage() {
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
-    navigate("/stock/history");
+    try { if (movementType === "in") await api.inventory.create({ productId: product.id, quantity: Number(quantity), unitCost: Number(cost), note: notes.trim() }); else { const batch = batches.find((item) => item.productId === product.id); if (!batch) throw new Error("Add stock before recording an adjustment."); await api.inventory.adjust(batch.id, { action: adjustmentType === "increase" ? "ADD" : "SUB", quantity: Number(quantity), reason: notes.trim() }); } navigate("/stock/history"); } catch (error) { setErrors((current) => ({ ...current, submit: error.message || "Unable to save stock movement." })); }
   };
 
-  if (!isMobile) return <DesktopAddStockMovement movementType={movementType} setMovementType={setMovementType} adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} query={query} setQuery={setQuery} filteredProducts={filteredProducts} product={product} selectProduct={selectProduct} quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} supplier={supplier} setSupplier={setSupplier} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} onClose={() => navigate("/stock")} onSave={saveMovement} />;
+  if (!isMobile) return <><DesktopAddStockMovement movementType={movementType} setMovementType={setMovementType} adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} query={query} filteredProducts={filteredProducts} product={product} selectProduct={selectProduct} findProduct={findProduct} onProductInputChange={handleProductInputChange} onSearchKeyDown={handleSearchKeyDown} productsLoading={productsLoading} productsError={productsError} quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} supplier={supplier} setSupplier={setSupplier} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} onClose={() => navigate("/stock")} onSave={saveMovement} /><BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScan} /></>;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", pb: "128px", fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif" }}>
@@ -97,12 +150,18 @@ export default function AddStockMovementPage() {
         <Typography sx={sectionLabelSx}>SELECT PRODUCT</Typography>
         <Autocomplete
             freeSolo
+            autoHighlight
+            autoSelect
+            openOnFocus
             options={filteredProducts}
+            value={product}
+            filterOptions={(options) => options}
+            isOptionEqualToValue={(option, value) => option.id === value.id}
             getOptionLabel={(option) => typeof option === "string" ? option : option.name}
             inputValue={query}
-            onInputChange={(_, value) => { setQuery(value); if (!value) setProduct(null); }}
-            onChange={(_, value) => selectProduct(typeof value === "string" ? products.find((item) => item.name === value) ?? null : value)}
-            renderInput={(params) => <TextField {...params} placeholder="Search product" error={Boolean(errors.product)} helperText={errors.product ? "Select a product" : ""} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />}
+            onInputChange={handleProductInputChange}
+            onChange={(_, value) => selectProduct(typeof value === "string" ? findProduct(value) : value)}
+            renderInput={(params) => <TextField {...params} placeholder={productsLoading ? "Loading products…" : "Search product or enter barcode"} disabled={productsLoading} error={Boolean(errors.product || productsError)} helperText={productsError || (typeof errors.product === "string" ? errors.product : errors.product ? "Select a product" : "")} onKeyDown={handleSearchKeyDown} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />}
           />
 
         {product && <SelectedProduct product={product} onClear={() => selectProduct(null)} />}
@@ -120,19 +179,19 @@ export default function AddStockMovementPage() {
         )}
       </Box>
 
-      <Fab aria-label="Scan product barcode" onClick={scanBarcode} sx={{ position: "fixed", zIndex: 21, right: 20, bottom: 104, width: 56, height: 56, bgcolor: "primary.main", color: "common.white", boxShadow: 4, "&:hover": { bgcolor: "primary.dark" } }}><QrCodeScannerRoundedIcon /></Fab>
+      {errors.submit && <Typography color="error" sx={{ px: 2.5 }}>{errors.submit}</Typography>}<Fab aria-label="Scan product barcode" onClick={scanBarcode} sx={{ position: "fixed", zIndex: 21, right: 20, bottom: 104, width: 56, height: 56, bgcolor: "primary.main", color: "common.white", boxShadow: 4, "&:hover": { bgcolor: "primary.dark" } }}><QrCodeScannerRoundedIcon /></Fab>
       <Paper elevation={5} sx={{ position: "fixed", zIndex: 20, left: 0, right: 0, bottom: 0, px: 2.5, py: 2, bgcolor: "background.paper", borderTop: "1px solid", borderColor: "divider" }}>
         <Box sx={{ width: "100%", maxWidth: 472, mx: "auto" }}><Button fullWidth variant="contained" onClick={saveMovement} sx={{ minHeight: 56, borderRadius: 1.5, fontSize: 16, fontWeight: 600, textTransform: "none" }}>{movementType === "in" ? "Save Stock In" : "Save Adjustment"}</Button></Box>
-      </Paper>
+      </Paper><BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScan} />
     </Box>
   );
 }
 
-function DesktopAddStockMovement({ movementType, setMovementType, adjustmentType, setAdjustmentType, query, setQuery, filteredProducts, product, selectProduct, quantity, setQuantity, cost, setCost, supplier, setSupplier, notes, setNotes, adjustedBy, setAdjustedBy, errors, onClose, onSave }) {
+function DesktopAddStockMovement({ movementType, setMovementType, adjustmentType, setAdjustmentType, query, filteredProducts, product, selectProduct, findProduct, onProductInputChange, onSearchKeyDown, productsLoading, productsError, quantity, setQuantity, cost, setCost, supplier, setSupplier, notes, setNotes, adjustedBy, setAdjustedBy, errors, onClose, onSave }) {
   return <Dialog open fullWidth maxWidth="md" onClose={onClose} slotProps={{ paper: { sx: { maxWidth: 920, borderRadius: 3, maxHeight: "88vh" } } }}>
     <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><Box><Typography sx={{ fontSize: 22, fontWeight: 800 }}>Add Stock Movement</Typography><Typography color="text.secondary" sx={{ mt: .4, fontSize: 14 }}>Record stock in or an inventory adjustment.</Typography></Box><IconButton aria-label="Close stock movement" onClick={onClose}><CloseRoundedIcon /></IconButton></Box></DialogTitle>
     <DialogContent dividers sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 3 }}>
-      <Box><Typography sx={sectionLabelSx}>SELECT PRODUCT</Typography><Autocomplete freeSolo options={filteredProducts} getOptionLabel={(option) => typeof option === "string" ? option : option.name} inputValue={query} onInputChange={(_, value) => { setQuery(value); if (!value) selectProduct(null); }} onChange={(_, value) => selectProduct(typeof value === "string" ? products.find((item) => item.name === value) ?? null : value)} renderInput={(params) => <TextField {...params} placeholder="Search product" error={Boolean(errors.product)} helperText={errors.product ? "Select a product" : ""} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />} />
+      <Box><Typography sx={sectionLabelSx}>SELECT PRODUCT</Typography><Autocomplete freeSolo autoHighlight autoSelect openOnFocus options={filteredProducts} value={product} filterOptions={(options) => options} isOptionEqualToValue={(option, value) => option.id === value.id} getOptionLabel={(option) => typeof option === "string" ? option : option.name} inputValue={query} onInputChange={onProductInputChange} onChange={(_, value) => selectProduct(typeof value === "string" ? findProduct(value) : value)} renderInput={(params) => <TextField {...params} placeholder={productsLoading ? "Loading products…" : "Search product or enter barcode"} disabled={productsLoading} error={Boolean(errors.product || productsError)} helperText={productsError || (typeof errors.product === "string" ? errors.product : errors.product ? "Select a product" : "")} onKeyDown={onSearchKeyDown} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />} />
         {product && <SelectedProduct product={product} onClear={() => selectProduct(null)} />}
         <Typography sx={{ ...sectionLabelSx, mt: 3 }}>MOVEMENT DETAILS</Typography><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mb: 2 }}><MovementButton active={movementType === "in"} onClick={() => setMovementType("in")} icon={<AddCircleOutlineRoundedIcon />} label="Stock IN" tone="success" /><MovementButton active={movementType === "adjustment"} onClick={() => setMovementType("adjustment")} icon={<Inventory2RoundedIcon />} label="Adjustment" tone="primary" /></Box>
       </Box>

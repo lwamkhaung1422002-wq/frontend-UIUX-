@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
+  Alert,
   AppBar,
   Box,
   Button,
@@ -32,8 +33,8 @@ import MoveToInboxRoundedIcon from "@mui/icons-material/MoveToInboxRounded";
 import OutboxRoundedIcon from "@mui/icons-material/OutboxRounded";
 import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
-import WaterDropRoundedIcon from "@mui/icons-material/WaterDropRounded";
-
+import { usePosApi } from "../../hooks/useApiResource";
+/*
 const records = [
   { id: 1, product: "Water", type: "IN", qty: "+100 pcs", amount: "500 ကျပ်", reason: "Initial Stock", time: "about an hour ago", date: "11/08/2026 11:20 PM", icon: <WaterDropRoundedIcon /> },
   { id: 2, product: "Air X", type: "OUT", qty: "-1 pcs", amount: "1,000 ကျပ်", reason: "Sale - Order #ORD-20260811-0003", time: "2 hours ago", date: "11/08/2026 10:19 PM", icon: <Inventory2RoundedIcon /> },
@@ -52,18 +53,29 @@ const desktopRecords = [
   { id: 9, product: "Air X", kind: "out", type: "Stock Out", qty: "-6 pcs", reference: "SLS-20260810-001", reason: "Sold to customer", date: "2026-08-10", time: "11:10 AM", icon: <Inventory2RoundedIcon />, color: "#767676" },
   { id: 10, product: "Nivea Roll On", kind: "in", type: "Stock In", qty: "+25 pcs", reference: "GRN-20260810-001", reason: "Purchase from supplier", date: "2026-08-10", time: "02:45 PM", icon: <Inventory2RoundedIcon />, color: "#3976bb" },
 ];
+*/
 
 export default function StockHistoryPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
   const [filter, setFilter] = useState("all");
-  const sourceRecords = isMobile ? records : desktopRecords;
-  const visibleRecords = useMemo(
-    () => sourceRecords.filter((record) => filter === "all" || (isMobile ? record.type.toLowerCase() : record.kind) === filter),
-    [filter, isMobile, sourceRecords],
-  );
+  const [search, setSearch] = useState("");
+  const [sourceRecords, setSourceRecords] = useState([]);
+  const [historyError, setHistoryError] = useState("");
+  useEffect(() => { let active = true; api.inventory.movements({ limit: 200 }).then(({ movements }) => { if (!active) return; setHistoryError(""); setSourceRecords((movements || []).map((movement) => { const kind = movement.direction === "OUT" ? "out" : "in"; const quantity = Number(movement.enteredQuantity || 0); const date = new Date(movement.occurredAt); return { id: movement.id, product: movement.product?.name || "Product", sku: movement.product?.sku || "", barcodes: movement.product?.barcodes?.map((barcode) => barcode.value) || [], type: kind === "out" ? "Stock Out" : "Stock In", kind, qty: `${kind === "out" ? "-" : "+"}${quantity} pcs`, amount: movement.unitCost ? `${new Intl.NumberFormat("en-US").format(Number(movement.unitCost))} ကျပ်` : "—", reference: movement.sourceId, reason: movement.reason || movement.type, time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), date: date.toISOString().slice(0, 10), icon: <Inventory2RoundedIcon />, color: kind === "out" ? "#d14343" : "#1976d2" }; })); }).catch((error) => { if (active) { setSourceRecords([]); setHistoryError(error.message || "Unable to load stock history. Please try again."); } }); return () => { active = false; }; }, [api]);
+  const visibleRecords = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return sourceRecords.filter((record) => {
+      const matchesFilter = filter === "all" || record.kind === filter;
+      const matchesSearch = !query || [record.product, record.sku, record.reference, record.reason, ...(record.barcodes || [])]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+      return matchesFilter && matchesSearch;
+    });
+  }, [filter, search, sourceRecords]);
 
-  if (!isMobile) return <DesktopStockHistory records={visibleRecords} filter={filter} setFilter={setFilter} navigate={navigate} />;
+  if (!isMobile) return <>{historyError && <Alert severity="error" sx={{ mb: 1.5 }}>{historyError}</Alert>}<DesktopStockHistory records={visibleRecords} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} navigate={navigate} /></>;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", pb: 3 }}>
@@ -78,6 +90,8 @@ export default function StockHistoryPage() {
       <Box sx={{ px: 3, pt: 2.5 }}>
         <TextField
           fullWidth
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
           placeholder="Search by product name or barcode"
           slotProps={{
             input: {
@@ -104,6 +118,7 @@ export default function StockHistoryPage() {
         </Box>
 
         <Stack spacing={2}>
+          {historyError && <Alert severity="error">{historyError}</Alert>}
           {visibleRecords.map((record) => <HistoryCard key={record.id} record={record} />)}
         </Stack>
       </Box>
@@ -113,16 +128,12 @@ export default function StockHistoryPage() {
   );
 }
 
-function DesktopStockHistory({ records, filter, setFilter, navigate }) {
-  const [search, setSearch] = useState("");
+function DesktopStockHistory({ records, filter, setFilter, search, setSearch, navigate }) {
   const [dateAnchor, setDateAnchor] = useState(null);
   const [dateRange, setDateRange] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const displayedRecords = records.filter((record) => {
-    const query = search.trim().toLowerCase();
-    return (!query || [record.product, record.reference, record.reason].some((value) => value.toLowerCase().includes(query))) && (dateRange !== "today" || record.date === "2026-08-11") && (!from || record.date >= from) && (!to || record.date <= to);
-  });
+  const displayedRecords = records.filter((record) => (dateRange !== "today" || record.date === new Date().toISOString().slice(0, 10)) && (!from || record.date >= from) && (!to || record.date <= to));
   const chooseRange = (range) => { setDateRange(range); if (range !== "custom") { setFrom(""); setTo(""); } };
   const counts = { all: displayedRecords.length, in: displayedRecords.filter((record) => record.kind === "in").length, out: displayedRecords.filter((record) => record.kind === "out").length };
   return <Box sx={{ maxWidth: 1500, mx: "auto", py: .5 }}>
@@ -146,7 +157,7 @@ const desktopHistoryHeaderSx = { display: "grid", gridTemplateColumns: desktopHi
 const desktopHistoryRowSx = { display: "grid", gridTemplateColumns: desktopHistoryGrid, columnGap: 2, alignItems: "center", minHeight: 74, px: 2.5, borderBottom: "1px solid", borderColor: "divider", "&:last-child": { borderBottom: 0 } };
 
 function HistoryCard({ record }) {
-  const isIn = record.type === "IN";
+  const isIn = record.kind === "in";
   const statusColor = isIn ? "success.main" : "error.main";
 
   return (

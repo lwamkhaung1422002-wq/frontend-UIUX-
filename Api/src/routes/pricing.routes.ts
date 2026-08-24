@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import bwipjs from "bwip-js";
 import { Router } from "express";
 import { z } from "zod";
@@ -16,6 +15,7 @@ import {
 import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
+import { barcodeSymbologies, internalBarcodeCandidate, normalizeBarcode, printableBarcodeCandidate, validateBarcode } from "../lib/barcode.js";
 
 export const pricingRouter = Router();
 pricingRouter.use(requireAuth);
@@ -28,7 +28,7 @@ const barcodeInput = z.object({
   productId: z.string().min(1),
   variantId: z.string().optional().nullable(),
   productUnitId: z.string().optional().nullable(),
-  symbology: z.enum(["CODE128", "EAN13", "UPCA", "EAN8"]).default("CODE128"),
+  symbology: z.enum(barcodeSymbologies).default("CODE128"),
   kind: z.enum(barcodeKinds).default("INTERNAL"),
   packageQuantity: z.coerce.number().positive().optional().nullable(),
   isInternal: z.boolean().default(false),
@@ -87,7 +87,10 @@ const resolveInput = priceTargetInput.extend({
 function badRequest(message: string) { return Object.assign(new Error(message), { name: "BadRequestError" }); }
 function conflict(message: string) { return Object.assign(new Error(message), { name: "ConflictError" }); }
 function notFound(message: string) { return Object.assign(new Error(message), { name: "NotFoundError" }); }
-function normalizeBarcode(value: string) { return value.trim().replace(/\s+/g, "").toUpperCase(); }
+function assertValidBarcode(value: string, symbology: (typeof barcodeSymbologies)[number]) {
+  const message = validateBarcode(value, symbology);
+  if (message) throw badRequest(message);
+}
 function pagination(query: unknown) {
   const parsed = z.object({
     search: z.string().trim().optional(), status: z.string().trim().optional(),
@@ -111,7 +114,7 @@ pricingRouter.get("/:shopId/barcode-lookup/:value", async (request, response, ne
       productId: barcode.productId, variantId: barcode.variantId, productUnitId: barcode.productUnitId,
       quantity: new Prisma.Decimal(barcode.packageQuantity ?? 1), channel: String(request.query.channel ?? "ALL"),
     }));
-    response.json({ known: true, barcode, pricing });
+    response.json({ known: true, normalizedValue, barcode, product: barcode.product, variant: barcode.variant, productUnit: barcode.productUnit, packageQuantity: barcode.packageQuantity, pricing });
   } catch (error) { next(error); }
 });
 
@@ -139,6 +142,7 @@ pricingRouter.post("/:shopId/barcodes", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const input = barcodeInput.parse(request.body);
     await assertUserOwnsShop(auth.id, shopId);
+    assertValidBarcode(input.value, input.symbology);
     const barcode = await prisma.$transaction(async (tx) => {
       await assertPricingTarget(tx, shopId, input);
       const normalizedValue = normalizeBarcode(input.value);
@@ -164,18 +168,156 @@ pricingRouter.post("/:shopId/barcodes/internal", async (request, response, next)
     const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params);
     const target = priceTargetInput.extend({ productUnitId: z.string().optional().nullable(), packageQuantity: z.coerce.number().positive().optional().nullable(), isPrimary: z.boolean().default(true) }).parse(request.body);
     await assertUserOwnsShop(auth.id, shopId);
-    const seed = randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
-    request.body = { ...target, value: `GM-${shopId.slice(-4).toUpperCase()}-${seed}`, kind: "INTERNAL", symbology: "CODE128", isInternal: true };
-    const input = barcodeInput.parse(request.body);
     const barcode = await prisma.$transaction(async (tx) => {
-      await assertPricingTarget(tx, shopId, input);
-      const normalizedValue = normalizeBarcode(input.value);
-      if (input.isPrimary) await tx.productBarcode.updateMany({ where: { shopId, productId: input.productId, variantId: input.variantId ?? null, isPrimary: true }, data: { isPrimary: false } });
-      const created = await tx.productBarcode.create({ data: { shopId, productId: input.productId, value: input.value, normalizedValue, kind: "INTERNAL", symbology: "CODE128", isInternal: true, isPrimary: input.isPrimary, ...(input.variantId ? { variantId: input.variantId } : {}), ...(input.productUnitId ? { productUnitId: input.productUnitId } : {}), ...(input.packageQuantity ? { packageQuantity: String(input.packageQuantity) } : {}) } });
+      const { product } = await assertPricingTarget(tx, shopId, target);
+      let value = "";
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const candidate = internalBarcodeCandidate(product.name);
+        if (!await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: candidate } } })) { value = candidate; break; }
+      }
+      if (!value) throw conflict("Could not generate a unique barcode.");
+      if (target.isPrimary) await tx.productBarcode.updateMany({ where: { shopId, productId: target.productId, variantId: target.variantId ?? null, isPrimary: true }, data: { isPrimary: false } });
+      const created = await tx.productBarcode.create({ data: { shopId, productId: target.productId, value, normalizedValue: value, kind: "INTERNAL", symbology: "CODE128", isInternal: true, isPrimary: target.isPrimary, ...(target.variantId ? { variantId: target.variantId } : {}), ...(target.productUnitId ? { productUnitId: target.productUnitId } : {}), ...(target.packageQuantity ? { packageQuantity: String(target.packageQuantity) } : {}) } });
       await writeAuditLog(tx, { shopId, actorId: auth.id, action: "barcode.internal.create", entity: "ProductBarcode", entityId: created.id });
       return created;
     });
     response.status(201).json({ barcode });
+  } catch (error) { next(error); }
+});
+
+const reservationInput = z.object({
+  count: z.coerce.number().int().min(1).max(100).default(1),
+  values: z.array(z.string().trim().regex(/^\d{13}$/, "Internal barcodes must contain exactly 13 digits.")).max(100).optional(),
+});
+
+pricingRouter.get("/:shopId/barcode-reservations", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params);
+    const status = z.enum(["UNASSIGNED", "ASSIGNED", "RETIRED"]).default("UNASSIGNED").parse(request.query.status);
+    await assertUserOwnsShop(auth.id, shopId);
+    const barcodes = await prisma.generatedBarcode.findMany({ where: { shopId, status }, orderBy: { createdAt: "desc" }, take: 100 });
+    response.json({ barcodes });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.post("/:shopId/barcode-reservations", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const input = reservationInput.parse(request.body);
+    await assertUserOwnsShop(auth.id, shopId);
+    const values = input.values?.length ? input.values : [];
+    if (input.values && input.values.length !== input.count) throw badRequest("Count must match the number of manual barcode values.");
+    const barcodes = await prisma.$transaction(async (tx) => {
+      const created = [];
+      for (let index = 0; index < input.count; index += 1) {
+        let value = values[index] || "";
+        for (let attempt = 0; !value && attempt < 30; attempt += 1) {
+          const candidate = printableBarcodeCandidate();
+          const normalizedValue = normalizeBarcode(candidate);
+          const used = await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } }) || await tx.generatedBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } });
+          if (!used) value = candidate;
+        }
+        if (!value) throw conflict("Could not generate a unique barcode. Please try again.");
+        const normalizedValue = normalizeBarcode(value);
+        const used = await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } }) || await tx.generatedBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } });
+        if (used) throw conflict("Barcode is already used in this store.");
+        created.push(await tx.generatedBarcode.create({ data: { shopId, value, normalizedValue } }));
+      }
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "barcode.reservation.create", entity: "GeneratedBarcode", entityId: created[0]?.id || shopId, metadata: { count: created.length } });
+      return created;
+    });
+    response.status(201).json({ barcodes });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.get("/:shopId/barcode-reservations/:id/label.svg", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
+    const barcode = await prisma.generatedBarcode.findFirst({ where: { id, shopId, status: "UNASSIGNED" } });
+    if (!barcode) throw notFound("Generated barcode not found.");
+    response.type("image/svg+xml").send(bwipjs.toSVG({ bcid: "code128", text: barcode.value, scale: 2, height: 12, includetext: true, textxalign: "center" }));
+  } catch (error) { next(error); }
+});
+
+pricingRouter.post("/:shopId/barcode-reservations/:id/assign", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); const input = priceTargetInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
+    const barcode = await prisma.$transaction(async (tx) => {
+      const reservation = await tx.generatedBarcode.findFirst({ where: { id, shopId, status: "UNASSIGNED" } });
+      if (!reservation) throw notFound("Unassigned barcode not found.");
+      const target = await assertPricingTarget(tx, shopId, input);
+      const created = await tx.productBarcode.create({ data: { shopId, productId: input.productId, value: reservation.value, normalizedValue: reservation.normalizedValue, symbology: "CODE128", kind: "INTERNAL", isInternal: true, isPrimary: true, ...(input.variantId ? { variantId: input.variantId } : {}), ...(input.productUnitId ? { productUnitId: input.productUnitId } : {}) } });
+      await tx.productBarcode.updateMany({ where: { shopId, productId: input.productId, id: { not: created.id }, isPrimary: true }, data: { isPrimary: false } });
+      await tx.generatedBarcode.update({ where: { id }, data: { status: "ASSIGNED", assignedProductId: target.product.id } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "barcode.reservation.assign", entity: "GeneratedBarcode", entityId: id, metadata: { productId: input.productId } });
+      return created;
+    });
+    response.status(201).json({ barcode });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.post("/:shopId/barcodes/:id/regenerate", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); const input = z.object({ expectedVersion: z.coerce.number().int().positive(), reason: z.string().trim().min(3) }).parse(request.body);
+    await assertUserOwnsShop(auth.id, shopId);
+    const barcode = await prisma.$transaction(async (tx) => {
+      const existing = await tx.productBarcode.findFirst({ where: { id, shopId, status: "ACTIVE", isInternal: true }, include: { product: true } });
+      if (!existing) throw notFound("Active internal barcode not found."); if (existing.version !== input.expectedVersion) throw conflict("Barcode was changed by another request.");
+      const isPrintableInternal = /^\d{13}$/.test(existing.value);
+      let value = ""; for (let attempt = 0; attempt < 20; attempt += 1) { const candidate = isPrintableInternal ? printableBarcodeCandidate() : internalBarcodeCandidate(existing.product.name); if (!await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: candidate } } })) { value = candidate; break; } }
+      if (!value) throw conflict("Could not generate a unique barcode.");
+      await tx.productBarcode.update({ where: { id }, data: { status: "RETIRED", retiredAt: new Date(), isPrimary: false, version: { increment: 1 } } });
+      const created = await tx.productBarcode.create({ data: { shopId, productId: existing.productId, value, normalizedValue: value, symbology: "CODE128", kind: "INTERNAL", isInternal: true, isPrimary: true, ...(existing.variantId ? { variantId: existing.variantId } : {}), ...(existing.productUnitId ? { productUnitId: existing.productUnitId } : {}) } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "barcode.regenerate", entity: "ProductBarcode", entityId: created.id, metadata: { previousBarcodeId: id, reason: input.reason } }); return created;
+    }); response.status(201).json({ barcode });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.post("/:shopId/barcodes/:id/replace", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); const input = z.object({ newValue: z.string().trim().min(3).max(128), symbology: z.enum(barcodeSymbologies), kind: z.enum(barcodeKinds), expectedVersion: z.coerce.number().int().positive(), reason: z.string().trim().min(3) }).parse(request.body);
+    await assertUserOwnsShop(auth.id, shopId); assertValidBarcode(input.newValue, input.symbology);
+    const barcode = await prisma.$transaction(async (tx) => {
+      const existing = await tx.productBarcode.findFirst({ where: { id, shopId, status: "ACTIVE" } }); if (!existing) throw notFound("Active barcode not found."); if (existing.version !== input.expectedVersion) throw conflict("Barcode was changed by another request.");
+      const normalizedValue = normalizeBarcode(input.newValue); if (await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } })) throw conflict("Barcode is already linked in this store.");
+      await tx.productBarcode.update({ where: { id }, data: { status: "RETIRED", retiredAt: new Date(), isPrimary: false, version: { increment: 1 } } });
+      const created = await tx.productBarcode.create({ data: { shopId, productId: existing.productId, value: input.newValue, normalizedValue, symbology: input.symbology, kind: input.kind, isInternal: input.kind === "INTERNAL", isPrimary: true, ...(existing.variantId ? { variantId: existing.variantId } : {}), ...(existing.productUnitId ? { productUnitId: existing.productUnitId } : {}) } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "barcode.replace", entity: "ProductBarcode", entityId: created.id, metadata: { previousBarcodeId: id, reason: input.reason } }); return created;
+    }); response.status(201).json({ barcode });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.post("/:shopId/barcodes/short-code/generate", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params);
+    await assertUserOwnsShop(auth.id, shopId);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const value = internalBarcodeCandidate();
+      const used = await prisma.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: value } } }) || await prisma.generatedBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue: value } } });
+      if (!used) { response.json({ value, symbology: "CODE128", kind: "INTERNAL" }); return; }
+    }
+    throw conflict("Could not generate a unique barcode. Please try again.");
+  } catch (error) { next(error); }
+});
+
+pricingRouter.patch("/:shopId/barcodes/:id", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params);
+    const input = barcodeInput.pick({ value: true, symbology: true, kind: true, packageQuantity: true, isPrimary: true }).extend({ expectedVersion: z.coerce.number().int().positive() }).parse(request.body);
+    await assertUserOwnsShop(auth.id, shopId);
+    assertValidBarcode(input.value, input.symbology);
+    const barcode = await prisma.$transaction(async (tx) => {
+      const existing = await tx.productBarcode.findFirst({ where: { id, shopId, status: "ACTIVE" } });
+      if (!existing) throw notFound("Barcode not found.");
+      if (existing.version !== input.expectedVersion) throw conflict("Barcode was changed by another request.");
+      const normalizedValue = normalizeBarcode(input.value);
+      const duplicate = await tx.productBarcode.findUnique({ where: { shopId_normalizedValue: { shopId, normalizedValue } } });
+      if (duplicate && duplicate.id !== id) throw conflict("Barcode is already linked in this store.");
+      if (input.isPrimary) await tx.productBarcode.updateMany({ where: { shopId, productId: existing.productId, variantId: existing.variantId, isPrimary: true, id: { not: id } }, data: { isPrimary: false } });
+      const updated = await tx.productBarcode.update({ where: { id }, data: { value: input.value, normalizedValue, symbology: input.symbology, kind: input.kind, isPrimary: input.isPrimary, packageQuantity: input.packageQuantity ? String(input.packageQuantity) : null, version: { increment: 1 } } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "barcode.update", entity: "ProductBarcode", entityId: id, metadata: { normalizedValue } });
+      return updated;
+    });
+    response.json({ barcode });
   } catch (error) { next(error); }
 });
 
@@ -201,7 +343,7 @@ pricingRouter.get("/:shopId/barcodes/:id/label.svg", async (request, response, n
     const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
     const barcode = await prisma.productBarcode.findFirst({ where: { id, shopId, status: "ACTIVE" }, include: { product: true, variant: true, productUnit: { include: { unit: true } } } });
     if (!barcode) throw notFound("Barcode not found.");
-    const bcid = barcode.symbology === "EAN13" ? "ean13" : barcode.symbology === "UPCA" ? "upca" : barcode.symbology === "EAN8" ? "ean8" : "code128";
+    const bcid = barcode.symbology === "EAN13" ? "ean13" : barcode.symbology === "UPCA" ? "upca" : barcode.symbology === "UPCE" ? "upce" : barcode.symbology === "EAN8" ? "ean8" : "code128";
     const svg = bwipjs.toSVG({ bcid, text: barcode.value, scale: 2, height: 12, includetext: true, textxalign: "center" });
     response.type("image/svg+xml").set("Cache-Control", "private, max-age=300").send(svg);
   } catch (error) { next(error); }

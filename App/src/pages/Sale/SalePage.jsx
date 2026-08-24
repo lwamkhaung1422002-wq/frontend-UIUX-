@@ -34,7 +34,6 @@ import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import ReceiptLongRoundedIcon from "@mui/icons-material/ReceiptLongRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
-import { demoOrders } from "../../data/dashboardData";
 import { usePosApi } from "../../hooks/useApiResource";
 
 const initialFilters = {
@@ -93,7 +92,7 @@ export default function SalePage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
-  const [orders, setOrders] = useState(demoOrders);
+  const [orders, setOrders] = useState([]);
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters] = useState(initialFilters);
