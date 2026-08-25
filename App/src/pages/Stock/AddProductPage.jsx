@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router";
 import {
   Alert,
@@ -44,6 +45,8 @@ import BarcodeManagerDialog from "../../components/Barcode/BarcodeManagerDialog"
 import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
 import { usePosApi } from "../../hooks/useApiResource";
 import { normalizeBarcode } from "../../lib/barcodeScanner";
+import { queryKeys } from "../../lib/queryKeys";
+import { useAuth } from "../../context/AuthContext";
 
 const emptyForm = {
   name: "",
@@ -70,6 +73,8 @@ export default function AddProductPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
+  const { shop } = useAuth();
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const productId = searchParams.get("edit");
   const isEditMode = Boolean(productId);
@@ -176,6 +181,14 @@ export default function AddProductPage() {
     setForm((current) => ({ ...current, categoryId: category.id }));
     setCategoryDialogOpen(false);
   };
+  const createCategory = async (name) => {
+    const categoryName = name.trim();
+    if (!categoryName) throw new Error("Category name is required.");
+    const result = await api.categories.create({ name: categoryName });
+    const category = result.category;
+    setCategories((current) => [...current, category].sort((left, right) => left.name.localeCompare(right.name)));
+    selectCategory(category);
+  };
   const handleDetected = useCallback(
     async (value) => {
       setScannerOpen(false);
@@ -257,6 +270,7 @@ export default function AddProductPage() {
         cost: Number(form.cost),
         categoryId: form.categoryId || undefined,
         ...(isEditMode ? { stockQuantity: Number(form.stock) } : {}),
+        minimumStock: Number(form.minimum || 0),
       };
       if (isEditMode) {
         const delta = Number(form.stock) - initialStock;
@@ -294,6 +308,7 @@ export default function AddProductPage() {
           severity: "success",
           text: "Product updated successfully.",
         });
+        await invalidateProductData(queryClient, shop?.id);
         window.setTimeout(() => navigate(`/stock/${productId}`), 800);
         return;
       }
@@ -340,6 +355,7 @@ export default function AddProductPage() {
           ? "Product and barcode saved successfully."
           : "Product saved successfully.",
       });
+      await invalidateProductData(queryClient, shop?.id);
       window.setTimeout(() => navigate(`/stock/${result.product.id}`), 900);
     } catch (error) {
       setMessage({
@@ -359,6 +375,7 @@ export default function AddProductPage() {
     categoryDialogOpen,
     setCategoryDialogOpen,
     selectCategory,
+    createCategory,
     navigate,
     isEditMode,
     scannerOpen,
@@ -493,6 +510,17 @@ export default function AddProductPage() {
       <Notice message={message} onClose={() => setMessage(null)} />
     </Box>
   );
+}
+
+async function invalidateProductData(queryClient, shopId) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.products(shopId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shopId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.movements(shopId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shopId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shopId) }),
+    queryClient.invalidateQueries({ queryKey: ["shops", shopId, "reports"] }),
+  ]);
 }
 
 function ProductFields({
@@ -713,6 +741,7 @@ function SharedDialogs({
   setCategoryDialogOpen,
   categories,
   selectCategory,
+  createCategory,
   scannerOpen,
   setScannerOpen,
   handleDetected,
@@ -736,6 +765,7 @@ function SharedDialogs({
         onClose={() => setCategoryDialogOpen(false)}
         categories={categories}
         onSelect={selectCategory}
+        onCreate={createCategory}
       />
       <BarcodeScannerDialog
         open={scannerOpen}
@@ -795,12 +825,18 @@ function CategorySelector({ value, onClick }) {
     </Box>
   );
 }
-function CategoryDialog({ open, onClose, categories, onSelect }) {
+function CategoryDialog({ open, onClose, categories, onSelect, onCreate }) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const closeCreate = () => { setCreating(false); setName(""); setError(""); };
+  const save = async () => { setSaving(true); setError(""); try { await onCreate(name); closeCreate(); } catch (requestError) { setError(requestError.message || "Unable to create category."); } finally { setSaving(false); } };
   return (
-    <Dialog open={open} onClose={onClose} aria-labelledby="select-category-title" slotProps={{ paper: { sx: { width: "calc(100% - 64px)", maxWidth: 448, minHeight: "78vh", m: 0, borderRadius: 4, boxShadow: "0 18px 48px rgba(0,0,0,0.3)", alignSelf: "center" } }, backdrop: { sx: { bgcolor: "rgba(0, 0, 0, 0.55)" } } }}>
+    <><Dialog open={open} onClose={onClose} aria-labelledby="select-category-title" slotProps={{ paper: { sx: { width: "calc(100% - 64px)", maxWidth: 448, minHeight: "78vh", m: 0, borderRadius: 4, boxShadow: "0 18px 48px rgba(0,0,0,0.3)", alignSelf: "center" } }, backdrop: { sx: { bgcolor: "rgba(0, 0, 0, 0.55)" } } }}>
       <DialogContent sx={{ p: 5, "&:first-of-type": { pt: 5 } }}>
         <Typography id="select-category-title" sx={{ fontSize: 34, fontWeight: 400, lineHeight: 1.15, mb: 4.25 }}>Select Category</Typography>
-        <Button startIcon={<AddRoundedIcon />} sx={{ minHeight: 52, px: 2.5, color: "text.primary", fontSize: 22, fontWeight: 400, textTransform: "none", "& .MuiButton-startIcon": { mr: 2 } }}>Add New Category</Button>
+        <Button onClick={() => setCreating(true)} startIcon={<AddRoundedIcon />} sx={{ minHeight: 52, px: 2.5, color: "text.primary", fontSize: 22, fontWeight: 400, textTransform: "none", "& .MuiButton-startIcon": { mr: 2 } }}>Add New Category</Button>
         <Divider sx={{ borderColor: "text.primary", my: 1.5 }} />
         <Stack spacing={0.5} sx={{ pt: 1.5 }}>
           {categories.map((category) => (
@@ -822,7 +858,7 @@ function CategoryDialog({ open, onClose, categories, onSelect }) {
           ))}
         </Stack>
       </DialogContent>
-    </Dialog>
+    </Dialog><Dialog open={creating} onClose={closeCreate} fullWidth maxWidth="xs"><DialogTitle>Add New Category</DialogTitle><DialogContent><TextField autoFocus fullWidth value={name} onChange={(event) => setName(event.target.value)} label="Category name" onKeyDown={(event) => { if (event.key === "Enter") void save(); }} error={Boolean(error)} helperText={error} /></DialogContent><DialogActions><Button onClick={closeCreate}>Cancel</Button><Button variant="contained" disabled={saving || !name.trim()} onClick={() => void save()}>{saving ? "Adding…" : "Add Category"}</Button></DialogActions></Dialog></>
   );
 }
 function Field({

@@ -314,7 +314,9 @@ async function main(): Promise<void> {
       body: { method: "Cash", scope: "advanced-payment", amount: 1000 },
     });
     assert.equal(advancedPayment.payment.scope, "advanced-payment");
-    assert.equal(advancedPayment.order.paymentStatus, "unpaid");
+    // A non-zero advance against an otherwise unpaid order is a partial
+    // payment. This must stay visible to receivables and payment workflows.
+    assert.equal(advancedPayment.order.paymentStatus, "partial");
 
     const finalPayment = await request(baseUrl, `/shops/${shopId}/orders/${orderId}/payments`, {
       method: "POST",

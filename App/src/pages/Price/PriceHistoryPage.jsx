@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { AppBar, Box, Chip, IconButton, Paper, Stack, Toolbar, Typography } from "@mui/material";
 import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
@@ -7,8 +7,9 @@ import CalendarTodayOutlinedIcon from "@mui/icons-material/CalendarTodayOutlined
 import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import LocalOfferRoundedIcon from "@mui/icons-material/LocalOfferRounded";
 import TrendingUpRoundedIcon from "@mui/icons-material/TrendingUpRounded";
+import { usePriceHistoryQuery, usePromotionCampaignsQuery } from "../../hooks/usePosQueries";
 
-const records = [
+const legacyRecords = [
   { type: "Price", name: "Nivea Roll On", oldPrice: 6000, newPrice: 6500, date: "11/08/2026", time: "11:20 PM", reason: "Market price increased" },
   { type: "Promotion", name: "Jasmine Perfume", promotionName: "Anniversary", action: "Promotion set: 10% off", period: "01/08/2026 — 31/08/2026", date: "10/08/2026", time: "03:15 PM" },
   { type: "Promotion", name: "Coca-Cola 330ml", promotionName: "Anniversary", action: "Promotion edited:", emphasis: "15% off", date: "09/08/2026", time: "09:45 AM" },
@@ -18,6 +19,20 @@ const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျ
 export default function PriceHistoryPage() {
   const navigate = useNavigate();
   const [filter] = useState("All");
+  const { data: priceResult } = usePriceHistoryQuery({ page: 1, pageSize: 100 });
+  const { data: campaignResult } = usePromotionCampaignsQuery();
+  const records = useMemo(() => {
+    void legacyRecords;
+    const prices = (priceResult?.entries || []).map((entry) => {
+      const at = new Date(entry.effectiveFrom || entry.createdAt);
+      return { type: "Price", name: entry.product?.name || "Product", oldPrice: Number(entry.product?.price || 0), newPrice: Number(entry.unitPrice || 0), date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: entry.reason || "" };
+    });
+    const promotions = (campaignResult?.campaigns || []).map((campaign) => {
+      const first = campaign.promotions?.[0] || {}; const at = new Date(campaign.updatedAt || campaign.createdAt);
+      return { type: "Promotion", name: campaign.sampleProduct?.name || campaign.name, promotionName: campaign.name, action: `${first.type === "FIXED_PRICE" ? "Promotion price" : "Promotion set"}: ${first.value || 0}${first.type === "PERCENTAGE" ? "% off" : ""}`, period: first.startsAt && first.endsAt ? `${new Date(first.startsAt).toLocaleDateString("en-GB")} - ${new Date(first.endsAt).toLocaleDateString("en-GB")}` : "", date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: first.reason || "" };
+    });
+    return [...prices, ...promotions].sort((left, right) => `${right.date} ${right.time}`.localeCompare(`${left.date} ${left.time}`));
+  }, [campaignResult, priceResult]);
   return <Box sx={{ minHeight: "100dvh", bgcolor: "#f8fafc", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: "primary.main" }}><Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}><IconButton aria-label="Back to price and promotion" onClick={() => navigate("/price")} sx={{ justifySelf: "start", color: "common.white" }}><ArrowBackRoundedIcon /></IconButton><Typography fontWeight={700}>Price History</Typography><Box /></Toolbar></AppBar>
     <Box sx={{ p: { xs: 2, sm: 2.5 }, maxWidth: 720, mx: "auto" }}><Typography color="text.secondary" sx={{ mb: 2, fontSize: 14 }}>{filter} price and promotion activity</Typography><Stack spacing={1.75}>{records.map((record) => <HistoryCard key={record.name} record={record} />)}</Stack></Box>

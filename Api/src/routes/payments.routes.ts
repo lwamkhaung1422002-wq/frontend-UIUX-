@@ -147,7 +147,11 @@ async function updateOrderPaymentStatus(tx: any, shopId: string, orderId: string
   if (!order) throw notFound("Order not found.");
 
   const paidAmount = await paidAmountForOrder(tx, shopId, orderId);
-  const paymentStatus = paidAmount >= order.total ? "paid" : "unpaid";
+  const paymentStatus = paidAmount <= 0
+    ? "unpaid"
+    : paidAmount >= order.total
+      ? "paid"
+      : "partial";
 
   return tx.order.update({
     where: { id: orderId },

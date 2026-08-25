@@ -1,14 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
   AppBar,
+  Alert,
   Box,
   Button,
   Card,
   CardContent,
   Chip,
   Divider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Drawer,
+  Fab,
   IconButton,
   InputAdornment,
   Menu,
@@ -29,45 +36,170 @@ import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SellOutlinedIcon from "@mui/icons-material/SellOutlined";
-
-const taxRate = 0.05;
+import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
+import { usePosApi } from "../../hooks/useApiResource";
+import { useProductsQuery } from "../../hooks/usePosQueries";
+import { queryKeys } from "../../lib/queryKeys";
+import { useAuth } from "../../context/AuthContext";
 
 const initialItems = [];
 
-const formatMoney = (amount) => `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
+function printReceipt(order, items, totals, method) {
+  const popup = window.open("", "_blank", "width=420,height=700");
+  if (!popup)
+    throw new Error(
+      "The print window was blocked. Allow pop-ups and try again.",
+    );
+  const rows = items
+    .map(
+      (item) =>
+        `<tr><td>${escapeHtml(item.name)} × ${item.quantity}</td><td>${formatMoney(item.price * item.quantity)}</td></tr>`,
+    )
+    .join("");
+  popup.document.write(
+    `<!doctype html><html><head><title>Receipt ${escapeHtml(order.orderNumber || order.id)}</title><style>@page{size:80mm auto;margin:0}body{width:72mm;margin:0 auto;padding:4mm;font:12px Arial,sans-serif;color:#111}.head{text-align:center;border-bottom:1px dashed #222;padding-bottom:3mm}.head h1{font-size:16px;margin:0 0 2mm}.meta{font-size:10px;text-align:left;margin:3mm 0}table{width:100%;border-collapse:collapse}td{padding:1.4mm 0;vertical-align:top}td:last-child{text-align:right;white-space:nowrap}.total{border-top:1px dashed #222;margin-top:2mm;padding-top:2mm;font-size:14px;font-weight:700;display:flex;justify-content:space-between}.foot{text-align:center;border-top:1px dashed #222;margin-top:3mm;padding-top:3mm;font-size:10px}</style></head><body><div class="head"><h1>POS RECEIPT</h1><div>${escapeHtml(order.orderNumber || order.id)}</div></div><div class="meta">Date: ${new Date(order.createdAt || Date.now()).toLocaleString()}<br>Payment: ${escapeHtml(method)}</div><table>${rows}</table><div class="total"><span>Total</span><span>${formatMoney(totals.total)}</span></div><div class="foot">Thank you for shopping.</div><script>window.onload=()=>window.print();window.onafterprint=()=>window.close();</script></body></html>`,
+  );
+  popup.document.close();
+}
+function escapeHtml(value) {
+  return String(value || "").replace(
+    /[&<>'"]/g,
+    (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[
+        character
+      ],
+  );
+}
+void printReceipt;
+
+const formatMoney = (amount) =>
+  `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 
 function ProductCard({ item, onQuantityChange }) {
   const lineTotal = item.price * item.quantity;
-  const promotionText = item.promotion.type === "discount"
-    ? `Discount  ${formatMoney(item.promotion.value)}`
-    : item.promotion.text;
+  const promotionText =
+    item.promotion.type === "discount"
+      ? `Discount  ${formatMoney(item.promotion.value)}`
+      : item.promotion.text;
 
   return (
-    <Card sx={{ minHeight: 148, borderRadius: 2.5, boxShadow: "0 2px 8px rgba(15,23,42,0.14)" }}>
+    <Card
+      sx={{
+        minHeight: 148,
+        borderRadius: 2.5,
+        boxShadow: "0 2px 8px rgba(15,23,42,0.14)",
+      }}
+    >
       <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
         <Stack direction="row" spacing={1.5}>
-          <Box sx={{ display: "grid", placeItems: "center", width: 78, height: 104, borderRadius: 2, bgcolor: "#edf7fc", color: item.color, flexShrink: 0 }}>
+          <Box
+            sx={{
+              display: "grid",
+              placeItems: "center",
+              width: 78,
+              height: 104,
+              borderRadius: 2,
+              bgcolor: "#edf7fc",
+              color: item.color,
+              flexShrink: 0,
+            }}
+          >
             {item.icon}
           </Box>
           <Box sx={{ minWidth: 0, flexGrow: 1 }}>
-            <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", columnGap: 1, alignItems: "start" }}>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto",
+                columnGap: 1,
+                alignItems: "start",
+              }}
+            >
               <Box>
                 <Typography fontWeight={700}>{item.name}</Typography>
-                <Typography sx={{ mt: 0.25 }}>{formatMoney(item.price)}</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>Stock: {item.stock} pcs</Typography>
+                <Typography sx={{ mt: 0.25 }}>
+                  {formatMoney(item.price)}
+                </Typography>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mt: 0.25 }}
+                >
+                  Stock: {item.stock} pcs
+                </Typography>
               </Box>
               <Box sx={{ textAlign: "right", flexShrink: 0 }}>
-                <Box sx={{ display: "grid", gridTemplateColumns: "44px 40px 44px", height: 46, border: "1px solid #1976d2", borderRadius: 1.5, overflow: "hidden" }}>
-                  <IconButton size="small" aria-label={`Reduce ${item.name} quantity`} onClick={() => onQuantityChange(item.id, -1)} sx={{ borderRadius: 0, color: "#1976d2", borderRight: "1px solid #1976d2" }}><RemoveRoundedIcon /></IconButton>
-                  <Typography sx={{ display: "grid", placeItems: "center", fontWeight: 600 }}>{item.quantity}</Typography>
-                  <IconButton size="small" aria-label={`Increase ${item.name} quantity`} onClick={() => onQuantityChange(item.id, 1)} sx={{ borderRadius: 0, color: "#1976d2", borderLeft: "1px solid #1976d2" }}><AddRoundedIcon /></IconButton>
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "44px 40px 44px",
+                    height: 46,
+                    border: "1px solid #1976d2",
+                    borderRadius: 1.5,
+                    overflow: "hidden",
+                  }}
+                >
+                  <IconButton
+                    size="small"
+                    aria-label={`Reduce ${item.name} quantity`}
+                    onClick={() => onQuantityChange(item.id, -1)}
+                    sx={{
+                      borderRadius: 0,
+                      color: "#1976d2",
+                      borderRight: "1px solid #1976d2",
+                    }}
+                  >
+                    <RemoveRoundedIcon />
+                  </IconButton>
+                  <Typography
+                    sx={{
+                      display: "grid",
+                      placeItems: "center",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {item.quantity}
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    aria-label={`Increase ${item.name} quantity`}
+                    onClick={() => onQuantityChange(item.id, 1)}
+                    sx={{
+                      borderRadius: 0,
+                      color: "#1976d2",
+                      borderLeft: "1px solid #1976d2",
+                    }}
+                  >
+                    <AddRoundedIcon />
+                  </IconButton>
                 </Box>
-                <Typography fontWeight={700} sx={{ mt: 0.8 }}>{formatMoney(lineTotal)}</Typography>
+                <Typography fontWeight={700} sx={{ mt: 0.8 }}>
+                  {formatMoney(lineTotal)}
+                </Typography>
               </Box>
             </Box>
-            <Stack direction="row" spacing={0.8} alignItems="center" sx={{ minHeight: 38, mt: 1.1, px: 1, py: 0.65, borderRadius: 1.5, bgcolor: "#f0faf2", color: "#278a45" }}>
-              {item.promotion.type === "discount" ? <SellOutlinedIcon fontSize="small" /> : <Inventory2RoundedIcon fontSize="small" />}
-              <Typography variant="body2" fontWeight={500}>{promotionText}</Typography>
+            <Stack
+              direction="row"
+              spacing={0.8}
+              alignItems="center"
+              sx={{
+                minHeight: 38,
+                mt: 1.1,
+                px: 1,
+                py: 0.65,
+                borderRadius: 1.5,
+                bgcolor: "#f0faf2",
+                color: "#278a45",
+              }}
+            >
+              {item.promotion.type === "discount" ? (
+                <SellOutlinedIcon fontSize="small" />
+              ) : (
+                <Inventory2RoundedIcon fontSize="small" />
+              )}
+              <Typography variant="body2" fontWeight={500}>
+                {promotionText}
+              </Typography>
             </Stack>
           </Box>
         </Stack>
@@ -79,34 +211,180 @@ function ProductCard({ item, onQuantityChange }) {
 export default function CreateOrderPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const api = usePosApi();
+  const { shop } = useAuth();
+  const queryClient = useQueryClient();
   const [items, setItems] = useState(initialItems);
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [otherAnchor, setOtherAnchor] = useState(null);
   const [otherPayment, setOtherPayment] = useState("unpaid");
   const [amountReceived, setAmountReceived] = useState("10000");
-  const [transactionId, setTransactionId] = useState("");
   const [buyerName, setBuyerName] = useState("");
   const [note, setNote] = useState("");
   const [productPickerOpen, setProductPickerOpen] = useState(false);
   const [productSearch, setProductSearch] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [configuredMethods, setConfiguredMethods] = useState([]);
+  const [paymentMethodDialogOpen, setPaymentMethodDialogOpen] = useState(false);
+  const [newPaymentMethod, setNewPaymentMethod] = useState("");
+  const [creatingOrder, setCreatingOrder] = useState(false);
+  const [createdOrder, setCreatedOrder] = useState(null);
+  const [orderError, setOrderError] = useState("");
+  const { data: catalogResponse, error: catalogQueryError } = useProductsQuery({ status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" });
+  const catalog = useMemo(() => (catalogResponse?.products || []).map((product) => ({ ...product, price: Number(product.price || 0), stock: Number(product.currentStock || 0), color: "#1976d2", icon: <Inventory2RoundedIcon />, promotion: { type: "regular", text: "Regular price" } })), [catalogResponse]);
+  const catalogError = catalogQueryError?.message || "";
 
+  useEffect(() => {
+    if (!createdOrder) return undefined;
+    const timer = window.setTimeout(() => setCreatedOrder(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [createdOrder]);
+
+  useEffect(() => {
+    let active = true;
+    api.shop
+      .getSettings()
+      .then(({ settings }) => {
+        if (active) setConfiguredMethods(settings.paymentMethods || []);
+      })
+      .catch(() => {
+        if (active) setConfiguredMethods([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [api]);
   const totals = useMemo(() => {
     const quantity = items.reduce((total, item) => total + item.quantity, 0);
-    const itemsTotal = items.reduce((total, item) => total + item.price * item.quantity, 0);
-    const discount = items.reduce((total, item) => total + (item.promotion.type === "discount" ? item.promotion.value : 0), 0);
-    const tax = Math.round((itemsTotal - discount) * taxRate);
-    return { quantity, itemsTotal, discount, tax, total: itemsTotal - discount + tax };
+    const itemsTotal = items.reduce(
+      (total, item) => total + item.price * item.quantity,
+      0,
+    );
+    const discount = items.reduce(
+      (total, item) =>
+        total + (item.promotion.type === "discount" ? item.promotion.value : 0),
+      0,
+    );
+    return { quantity, itemsTotal, discount, total: itemsTotal - discount };
   }, [items]);
 
   const cashAmount = Number(amountReceived.replace(/,/g, "")) || 0;
-  const isWallet = paymentMethod === "kbzpay" || paymentMethod === "wavepay";
   const isPartial = paymentMethod === "other" && otherPayment === "partial";
   const showsAmountReceived = paymentMethod === "cash" || isPartial;
+  const nonCashMethods = configuredMethods.filter(
+    (method) => method.active && method.id !== "cash" && method.type !== "cod",
+  );
+  const quickMethods = nonCashMethods.slice(0, 2);
+  const otherMethods = nonCashMethods.slice(2);
+  const savePaymentMethod = async () => {
+    const name = newPaymentMethod.trim();
+    if (!name) return;
+    const next = [
+      ...configuredMethods,
+      {
+        id: `custom-${Date.now()}`,
+        name,
+        type: "normal",
+        active: true,
+        sortOrder: configuredMethods.length + 1,
+      },
+    ];
+    try {
+      const result = await api.shop.updateSettings({ paymentMethods: next });
+      setConfiguredMethods(result.settings.paymentMethods || next);
+      setNewPaymentMethod("");
+      setPaymentMethodDialogOpen(false);
+    } catch {
+      /* Existing payment controls remain usable if saving fails. */
+    }
+  };
+  const paymentName =
+    paymentMethod === "cash"
+      ? "Cash"
+      : paymentMethod === "other"
+        ? otherPayment === "partial"
+          ? "Cash"
+          : "Unpaid"
+        : configuredMethods.find((method) => method.id === paymentMethod)
+            ?.name || paymentMethod;
+  const createOrder = async () => {
+    if (!items.length) {
+      setOrderError("Add at least one product before creating the order.");
+      return;
+    }
+    if (
+      paymentMethod === "other" &&
+      otherPayment === "unpaid" &&
+      !buyerName.trim()
+    ) {
+      setOrderError("Buyer name is required for an unpaid order.");
+      return;
+    }
+    setCreatingOrder(true);
+    setOrderError("");
+    try {
+      const result = await api.orders.create({
+        fulfillmentStatus: "reserved",
+        ...(buyerName.trim() ? { customer: { name: buyerName.trim() } } : {}),
+        note: note.trim() || undefined,
+        items: items.map((item) => ({
+          productId: item.id,
+          quantity: item.quantity,
+          unitPrice: item.price,
+        })),
+      });
+      const order = result.order;
+      const amount =
+        paymentMethod === "other" && otherPayment === "unpaid"
+          ? 0
+          : paymentMethod === "cash" ||
+              (paymentMethod === "other" && otherPayment === "partial")
+            ? Math.min(totals.total, cashAmount)
+            : totals.total;
+      if (amount > 0)
+        await api.payments.addToOrder(order.id, {
+          method: paymentName,
+          amount,
+          note: note.trim() || undefined,
+        });
+      const completed = await api.orders.updateStatus(order.id, { fulfillmentStatus: "completed" });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.orders(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.movements(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.reports(shop?.id, "products") }),
+      ]);
+      setCreatedOrder(completed.order || completed);
+      setItems([]);
+      setProductSearch("");
+      setBuyerName("");
+      setNote("");
+      setAmountReceived("");
+      setPaymentMethod("cash");
+      setOtherPayment("unpaid");
+      setOtherAnchor(null);
+    } catch (error) {
+      setOrderError(error.message || "Unable to create order.");
+    } finally {
+      setCreatingOrder(false);
+    }
+  };
 
   const changeQuantity = (id, change) => {
-    setItems((current) => current.map((item) => item.id === id
-      ? { ...item, quantity: Math.max(1, Math.min(item.stock, item.quantity + change)) }
-      : item));
+    setItems((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              quantity: Math.max(
+                1,
+                Math.min(item.stock, item.quantity + change),
+              ),
+            }
+          : item,
+      ),
+    );
   };
 
   const selectOtherPayment = (value) => {
@@ -115,98 +393,417 @@ export default function CreateOrderPage() {
     setOtherAnchor(null);
   };
 
-  const addProductFromPicker = (id) => {
-    changeQuantity(id, 1);
+  const addProductFromPicker = (product) => {
+    if (product.stock <= 0) return;
+    setItems((current) => {
+      const existing = current.find((item) => item.id === product.id);
+      return existing
+        ? current.map((item) =>
+            item.id === product.id
+              ? { ...item, quantity: Math.min(item.stock, item.quantity + 1) }
+              : item,
+          )
+        : [...current, { ...product, quantity: 1 }];
+    });
     setProductPickerOpen(false);
+    setProductSearch("");
+  };
+  const matchesProduct = (product, value) => {
+    const query = value.trim().toLowerCase();
+    return (
+      !query ||
+      [
+        product.name,
+        product.sku,
+        product.description,
+        ...(product.barcodes || []).map((barcode) => barcode.value),
+      ]
+        .filter(Boolean)
+        .some((field) => String(field).toLowerCase().includes(query))
+    );
+  };
+  const visibleCatalog = useMemo(
+    () => catalog.filter((product) => matchesProduct(product, productSearch)),
+    [catalog, productSearch],
+  );
+  const handleBarcodeScan = async (value) => {
+    setScannerOpen(false);
+    try {
+      const result = await api.pricing.barcodeLookup(value);
+      if (result.known && result.product?.isActive !== false) {
+        const product = catalog.find(
+          (item) => item.id === result.product.id,
+        ) || {
+          ...result.product,
+          price: Number(
+            result.pricing?.finalUnitPrice || result.product.price || 0,
+          ),
+          stock: Number(result.product.currentStock || 0),
+          color: "#1976d2",
+          icon: <Inventory2RoundedIcon />,
+          promotion: { type: "regular", text: "Regular price" },
+        };
+        addProductFromPicker(product);
+        return;
+      }
+    } catch {
+      /* Manual filtering remains available below. */
+    }
+    setProductSearch(value);
+    setProductPickerOpen(true);
   };
 
-  if (!isMobile) return <DesktopCreateOrder items={items} totals={totals} changeQuantity={changeQuantity} paymentMethod={paymentMethod} setPaymentMethod={setPaymentMethod} amountReceived={amountReceived} setAmountReceived={setAmountReceived} buyerName={buyerName} setBuyerName={setBuyerName} note={note} setNote={setNote} productSearch={productSearch} setProductSearch={setProductSearch} navigate={navigate} />;
+  if (!isMobile)
+    return (
+      <DesktopCreateOrder
+        items={items}
+        catalog={catalog}
+        catalogError={catalogError}
+        addProduct={addProductFromPicker}
+        totals={totals}
+        changeQuantity={changeQuantity}
+        paymentMethod={paymentMethod}
+        setPaymentMethod={setPaymentMethod}
+        amountReceived={amountReceived}
+        setAmountReceived={setAmountReceived}
+        buyerName={buyerName}
+        setBuyerName={setBuyerName}
+        note={note}
+        setNote={setNote}
+        productSearch={productSearch}
+        setProductSearch={setProductSearch}
+        navigate={navigate}
+        createOrder={createOrder}
+        creatingOrder={creatingOrder}
+        createdOrder={createdOrder}
+        orderError={orderError}
+        quickMethods={quickMethods}
+        otherMethods={otherMethods}
+        otherAnchor={otherAnchor}
+        setOtherAnchor={setOtherAnchor}
+        otherPayment={otherPayment}
+        selectOtherPayment={selectOtherPayment}
+        setPaymentMethodDialogOpen={setPaymentMethodDialogOpen}
+        paymentMethodDialogOpen={paymentMethodDialogOpen}
+        newPaymentMethod={newPaymentMethod}
+        setNewPaymentMethod={setNewPaymentMethod}
+        savePaymentMethod={savePaymentMethod}
+      />
+    );
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "#f8fafc", pb: 3 }}>
+    <Box sx={{ minHeight: "100vh", bgcolor: "#f8fafc", pb: 12 }}>
       <AppBar position="sticky" elevation={0} sx={{ bgcolor: "#1976d2" }}>
-        <Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}>
-          <IconButton aria-label="Back to orders" onClick={() => navigate("/sale")} sx={{ justifySelf: "start", color: "#fff" }}><ArrowBackRoundedIcon /></IconButton>
-          <Typography variant="h6" fontWeight={700}>Create Order</Typography>
-          <IconButton aria-label="Scan barcode" sx={{ justifySelf: "end", color: "#fff" }}><QrCodeScannerRoundedIcon /></IconButton>
+        <Toolbar
+          sx={{
+            minHeight: 64,
+            display: "grid",
+            gridTemplateColumns: "1fr auto 1fr",
+          }}
+        >
+          <IconButton
+            aria-label="Back to orders"
+            onClick={() => navigate("/sale")}
+            sx={{ justifySelf: "start", color: "#fff" }}
+          >
+            <ArrowBackRoundedIcon />
+          </IconButton>
+          <Typography variant="h6" fontWeight={700}>
+            Create Order
+          </Typography>
+          <IconButton
+            aria-label="Scan barcode"
+            onClick={() => setScannerOpen(true)}
+            sx={{ justifySelf: "end", color: "#fff" }}
+          >
+            <QrCodeScannerRoundedIcon />
+          </IconButton>
         </Toolbar>
       </AppBar>
 
       <Box sx={{ px: 2, py: 2 }}>
-        <Button fullWidth startIcon={<AddRoundedIcon />} onClick={() => setProductPickerOpen(true)} sx={{ minHeight: 58, bgcolor: "#fff", borderRadius: 2.5, color: "#1976d2", boxShadow: "0 2px 7px rgba(15,23,42,0.14)", fontWeight: 600, fontSize: 16, textTransform: "none" }}>
+        <Button
+          fullWidth
+          startIcon={<AddRoundedIcon />}
+          onClick={() => setProductPickerOpen(true)}
+          sx={{
+            minHeight: 58,
+            bgcolor: "#fff",
+            borderRadius: 2.5,
+            color: "#1976d2",
+            boxShadow: "0 2px 7px rgba(15,23,42,0.14)",
+            fontWeight: 600,
+            fontSize: 16,
+            textTransform: "none",
+          }}
+        >
           Add Product
         </Button>
 
         <Stack spacing={1.5} sx={{ mt: 2 }}>
-          {items.map((item) => <ProductCard key={item.id} item={item} onQuantityChange={changeQuantity} />)}
+          {items.map((item) => (
+            <ProductCard
+              key={item.id}
+              item={item}
+              onQuantityChange={changeQuantity}
+            />
+          ))}
         </Stack>
 
-        <Card sx={{ mt: 2, borderRadius: 2.5, boxShadow: "0 2px 8px rgba(15,23,42,0.14)" }}>
+        <Card
+          sx={{
+            mt: 2,
+            borderRadius: 2.5,
+            boxShadow: "0 2px 8px rgba(15,23,42,0.14)",
+          }}
+        >
           <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
             <Stack spacing={1.1}>
-              <SummaryRow label="Total quantity" value={`${totals.quantity} pcs`} />
-              <SummaryRow label="Total" value={formatMoney(totals.itemsTotal)} />
-              <SummaryRow label="Discount" value={formatMoney(totals.discount)} valueColor="#278a45" />
-              <SummaryRow label={`Tax (${taxRate * 100}%)`} value={formatMoney(totals.tax)} />
+              <SummaryRow
+                label="Total quantity"
+                value={`${totals.quantity} pcs`}
+              />
+              <SummaryRow
+                label="Total"
+                value={formatMoney(totals.itemsTotal)}
+              />
+              <SummaryRow
+                label="Discount"
+                value={formatMoney(totals.discount)}
+                valueColor="#278a45"
+              />
               <Box sx={{ borderTop: "1px solid #cbd5e1", pt: 1.25, mt: 0.4 }}>
-                <SummaryRow label="Total" value={formatMoney(totals.total)} strong valueColor="#1976d2" />
+                <SummaryRow
+                  label="Total"
+                  value={formatMoney(totals.total)}
+                  strong
+                  valueColor="#1976d2"
+                />
               </Box>
             </Stack>
           </CardContent>
         </Card>
 
-        <Card sx={{ mt: 2, borderRadius: 2.5, boxShadow: "0 2px 8px rgba(15,23,42,0.14)" }}>
+        <Card
+          sx={{
+            mt: 2,
+            borderRadius: 2.5,
+            boxShadow: "0 2px 8px rgba(15,23,42,0.14)",
+          }}
+        >
           <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
             <Typography fontWeight={700}>Payment Method</Typography>
-            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.8, mt: 1.25 }}>
-              <PaymentButton label="Cash" icon={<CreditCardRoundedIcon />} active={paymentMethod === "cash"} onClick={() => setPaymentMethod("cash")} />
-              <PaymentButton label="KBZPay" active={paymentMethod === "kbzpay"} onClick={() => setPaymentMethod("kbzpay")} />
-              <PaymentButton label="WavePay" active={paymentMethod === "wavepay"} onClick={() => setPaymentMethod("wavepay")} />
-              <PaymentButton label="Other" icon={<MoreHorizRoundedIcon />} active={paymentMethod === "other"} onClick={(event) => setOtherAnchor(event.currentTarget)} />
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: `repeat(${Math.max(3, 1 + quickMethods.length + (quickMethods.length < 2 ? 1 : 0) + 1)}, minmax(0, 1fr))`,
+                gap: 0.8,
+                mt: 1.25,
+              }}
+            >
+              <PaymentButton
+                label="Cash"
+                icon={<CreditCardRoundedIcon />}
+                active={paymentMethod === "cash"}
+                onClick={() => setPaymentMethod("cash")}
+              />
+              {quickMethods.map((method) => (
+                <PaymentButton
+                  key={method.id}
+                  label={method.name}
+                  active={paymentMethod === method.id}
+                  onClick={() => setPaymentMethod(method.id)}
+                />
+              ))}
+              {quickMethods.length < 2 && (
+                <PaymentButton
+                  label="Add Method"
+                  icon={<AddRoundedIcon />}
+                  active={false}
+                  onClick={() => setPaymentMethodDialogOpen(true)}
+                />
+              )}
+              <PaymentButton
+                label="Other"
+                icon={<MoreHorizRoundedIcon />}
+                active={paymentMethod === "other"}
+                onClick={(event) => setOtherAnchor(event.currentTarget)}
+              />
             </Box>
 
-            <Menu anchorEl={otherAnchor} open={Boolean(otherAnchor)} onClose={() => setOtherAnchor(null)}>
-              <MenuItem selected={otherPayment === "unpaid"} onClick={() => selectOtherPayment("unpaid")}>Unpaid</MenuItem>
-              <MenuItem selected={otherPayment === "partial"} onClick={() => selectOtherPayment("partial")}>Partial</MenuItem>
+            <Menu
+              anchorEl={otherAnchor}
+              open={Boolean(otherAnchor)}
+              onClose={() => setOtherAnchor(null)}
+            >
+              {otherMethods.map((method) => (
+                <MenuItem
+                  key={method.id}
+                  selected={paymentMethod === method.id}
+                  onClick={() => {
+                    setPaymentMethod(method.id);
+                    setOtherAnchor(null);
+                  }}
+                >
+                  {method.name}
+                </MenuItem>
+              ))}
+              {otherMethods.length > 0 && <Divider />}
+              <MenuItem
+                selected={otherPayment === "unpaid"}
+                onClick={() => selectOtherPayment("unpaid")}
+              >
+                Unpaid
+              </MenuItem>
+              <MenuItem
+                selected={otherPayment === "partial"}
+                onClick={() => selectOtherPayment("partial")}
+              >
+                Partial
+              </MenuItem>
+              <Divider />
+              <MenuItem
+                onClick={() => {
+                  setOtherAnchor(null);
+                  setPaymentMethodDialogOpen(true);
+                }}
+              >
+                <AddRoundedIcon fontSize="small" sx={{ mr: 1 }} />
+                Add Method
+              </MenuItem>
             </Menu>
 
-            {paymentMethod === "other" && <Chip label={otherPayment === "partial" ? "Partial payment" : "Unpaid"} size="small" sx={{ mt: 1.25, borderRadius: 1, bgcolor: "#fff7ed", color: "#c2410c", fontWeight: 500 }} />}
+            {paymentMethod === "other" && (
+              <Chip
+                label={
+                  otherPayment === "partial" ? "Partial payment" : "Unpaid"
+                }
+                size="small"
+                sx={{
+                  mt: 1.25,
+                  borderRadius: 1,
+                  bgcolor: "#fff7ed",
+                  color: "#c2410c",
+                  fontWeight: 500,
+                }}
+              />
+            )}
 
-            {paymentMethod === "other" && otherPayment === "unpaid" && <>
-              <Typography variant="body2" sx={{ mt: 1.75, mb: 0.7 }}>Buyer name</Typography>
-              <TextField fullWidth required value={buyerName} onChange={(event) => setBuyerName(event.target.value)} placeholder="Enter buyer name" />
-            </>}
+            {paymentMethod === "other" && otherPayment === "unpaid" && (
+              <>
+                <Typography variant="body2" sx={{ mt: 1.75, mb: 0.7 }}>
+                  Buyer name
+                </Typography>
+                <TextField
+                  fullWidth
+                  required
+                  value={buyerName}
+                  onChange={(event) => setBuyerName(event.target.value)}
+                  placeholder="Enter buyer name"
+                />
+              </>
+            )}
 
-            {showsAmountReceived && <>
-              <Typography variant="body2" sx={{ mt: 1.75, mb: 0.7 }}>Amount received</Typography>
-              <TextField fullWidth value={amountReceived} onChange={(event) => setAmountReceived(event.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric" InputProps={{ endAdornment: <InputAdornment position="end">ကျပ်</InputAdornment> }} />
-            </>}
+            {showsAmountReceived && (
+              <>
+                <Typography variant="body2" sx={{ mt: 1.75, mb: 0.7 }}>
+                  Amount received
+                </Typography>
+                <TextField
+                  fullWidth
+                  value={amountReceived}
+                  onChange={(event) =>
+                    setAmountReceived(event.target.value.replace(/[^0-9]/g, ""))
+                  }
+                  inputMode="numeric"
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">ကျပ်</InputAdornment>
+                    ),
+                  }}
+                />
+              </>
+            )}
 
-            {paymentMethod === "cash" && <>
-              <Typography variant="body2" sx={{ mt: 1.5, mb: 0.7 }}>Change</Typography>
-              <TextField fullWidth value={formatMoney(Math.max(0, cashAmount - totals.total))} InputProps={{ readOnly: true }} sx={{ "& .MuiOutlinedInput-root": { bgcolor: "#f1f5f9" } }} />
-            </>}
+            {paymentMethod === "cash" && (
+              <>
+                <Typography variant="body2" sx={{ mt: 1.5, mb: 0.7 }}>
+                  Change
+                </Typography>
+                <TextField
+                  fullWidth
+                  value={formatMoney(Math.max(0, cashAmount - totals.total))}
+                  InputProps={{ readOnly: true }}
+                  sx={{ "& .MuiOutlinedInput-root": { bgcolor: "#f1f5f9" } }}
+                />
+              </>
+            )}
 
-            {isPartial && <>
-              <Typography variant="body2" sx={{ mt: 1.5, mb: 0.7 }}>Remaining balance</Typography>
-              <TextField fullWidth value={formatMoney(Math.max(0, totals.total - cashAmount))} InputProps={{ readOnly: true }} sx={{ "& .MuiOutlinedInput-root": { bgcolor: "#f1f5f9" } }} />
-            </>}
-
-            {isWallet && <>
-              <Typography variant="body2" sx={{ mt: 1.75, mb: 0.7 }}>Transaction ID</Typography>
-              <TextField fullWidth required value={transactionId} onChange={(event) => setTransactionId(event.target.value)} placeholder="Enter transaction ID" />
-            </>}
+            {isPartial && (
+              <>
+                <Typography variant="body2" sx={{ mt: 1.5, mb: 0.7 }}>
+                  Remaining balance
+                </Typography>
+                <TextField
+                  fullWidth
+                  value={formatMoney(Math.max(0, totals.total - cashAmount))}
+                  InputProps={{ readOnly: true }}
+                  sx={{ "& .MuiOutlinedInput-root": { bgcolor: "#f1f5f9" } }}
+                />
+              </>
+            )}
           </CardContent>
         </Card>
 
-        <Card sx={{ mt: 2, borderRadius: 2.5, boxShadow: "0 2px 8px rgba(15,23,42,0.14)" }}>
+        <Card
+          sx={{
+            mt: 2,
+            borderRadius: 2.5,
+            boxShadow: "0 2px 8px rgba(15,23,42,0.14)",
+          }}
+        >
           <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
-            <TextField fullWidth label="Note (optional)" placeholder="Add a note..." value={note} onChange={(event) => setNote(event.target.value)} multiline minRows={2} />
+            <TextField
+              fullWidth
+              label="Note (optional)"
+              placeholder="Add a note..."
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              multiline
+              minRows={2}
+            />
           </CardContent>
         </Card>
+        {orderError && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            {orderError}
+          </Alert>
+        )}
+        {createdOrder && (
+          <Alert severity="success" sx={{ mt: 2 }}>
+            Order {createdOrder.orderNumber || createdOrder.id} created
+            successfully.
+          </Alert>
+        )}
 
-        <Button fullWidth variant="contained" startIcon={<CheckRoundedIcon />} sx={{ mt: 2, minHeight: 54, borderRadius: 2, bgcolor: "#1976d2", fontSize: 17, fontWeight: 600, textTransform: "none", "&:hover": { bgcolor: "#1565c0" } }}>
-          Create Order
+        <Button
+          fullWidth
+          variant="contained"
+          startIcon={<CheckRoundedIcon />}
+          disabled={creatingOrder}
+          onClick={() => void createOrder()}
+          sx={{
+            mt: 2,
+            minHeight: 54,
+            borderRadius: 2,
+            bgcolor: "#1976d2",
+            fontSize: 17,
+            fontWeight: 600,
+            textTransform: "none",
+            "&:hover": { bgcolor: "#1565c0" },
+          }}
+        >
+          {creatingOrder ? "Creating Order…" : "Create Order"}
         </Button>
       </Box>
 
@@ -249,101 +846,655 @@ export default function CreateOrderPage() {
         }}
       >
         <Box sx={{ width: "100%", pt: 3.75 }}>
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", px: 3 }}>
-            <Typography sx={{ color: "#111827", fontSize: 29, fontWeight: 700, lineHeight: 1.15 }}>Add Products</Typography>
-            <IconButton aria-label="Scan product barcode" sx={{ p: 0.5, color: "#111827" }}><QrCodeScannerRoundedIcon sx={{ fontSize: 30 }} /></IconButton>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              width: "100%",
+              px: 3,
+            }}
+          >
+            <Typography
+              sx={{
+                color: "#111827",
+                fontSize: 29,
+                fontWeight: 700,
+                lineHeight: 1.15,
+              }}
+            >
+              Add Products
+            </Typography>
+            <IconButton
+              aria-label="Scan product barcode"
+              onClick={() => setScannerOpen(true)}
+              sx={{ p: 0.5, color: "#111827" }}
+            >
+              <QrCodeScannerRoundedIcon sx={{ fontSize: 30 }} />
+            </IconButton>
           </Box>
 
           <TextField
-          fullWidth
-          value={productSearch}
-          onChange={(event) => setProductSearch(event.target.value)}
-          placeholder="Search products..."
-          InputProps={{
-            startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment>,
-          }}
-          sx={{
-            mt: 4.25,
-            mx: 3,
-            width: "calc(100% - 48px)",
-            "& .MuiOutlinedInput-root": {
-              minHeight: 56,
-              borderRadius: 2.25,
-              bgcolor: "#f5f5f5",
-              fontSize: 18,
-              px: 1.5,
-              "& fieldset": { border: 0 },
-            },
-            "& .MuiInputAdornment-root": { mr: 1.5 },
-            "& .MuiSvgIcon-root": { fontSize: 31, color: "#0f172a" },
-          }}
+            fullWidth
+            value={productSearch}
+            onChange={(event) => setProductSearch(event.target.value)}
+            placeholder="Search products..."
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchRoundedIcon />
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mt: 4.25,
+              mx: 3,
+              width: "calc(100% - 48px)",
+              "& .MuiOutlinedInput-root": {
+                minHeight: 56,
+                borderRadius: 2.25,
+                bgcolor: "#f5f5f5",
+                fontSize: 18,
+                px: 1.5,
+                "& fieldset": { border: 0 },
+              },
+              "& .MuiInputAdornment-root": { mr: 1.5 },
+              "& .MuiSvgIcon-root": { fontSize: 31, color: "#0f172a" },
+            }}
           />
 
-          {items
-            .filter((item) => item.name.toLowerCase().includes(productSearch.trim().toLowerCase()))
-            .map((item) => (
-          <Box key={item.id} sx={{ px: 3 }}>
-          <Stack direction="row" alignItems="center" spacing={2.25} sx={{ mt: 3.25, minHeight: 76 }}>
-            <Box sx={{ display: "grid", placeItems: "center", width: 64, height: 64, color: item.color, flexShrink: 0 }}>
-              {item.icon}
+          {catalogError && (
+            <Typography color="error" sx={{ px: 3, mt: 2 }}>
+              {catalogError}
+            </Typography>
+          )}
+          {visibleCatalog.map((item) => (
+            <Box key={item.id} sx={{ px: 3 }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={2.25}
+                sx={{ mt: 3.25, minHeight: 76 }}
+              >
+                <Box
+                  sx={{
+                    display: "grid",
+                    placeItems: "center",
+                    width: 64,
+                    height: 64,
+                    color: item.color,
+                    flexShrink: 0,
+                  }}
+                >
+                  {item.icon}
+                </Box>
+                <Box sx={{ flexGrow: 1 }}>
+                  <Typography
+                    sx={{
+                      color: "#111827",
+                      fontSize: 20,
+                      fontWeight: 500,
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    {item.name}
+                  </Typography>
+                  <Typography sx={{ mt: 0.75, color: "#111827", fontSize: 17 }}>
+                    {formatMoney(item.price)} · Stock: {item.stock}
+                  </Typography>
+                </Box>
+                <IconButton
+                  aria-label={`Add ${item.name}`}
+                  disabled={item.stock <= 0}
+                  onClick={() => addProductFromPicker(item)}
+                  sx={{
+                    width: 42,
+                    height: 42,
+                    flexShrink: 0,
+                    bgcolor: "#1976d2",
+                    color: "#fff",
+                    "&:hover": { bgcolor: "#1565c0" },
+                    "&.Mui-disabled": { bgcolor: "#cbd5e1" },
+                  }}
+                >
+                  <AddRoundedIcon sx={{ fontSize: 27 }} />
+                </IconButton>
+              </Stack>
             </Box>
-            <Box sx={{ flexGrow: 1 }}>
-              <Typography sx={{ color: "#111827", fontSize: 20, fontWeight: 500, lineHeight: 1.2 }}>{item.name}</Typography>
-              <Typography sx={{ mt: 0.75, color: "#111827", fontSize: 17 }}>{formatMoney(item.price)} · Stock: {item.stock}</Typography>
-            </Box>
-            <IconButton aria-label={`Add ${item.name}`} onClick={() => addProductFromPicker(item.id)} sx={{ width: 42, height: 42, flexShrink: 0, bgcolor: "#1976d2", color: "#fff", "&:hover": { bgcolor: "#1565c0" } }}>
-              <AddRoundedIcon sx={{ fontSize: 27 }} />
-            </IconButton>
-          </Stack>
-          </Box>
-        ))}
+          ))}
         </Box>
       </Drawer>
+      <Fab
+        aria-label="Scan barcode"
+        onClick={() => setScannerOpen(true)}
+        sx={{
+          position: "fixed",
+          zIndex: 21,
+          right: 20,
+          bottom: "calc(24px + env(safe-area-inset-bottom))",
+          width: 56,
+          height: 56,
+          bgcolor: "primary.main",
+          color: "common.white",
+          boxShadow: 4,
+          "&:hover": { bgcolor: "primary.dark" },
+        }}
+      >
+        <QrCodeScannerRoundedIcon />
+      </Fab>
+      <BarcodeScannerDialog
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleBarcodeScan}
+      />
+      <Dialog
+        open={paymentMethodDialogOpen}
+        onClose={() => setPaymentMethodDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>Add Payment Method</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Payment method name"
+            value={newPaymentMethod}
+            onChange={(event) => setNewPaymentMethod(event.target.value)}
+            sx={{ mt: 0.5 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPaymentMethodDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={savePaymentMethod}>
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
 
-function DesktopCreateOrder({ items, totals, changeQuantity, paymentMethod, setPaymentMethod, amountReceived, setAmountReceived, buyerName, setBuyerName, note, setNote, productSearch, setProductSearch, navigate }) {
+export function DesktopCreateOrder({
+  items,
+  catalog,
+  catalogError,
+  addProduct,
+  totals,
+  changeQuantity,
+  paymentMethod,
+  setPaymentMethod,
+  amountReceived,
+  setAmountReceived,
+  buyerName,
+  setBuyerName,
+  note,
+  setNote,
+  productSearch,
+  setProductSearch,
+  navigate,
+  createOrder,
+  creatingOrder,
+  createdOrder,
+  orderError,
+  quickMethods,
+  otherMethods,
+  otherAnchor,
+  setOtherAnchor,
+  otherPayment,
+  selectOtherPayment,
+  setPaymentMethodDialogOpen,
+  paymentMethodDialogOpen,
+  newPaymentMethod,
+  setNewPaymentMethod,
+  savePaymentMethod,
+}) {
   const received = Number(amountReceived.replace(/,/g, "")) || 0;
   const change = Math.max(0, received - totals.total);
-  const visibleItems = items.filter((item) => item.name.toLowerCase().includes(productSearch.trim().toLowerCase()));
-  const panelSx = { borderRadius: 2.5, bgcolor: "background.paper", border: "1px solid", borderColor: "divider", boxShadow: "0 3px 12px rgba(15,23,42,0.07)" };
-  return <Box sx={{ width: "100%" }}>
-    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.55fr) minmax(350px, 0.75fr)", gap: 2 }}>
-      <Box>
-        <TextField fullWidth value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Search by product code, name or barcode..." InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ mb: 1.5, "& .MuiOutlinedInput-root": { minHeight: 52, borderRadius: 2, bgcolor: "background.paper" } }} />
-        <Card sx={panelSx}><CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}><Stack spacing={1}>{visibleItems.map((item) => <DesktopOrderItem key={item.id} item={item} onQuantityChange={changeQuantity} />)}</Stack></CardContent></Card>
+  const isPartialPayment = paymentMethod === "other" && otherPayment === "partial";
+  const query = productSearch.trim().toLowerCase();
+  const visibleCatalog = catalog.filter(
+    (product) =>
+      !query ||
+      [
+        product.name,
+        product.sku,
+        product.description,
+        ...(product.barcodes || []).map((barcode) => barcode.value),
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+  );
+  const visibleItems = query
+    ? visibleCatalog.map((product) => ({
+        ...product,
+        quantity: items.find((item) => item.id === product.id)?.quantity || 0,
+      }))
+    : items;
+  const updateDesktopQuantity = (id, delta) => {
+    const existing = items.find((item) => item.id === id);
+    if (!existing && delta > 0) {
+      const product = catalog.find((item) => item.id === id);
+      if (product) addProduct(product);
+      return;
+    }
+    if (existing) changeQuantity(id, delta);
+  };
+  const panelSx = {
+    borderRadius: 2.5,
+    bgcolor: "background.paper",
+    border: "1px solid",
+    borderColor: "divider",
+    boxShadow: "0 3px 12px rgba(15,23,42,0.07)",
+  };
+  return (
+    <Box
+      sx={{
+        width: "100%",
+        px: 3,
+        py: 2.5,
+        bgcolor: "#f8fafc",
+        minHeight: "100vh",
+      }}
+    >
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1.55fr) minmax(350px, 0.75fr)",
+          gap: 2,
+        }}
+      >
+        <Box>
+          <TextField
+            fullWidth
+            value={productSearch}
+            onChange={(event) => setProductSearch(event.target.value)}
+            placeholder="Search by product code, name or barcode..."
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchRoundedIcon />
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 1.5,
+              "& .MuiOutlinedInput-root": {
+                minHeight: 52,
+                borderRadius: 2,
+                bgcolor: "background.paper",
+              },
+            }}
+          />
+          <Card sx={panelSx}>
+            <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
+              <Stack spacing={1}>
+                {catalogError
+                  ? visibleCatalog.map((item) => (
+                      <Button
+                        key={item.id}
+                        disabled={item.stock <= 0}
+                        onClick={() => addProduct(item)}
+                        sx={{
+                          justifyContent: "space-between",
+                          textTransform: "none",
+                          color: "text.primary",
+                          py: 1.25,
+                        }}
+                      >
+                        <Box textAlign="left">
+                          <Typography fontWeight={700}>{item.name}</Typography>
+                          <Typography color="text.secondary" variant="body2">
+                            {item.sku || item.barcodes?.[0]?.value || "No code"}{" "}
+                            · Stock: {item.stock}
+                          </Typography>
+                        </Box>
+                        <Typography fontWeight={700}>
+                          {formatMoney(item.price)}
+                        </Typography>
+                      </Button>
+                    ))
+                  : visibleItems.map((item) => (
+                      <DesktopOrderItem
+                        key={item.id}
+                        item={item}
+                        onQuantityChange={updateDesktopQuantity}
+                      />
+                    ))}
+              </Stack>
+            </CardContent>
+          </Card>
+        </Box>
+        <Box sx={{ display: "grid", gap: 1.5, alignContent: "start" }}>
+          <Card sx={panelSx}>
+            <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
+              <Typography sx={{ fontSize: 18, fontWeight: 700, mb: 2 }}>
+                Order Summary
+              </Typography>
+              <Stack spacing={1.15}>
+                <DesktopTotal
+                  label="Total quantity"
+                  value={`${totals.quantity} pcs`}
+                />
+                <Divider />
+                <DesktopTotal
+                  label="Total"
+                  value={formatMoney(totals.itemsTotal)}
+                />
+                <DesktopTotal
+                  label="Discount"
+                  value={totals.discount > 0 ? `-${formatMoney(totals.discount)}` : formatMoney(0)}
+                  color="success.main"
+                />
+                <Divider />
+                <DesktopTotal
+                  label="Grand Total"
+                  value={formatMoney(totals.total)}
+                  strong
+                />
+              </Stack>
+            </CardContent>
+          </Card>
+          <Card sx={panelSx}>
+            <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
+              <Typography sx={{ fontSize: 18, fontWeight: 700, mb: 2 }}>
+                Payment Method
+              </Typography>
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${Math.max(3, 1 + quickMethods.length + (quickMethods.length < 2 ? 1 : 0) + 1)}, minmax(0, 1fr))`,
+                  gap: 1,
+                  mb: 2.25,
+                }}
+              >
+                <PaymentButton label="Cash" icon={<CreditCardRoundedIcon />} active={paymentMethod === "cash"} onClick={() => setPaymentMethod("cash")} />
+                {quickMethods.map((method) => <PaymentButton key={method.id} label={method.name} active={paymentMethod === method.id} onClick={() => setPaymentMethod(method.id)} />)}
+                {quickMethods.length < 2 && <PaymentButton label="Add Method" icon={<AddRoundedIcon />} active={false} onClick={() => setPaymentMethodDialogOpen(true)} />}
+                <PaymentButton label="Other" icon={<MoreHorizRoundedIcon />} active={paymentMethod === "other"} onClick={(event) => setOtherAnchor(event.currentTarget)} />
+              </Box>
+              <Menu anchorEl={otherAnchor} open={Boolean(otherAnchor)} onClose={() => setOtherAnchor(null)}>
+                {otherMethods.map((method) => <MenuItem key={method.id} selected={paymentMethod === method.id} onClick={() => { setPaymentMethod(method.id); setOtherAnchor(null); }}>{method.name}</MenuItem>)}
+                {otherMethods.length > 0 && <Divider />}
+                <MenuItem selected={otherPayment === "unpaid"} onClick={() => selectOtherPayment("unpaid")}>Unpaid</MenuItem>
+                <MenuItem selected={otherPayment === "partial"} onClick={() => selectOtherPayment("partial")}>Partial</MenuItem>
+                <Divider />
+                <MenuItem onClick={() => { setOtherAnchor(null); setPaymentMethodDialogOpen(true); }}><AddRoundedIcon fontSize="small" sx={{ mr: 1 }} />Add Method</MenuItem>
+              </Menu>
+              {(paymentMethod === "cash" || isPartialPayment) && (
+                <>
+                  <Typography
+                    color="text.secondary"
+                    sx={{ fontSize: 13, mb: 0.75 }}
+                  >
+                    Amount received
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    value={amountReceived}
+                    onChange={(event) =>
+                      setAmountReceived(
+                        event.target.value.replace(/[^0-9]/g, ""),
+                      )
+                    }
+                    sx={{ "& .MuiOutlinedInput-root": { borderRadius: 1.5 } }}
+                  />
+                  <Box sx={{ mt: 1.75 }}>
+                    <DesktopTotal
+                      label={isPartialPayment ? "Remaining balance" : "Change"}
+                      value={formatMoney(isPartialPayment ? Math.max(0, totals.total - received) : change)}
+                      color="success.main"
+                      strong
+                    />
+                  </Box>
+                </>
+              )}
+              {paymentMethod === "other" && otherPayment === "unpaid" && <TextField
+                fullWidth
+                value={buyerName}
+                onChange={(event) => setBuyerName(event.target.value)}
+                placeholder="Buyer name (for unpaid orders)"
+                sx={{
+                  mt: 2,
+                  "& .MuiOutlinedInput-root": { borderRadius: 1.5 },
+                }}
+              />}
+              <TextField
+                fullWidth
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Add a note..."
+                multiline
+                minRows={3}
+                sx={{
+                  mt: 1.5,
+                  "& .MuiOutlinedInput-root": { borderRadius: 1.5 },
+                }}
+              />
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 1.25,
+                  mt: 2.25,
+                }}
+              >
+                <Button
+                  variant="contained"
+                  startIcon={<CheckRoundedIcon />}
+                  disabled={creatingOrder}
+                  onClick={() => void createOrder()}
+                  sx={{ minHeight: 44, textTransform: "none", fontWeight: 700 }}
+                >
+                  {creatingOrder ? "Creating Order…" : "Create Order"}
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={() => navigate("/sale")}
+                  sx={{ minHeight: 44, textTransform: "none", fontWeight: 700 }}
+                >
+                  Cancel Order
+                </Button>
+              </Box>
+              {orderError && <Alert severity="error" sx={{ mt: 1.25 }}>{orderError}</Alert>}
+              {createdOrder && <Alert severity="success" sx={{ mt: 1.25 }}>Order {createdOrder.orderNumber || createdOrder.id} created successfully.</Alert>}
+            </CardContent>
+          </Card>
+        </Box>
       </Box>
-      <Box sx={{ display: "grid", gap: 1.5, alignContent: "start" }}>
-        <Card sx={panelSx}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontSize: 18, fontWeight: 700, mb: 2 }}>Order Summary</Typography><Stack spacing={1.15}><DesktopTotal label="Total quantity" value={`${totals.quantity} pcs`} /><Divider /><DesktopTotal label="Total" value={formatMoney(totals.itemsTotal)} /><DesktopTotal label="Discount" value={`-${formatMoney(totals.discount)}`} color="success.main" /><DesktopTotal label="Tax (5%)" value={formatMoney(totals.tax)} /><Divider /><DesktopTotal label="Grand Total" value={formatMoney(totals.total)} strong /></Stack></CardContent></Card>
-        <Card sx={panelSx}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontSize: 18, fontWeight: 700, mb: 2 }}>Payment Method</Typography><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, mb: 2.25 }}><Button startIcon={<CreditCardRoundedIcon />} variant={paymentMethod === "cash" ? "contained" : "outlined"} onClick={() => setPaymentMethod("cash")} sx={desktopPaymentButtonSx}>Cash</Button><Button variant={paymentMethod === "cash" ? "outlined" : "contained"} onClick={() => setPaymentMethod("kbzpay")} sx={desktopPaymentButtonSx}>Mobile Payment</Button></Box>{paymentMethod === "cash" && <><Typography color="text.secondary" sx={{ fontSize: 13, mb: 0.75 }}>Amount received</Typography><TextField fullWidth value={amountReceived} onChange={(event) => setAmountReceived(event.target.value.replace(/[^0-9]/g, ""))} sx={{ "& .MuiOutlinedInput-root": { borderRadius: 1.5 } }} /><Box sx={{ mt: 1.75 }}><DesktopTotal label="Change" value={formatMoney(change)} color="success.main" strong /></Box></>}<TextField fullWidth value={buyerName} onChange={(event) => setBuyerName(event.target.value)} placeholder="Buyer name (for unpaid orders)" sx={{ mt: 2, "& .MuiOutlinedInput-root": { borderRadius: 1.5 } }} /><TextField fullWidth value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a note..." multiline minRows={3} sx={{ mt: 1.5, "& .MuiOutlinedInput-root": { borderRadius: 1.5 } }} /><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mt: 2.25 }}><Button variant="contained" color="success" startIcon={<CheckRoundedIcon />} onClick={() => navigate("/sale")} sx={{ minHeight: 44, textTransform: "none", fontWeight: 700 }}>Order Completed</Button><Button variant="outlined" color="error" onClick={() => navigate("/sale")} sx={{ minHeight: 44, textTransform: "none", fontWeight: 700 }}>Cancel Order</Button></Box></CardContent></Card>
-      </Box>
+      <Dialog open={paymentMethodDialogOpen} onClose={() => setPaymentMethodDialogOpen(false)} fullWidth maxWidth="xs"><DialogTitle>Add Payment Method</DialogTitle><DialogContent><TextField autoFocus fullWidth label="Payment method name" value={newPaymentMethod} onChange={(event) => setNewPaymentMethod(event.target.value)} sx={{ mt: .5 }} /></DialogContent><DialogActions><Button onClick={() => setPaymentMethodDialogOpen(false)}>Cancel</Button><Button variant="contained" onClick={savePaymentMethod}>Save</Button></DialogActions></Dialog>
     </Box>
-  </Box>;
+  );
 }
 
 function DesktopOrderItem({ item, onQuantityChange }) {
   const subtotal = item.price * item.quantity;
-  const promotionText = item.promotion.type === "discount" ? `Discount ${formatMoney(item.promotion.value)}` : item.promotion.text;
-  return <Box sx={{ display: "grid", gridTemplateColumns: "84px minmax(150px, 1fr) 246px 130px", gap: 2, alignItems: "center", minHeight: 136, p: 1.75, border: "1px solid", borderColor: "#e5e7eb", borderRadius: 2 }}><Box sx={{ width: 78, height: 92, display: "grid", placeItems: "center", borderRadius: 1.5, bgcolor: "#edf7fc", color: item.color }}>{item.icon}</Box><Box><Typography sx={{ fontSize: 17, fontWeight: 700 }}>{item.name}</Typography><Typography color="text.secondary" sx={{ fontSize: 14, mt: 0.8 }}>Code: {item.id === "water" ? "WTR-001" : "AIRX-002"}</Typography><Typography color="text.secondary" sx={{ fontSize: 14, mt: 0.55 }}>Stock: {item.stock} pcs</Typography></Box><Box sx={{ display: "grid", gridTemplateColumns: "1fr 92px 1fr", height: 86, border: "1px solid", borderColor: "#b9d7ff", borderRadius: 1.5, overflow: "hidden" }}><IconButton aria-label={`Reduce ${item.name} quantity`} onClick={() => onQuantityChange(item.id, -1)} sx={{ borderRadius: 0, color: "primary.main", borderRight: "1px solid", borderColor: "#b9d7ff" }}><RemoveRoundedIcon sx={{ fontSize: 28 }} /></IconButton><Typography sx={{ display: "grid", placeItems: "center", fontSize: 26, fontWeight: 700 }}>{item.quantity}</Typography><IconButton aria-label={`Increase ${item.name} quantity`} onClick={() => onQuantityChange(item.id, 1)} sx={{ borderRadius: 0, color: "primary.main", borderLeft: "1px solid", borderColor: "#b9d7ff" }}><AddRoundedIcon sx={{ fontSize: 30 }} /></IconButton></Box><Box sx={{ textAlign: "right" }}><Typography sx={{ fontSize: 16, fontWeight: 700 }}>{formatMoney(item.price)}</Typography><Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={0.5} sx={{ color: "success.main", mt: 1.5, whiteSpace: "nowrap" }}><SellOutlinedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13, fontWeight: 600 }}>{promotionText}</Typography></Stack><Typography sx={{ fontSize: 15, color: "text.secondary", mt: 1.5 }}>{formatMoney(subtotal)}</Typography></Box></Box>;
+  const promotionText =
+    item.promotion.type === "discount"
+      ? `Discount ${formatMoney(item.promotion.value)}`
+      : item.promotion.text;
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "84px minmax(150px, 1fr) 246px 130px",
+        gap: 2,
+        alignItems: "center",
+        minHeight: 136,
+        p: 1.75,
+        border: "1px solid",
+        borderColor: "#e5e7eb",
+        borderRadius: 2,
+      }}
+    >
+      <Box
+        sx={{
+          width: 78,
+          height: 92,
+          display: "grid",
+          placeItems: "center",
+          borderRadius: 1.5,
+          bgcolor: "#edf7fc",
+          color: item.color,
+        }}
+      >
+        {item.icon}
+      </Box>
+      <Box>
+        <Typography sx={{ fontSize: 17, fontWeight: 700 }}>
+          {item.name}
+        </Typography>
+        <Typography color="text.secondary" sx={{ fontSize: 14, mt: 0.8 }}>
+          Code: {item.id === "water" ? "WTR-001" : "AIRX-002"}
+        </Typography>
+        <Typography color="text.secondary" sx={{ fontSize: 14, mt: 0.55 }}>
+          Stock: {item.stock} pcs
+        </Typography>
+      </Box>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "1fr 92px 1fr",
+          height: 86,
+          border: "1px solid",
+          borderColor: "#b9d7ff",
+          borderRadius: 1.5,
+          overflow: "hidden",
+        }}
+      >
+        <IconButton
+          aria-label={`Reduce ${item.name} quantity`}
+          onClick={() => onQuantityChange(item.id, -1)}
+          sx={{
+            borderRadius: 0,
+            color: "primary.main",
+            borderRight: "1px solid",
+            borderColor: "#b9d7ff",
+          }}
+        >
+          <RemoveRoundedIcon sx={{ fontSize: 28 }} />
+        </IconButton>
+        <Typography
+          sx={{
+            display: "grid",
+            placeItems: "center",
+            fontSize: 26,
+            fontWeight: 700,
+          }}
+        >
+          {item.quantity}
+        </Typography>
+        <IconButton
+          aria-label={`Increase ${item.name} quantity`}
+          onClick={() => onQuantityChange(item.id, 1)}
+          sx={{
+            borderRadius: 0,
+            color: "primary.main",
+            borderLeft: "1px solid",
+            borderColor: "#b9d7ff",
+          }}
+        >
+          <AddRoundedIcon sx={{ fontSize: 30 }} />
+        </IconButton>
+      </Box>
+      <Box sx={{ textAlign: "right" }}>
+        <Typography sx={{ fontSize: 16, fontWeight: 700 }}>
+          {formatMoney(item.price)}
+        </Typography>
+        <Stack
+          direction="row"
+          justifyContent="flex-end"
+          alignItems="center"
+          spacing={0.5}
+          sx={{ color: "success.main", mt: 1.5, whiteSpace: "nowrap" }}
+        >
+          <SellOutlinedIcon sx={{ fontSize: 17 }} />
+          <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
+            {promotionText}
+          </Typography>
+        </Stack>
+        <Typography sx={{ fontSize: 15, color: "text.secondary", mt: 1.5 }}>
+          {formatMoney(subtotal)}
+        </Typography>
+      </Box>
+    </Box>
+  );
 }
 
-const desktopPaymentButtonSx = { minHeight: 42, textTransform: "none", fontWeight: 600, borderRadius: 1.5 };
-
-function DesktopTotal({ label, value, color = "text.primary", strong = false }) { return <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><Typography sx={{ fontWeight: strong ? 700 : 400 }}>{label}</Typography><Typography color={color} sx={{ fontSize: strong ? 20 : 16, fontWeight: strong ? 700 : 600 }}>{value}</Typography></Box>; }
-
-function SummaryRow({ label, value, strong = false, valueColor = "text.primary" }) {
+function DesktopTotal({
+  label,
+  value,
+  color = "text.primary",
+  strong = false,
+}) {
   return (
-    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", columnGap: 2, width: "100%" }}>
+    <Box
+      sx={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      }}
+    >
+      <Typography sx={{ fontWeight: strong ? 700 : 400 }}>{label}</Typography>
+      <Typography
+        color={color}
+        sx={{ fontSize: strong ? 20 : 16, fontWeight: strong ? 700 : 600 }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+function SummaryRow({
+  label,
+  value,
+  strong = false,
+  valueColor = "text.primary",
+}) {
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        alignItems: "center",
+        columnGap: 2,
+        width: "100%",
+      }}
+    >
       <Typography fontWeight={strong ? 700 : 400}>{label}</Typography>
-      <Typography color={valueColor} fontWeight={strong ? 700 : 500} sx={{ textAlign: "right" }}>{value}</Typography>
+      <Typography
+        color={valueColor}
+        fontWeight={strong ? 700 : 500}
+        sx={{ textAlign: "right" }}
+      >
+        {value}
+      </Typography>
     </Box>
   );
 }
 
 function PaymentButton({ label, icon, active, onClick }) {
   return (
-    <Button onClick={onClick} variant="outlined" sx={{ minWidth: 0, minHeight: 52, borderRadius: 1.5, borderColor: active ? "#1976d2" : "#d1d5db", bgcolor: active ? "#eaf3ff" : "#fff", color: active ? "#1976d2" : "#475569", textTransform: "none", fontSize: 11, px: 0.4, "&:hover": { borderColor: "#1976d2", bgcolor: "#f8fbff" } }}>
+    <Button
+      onClick={onClick}
+      variant="outlined"
+      sx={{
+        minWidth: 0,
+        minHeight: 52,
+        borderRadius: 1.5,
+        borderColor: active ? "#1976d2" : "#d1d5db",
+        bgcolor: active ? "#eaf3ff" : "#fff",
+        color: active ? "#1976d2" : "#475569",
+        textTransform: "none",
+        fontSize: 11,
+        px: 0.4,
+        "&:hover": { borderColor: "#1976d2", bgcolor: "#f8fbff" },
+      }}
+    >
       <Stack direction="column" alignItems="center" spacing={0.15}>
         {icon}
         <span>{label}</span>

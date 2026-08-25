@@ -20,8 +20,7 @@ import ShoppingCartCheckoutRoundedIcon from "@mui/icons-material/ShoppingCartChe
 import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
 import TrendingUpRoundedIcon from "@mui/icons-material/TrendingUpRounded";
 import { useNavigate } from "react-router";
-import { demoOrders, getDashboardSummary } from "../../data/dashboardData";
-import { usePosApi } from "../../hooks/useApiResource";
+import { useDashboardQuery } from "../../hooks/usePosQueries";
 
 const setupStorageKey = "pos:dashboard-setup-dismissed";
 const formatKyat = (amount) =>
@@ -94,38 +93,34 @@ function MetricCard({ label, value, color, borderColor }) {
 export default function HomePage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
-  const api = usePosApi();
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [dashboard, setDashboard] = useState(null);
+  const { data: dashboard, refetch } = useDashboardQuery();
   const [showSetup, setShowSetup] = useState(
     () => localStorage.getItem(setupStorageKey) !== "true",
   );
-  const fallbackSummary = getDashboardSummary();
   const summary = dashboard ? {
     todaySales: Number(dashboard.summary?.revenue || 0),
     todayExpense: Number(dashboard.summary?.operatingExpenses || 0),
     todayProfit: Number(dashboard.summary?.netProfit || 0),
     lowStockItems: dashboard.lowStock?.length || 0,
-  } : fallbackSummary;
+  } : {
+    todaySales: 0,
+    todayExpense: 0,
+    todayProfit: 0,
+    lowStockItems: 0,
+  };
   const orders = dashboard ? (dashboard.recentSales || []).map((order) => ({
     id: order.invoiceNumber || order.id,
     amount: Number(order.amount || 0),
     quantity: Number(order.itemCount || 0),
     paymentMethod: order.paymentMethod === "KBZ Pay" ? "KPay" : order.paymentMethod || "Cash",
-  })) : demoOrders;
+  })) : [];
 
   useEffect(() => {
-    const refreshDashboard = () => setRefreshKey((value) => value + 1);
+    const refreshDashboard = () => { void refetch(); };
     window.addEventListener("dashboard-refresh", refreshDashboard);
     return () =>
       window.removeEventListener("dashboard-refresh", refreshDashboard);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    api.dashboard().then((result) => { if (active) setDashboard(result); }).catch(() => { if (active) setDashboard(null); });
-    return () => { active = false; };
-  }, [api, refreshKey]);
+  }, [refetch]);
 
   const dismissSetup = () => {
     localStorage.setItem(setupStorageKey, "true");
@@ -149,10 +144,6 @@ export default function HomePage() {
       <Typography sx={{ color: "#7a7f87", fontSize: 16 }}>
         Good Evening
       </Typography>
-      <Typography variant="h5" fontWeight={800} sx={{ mt: 0.25 }}>
-        LI
-      </Typography>
-
       {showSetup && (
         <Card
           variant="outlined"
@@ -213,7 +204,7 @@ export default function HomePage() {
               <Button
                 variant="outlined"
                 startIcon={<AddRoundedIcon />}
-                onClick={() => navigate("/stock")}
+                onClick={() => navigate("/stock/add")}
                 sx={{
                   borderColor: "#b7d0e5",
                   color: "#1976d2",
@@ -231,7 +222,6 @@ export default function HomePage() {
       )}
 
       <Box
-        key={refreshKey}
         sx={{
           display: "grid",
           gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
@@ -294,7 +284,7 @@ export default function HomePage() {
           Create Order
         </Button>
         <Button
-          onClick={() => navigate("/stock")}
+          onClick={() => navigate("/stock/add")}
           sx={{
             minHeight: 138,
             flexDirection: "column",
@@ -323,7 +313,7 @@ export default function HomePage() {
           Recent Orders
         </Typography>
         <Button
-          onClick={() => navigate("/sale-record")}
+          onClick={() => navigate("/sale")}
           sx={{
             ml: "auto",
             color: "#1976d2",

@@ -20,6 +20,7 @@ export type MovementInput = {
   sourceId: string;
   idempotencyKey: string;
   reason?: string;
+  staffName?: string;
   occurredAt?: Date;
   locationId?: string;
   lotId?: string;
@@ -104,6 +105,7 @@ export async function recordInventoryMovement(tx: Tx, input: MovementInput) {
       sourceType: input.sourceType, sourceId: input.sourceId,
       idempotencyKey: input.idempotencyKey,
       ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.staffName ? { staffName: input.staffName } : {}),
       ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
     },
   });

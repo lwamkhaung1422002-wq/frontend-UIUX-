@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from "@mui/material";
@@ -6,6 +7,7 @@ import AppRouter from "./AppRouter";
 import { AppPreferenceContext } from "./context/AppPreferenceContext";
 import { AuthContext } from "./context/AuthContext";
 import { apiRequest } from "./lib/api";
+import { queryClient } from "./lib/queryClient";
 
 const sessionStorageKey = "pos:api-session";
 
@@ -23,6 +25,7 @@ export default function AppProvider() {
   const [session, setSession] = useState(readSession);
   const [authReady, setAuthReady] = useState(false);
   const [registrationPromptOpen, setRegistrationPromptOpen] = useState(false);
+  const previousShopId = useRef(session?.shop?.id);
   const setMode = useCallback((mode) => { setThemeMode(mode); localStorage.setItem("pos-theme-mode", mode); }, []);
   const setShop = useCallback((nextShop) => { setShopState(nextShop); localStorage.setItem("pos-shop-details", JSON.stringify(nextShop)); }, []);
   const saveSession = useCallback((nextSession) => {
@@ -31,6 +34,7 @@ export default function AppProvider() {
     if (nextSession.shop) setShop({ name: nextSession.shop.name, address: nextSession.shop.address || "", logo: nextSession.shop.logoUrl || "" });
   }, [setShop]);
   const logout = useCallback(() => {
+    queryClient.clear();
     setSession(null);
     localStorage.removeItem(sessionStorageKey);
   }, []);
@@ -70,8 +74,16 @@ export default function AppProvider() {
     restoreSession();
     return () => { active = false; };
   }, [logout, saveSession, session?.mode, session?.shop?.id, session?.token]);
+  useEffect(() => {
+    const nextShopId = session?.shop?.id;
+    if (previousShopId.current && nextShopId && previousShopId.current !== nextShopId) queryClient.clear();
+    previousShopId.current = nextShopId;
+  }, [session?.shop?.id]);
   const theme = useMemo(() => createTheme({ palette: { mode: themeMode, primary: { main: "#1976d2", dark: "#1565c0" }, background: { default: themeMode === "dark" ? "#101827" : "#f8fafc" } } }), [themeMode]);
-  const auth = useMemo(() => ({ session, user: session?.user || null, shop: session?.shop || null, token: session?.token || null, isGuest: session?.mode === "guest", isAuthenticated: Boolean(session?.token || session?.mode === "guest"), authReady, login, register, logout, continueAsGuest, requestRegistration: () => setRegistrationPromptOpen(true), selectShop: (nextShop) => saveSession({ ...session, shop: nextShop }) }), [session, authReady, login, register, logout, continueAsGuest, saveSession]);
+  const preferences = useMemo(() => ({ themeMode, setThemeMode: setMode, shop, setShop }), [themeMode, setMode, shop, setShop]);
+  const requestRegistration = useCallback(() => setRegistrationPromptOpen(true), []);
+  const selectShop = useCallback((nextShop) => saveSession({ ...session, shop: nextShop }), [saveSession, session]);
+  const auth = useMemo(() => ({ session, user: session?.user || null, shop: session?.shop || null, token: session?.token || null, isGuest: session?.mode === "guest", isAuthenticated: Boolean(session?.token || session?.mode === "guest"), authReady, login, register, logout, continueAsGuest, requestRegistration, selectShop }), [session, authReady, login, register, logout, continueAsGuest, requestRegistration, selectShop]);
   const guardGuestAction = (event) => {
     if (session?.mode !== "guest") return;
     const button = event.target.closest("button");
@@ -82,5 +94,5 @@ export default function AppProvider() {
       setRegistrationPromptOpen(true);
     }
   };
-  return <AppPreferenceContext.Provider value={{ themeMode, setThemeMode: setMode, shop, setShop }}><AuthContext.Provider value={auth}><ThemeProvider theme={theme}><CssBaseline /><div onClickCapture={guardGuestAction}><AppRouter /></div><Dialog open={registrationPromptOpen} onClose={() => setRegistrationPromptOpen(false)} fullWidth maxWidth="xs"><DialogTitle fontWeight={800}>Create an account to save</DialogTitle><DialogContent><Typography color="text.secondary">Guest mode lets you explore General POS. Create an account before saving stock, orders, payments, or other business records.</Typography></DialogContent><DialogActions sx={{ px: 3, py: 2 }}><Button onClick={() => setRegistrationPromptOpen(false)}>Continue exploring</Button><Button variant="contained" onClick={() => { window.location.assign("/register"); }}>Create account</Button></DialogActions></Dialog></ThemeProvider></AuthContext.Provider></AppPreferenceContext.Provider>;
+  return <QueryClientProvider client={queryClient}><AppPreferenceContext.Provider value={preferences}><AuthContext.Provider value={auth}><ThemeProvider theme={theme}><CssBaseline /><div onClickCapture={guardGuestAction}><AppRouter /></div><Dialog open={registrationPromptOpen} onClose={() => setRegistrationPromptOpen(false)} fullWidth maxWidth="xs"><DialogTitle fontWeight={800}>Create an account to save</DialogTitle><DialogContent><Typography color="text.secondary">Guest mode lets you explore General POS. Create an account before saving stock, orders, payments, or other business records.</Typography></DialogContent><DialogActions sx={{ px: 3, py: 2 }}><Button onClick={() => setRegistrationPromptOpen(false)}>Continue exploring</Button><Button variant="contained" onClick={() => { window.location.assign("/register"); }}>Create account</Button></DialogActions></Dialog></ThemeProvider></AuthContext.Provider></AppPreferenceContext.Provider></QueryClientProvider>;
 }

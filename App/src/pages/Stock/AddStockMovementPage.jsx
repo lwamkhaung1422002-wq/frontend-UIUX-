@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
   AppBar,
@@ -31,6 +32,8 @@ import StorefrontRoundedIcon from "@mui/icons-material/StorefrontRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { usePosApi } from "../../hooks/useApiResource";
 import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
+import { queryKeys } from "../../lib/queryKeys";
+import { useAuth } from "../../context/AuthContext";
 
 const money = (amount) => `${new Intl.NumberFormat("en-US", { minimumFractionDigits: 2 }).format(amount)} ကျပ်`;
 const fieldSx = {
@@ -45,6 +48,8 @@ const fieldSx = {
 export default function AddStockMovementPage() {
   const navigate = useNavigate();
   const api = usePosApi();
+  const { shop } = useAuth();
+  const queryClient = useQueryClient();
   const isMobile = useMediaQuery("(max-width:768px)");
   const [movementType, setMovementType] = useState("in");
   const [adjustmentType, setAdjustmentType] = useState("increase");
@@ -59,6 +64,7 @@ export default function AddStockMovementPage() {
   const [products, setProducts] = useState([]); const [batches, setBatches] = useState([]); const [scannerOpen, setScannerOpen] = useState(false);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState("");
+  const stockTotalsRef = useRef(new Map());
 
   useEffect(() => {
     let active = true;
@@ -72,22 +78,28 @@ export default function AddStockMovementPage() {
       return { ...firstPage, products: [firstPage, ...pages].flatMap((page) => page.products || []) };
     };
     setProductsLoading(true); setProductsError("");
-    Promise.all([loadAllActiveProducts(), api.inventory.list()]).then(([productResult, inventoryResult]) => {
-      if (!active) return;
-      const inventory = inventoryResult.inventory || [];
-      const totals = new Map();
-      const productById = new Map((productResult.products || []).map((item) => [item.id, item]));
-      inventory.forEach((batch) => {
-        totals.set(batch.productId, (totals.get(batch.productId) || 0) + Number(batch.quantity || 0));
-        // Include products already in inventory even when they are not returned by the active-catalog filter.
-        if (batch.product && !productById.has(batch.productId)) productById.set(batch.productId, batch.product);
-      });
-      setBatches(inventory);
-      setProducts(Array.from(productById.values()).map((item) => {
-        const barcodeValues = (item.barcodes || []).map((barcode) => barcode.value).filter(Boolean);
-        return { ...item, stock: totals.get(item.id) || 0, cost: item.cost ?? item.weightedCost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
-      }));
-    }).catch((error) => { if (active) setProductsError(error.message || "Unable to load products. Please try again."); }).finally(() => active && setProductsLoading(false)); return () => { active = false; };
+    loadAllActiveProducts()
+      .then((productResult) => {
+        if (!active) return;
+        setProducts((productResult.products || []).map((item) => {
+          const barcodeValues = (item.barcodes || []).map((barcode) => barcode.value).filter(Boolean);
+          return { ...item, stock: stockTotalsRef.current.get(item.id) || 0, cost: item.cost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
+        }));
+      })
+      .catch((error) => active && setProductsError(error.message || "Unable to load products. Please try again."))
+      .finally(() => active && setProductsLoading(false));
+    api.inventory.list()
+      .then((inventoryResult) => {
+        if (!active) return;
+        const inventory = inventoryResult.inventory || [];
+        const totals = new Map();
+        inventory.forEach((batch) => totals.set(batch.productId, (totals.get(batch.productId) || 0) + Number(batch.quantity || 0)));
+        stockTotalsRef.current = totals;
+        setBatches(inventory);
+        setProducts((current) => current.map((item) => ({ ...item, stock: totals.get(item.id) || 0 })));
+      })
+      .catch(() => { if (active) setBatches([]); });
+    return () => { active = false; };
   }, [api]);
 
   const filteredProducts = useMemo(() => {
@@ -109,7 +121,7 @@ export default function AddStockMovementPage() {
       .filter(Boolean)
       .some((candidate) => String(candidate).toLowerCase() === normalizedValue)) || null;
   };
-  const resolveProductCode = async (value) => { const code = String(value || "").trim(); if (!code) return; const localProduct = findProduct(code); if (localProduct) { selectProduct(localProduct); return; } try { const result = await api.pricing.barcodeLookup(code); const scannedProduct = products.find((item) => item.id === result.product?.id) || (result.known && result.product ? { ...result.product, stock: 0, barcode: result.barcode?.value || code, barcodeValues: [result.barcode?.value || code], icon: <Inventory2RoundedIcon />, color: "#1976d2" } : null); if (!scannedProduct) throw new Error("No active product was found for this code."); selectProduct(scannedProduct); } catch (error) { setProduct(null); setErrors((current) => ({ ...current, product: error.message || "No active product was found for this code." })); } };
+  const resolveProductCode = async (value) => { const code = String(value || "").trim(); if (!code) return; const localProduct = findProduct(code); if (localProduct) { selectProduct(localProduct); return; } try { const result = await api.pricing.barcodeLookup(code); if (!result.known) throw new Error(result.inactive ? "This barcode belongs to an archived product and cannot be used for Stock In." : "No active product was found for this code."); const scannedProduct = products.find((item) => item.id === result.product?.id) || (result.product ? { ...result.product, stock: 0, barcode: result.barcode?.value || code, barcodeValues: [result.barcode?.value || code], icon: <Inventory2RoundedIcon />, color: "#1976d2" } : null); if (!scannedProduct) throw new Error("No active product was found for this code."); selectProduct(scannedProduct); } catch (error) { setProduct(null); setErrors((current) => ({ ...current, product: error.message || "No active product was found for this code." })); } };
   const scanBarcode = () => setScannerOpen(true);
   const handleScan = async (value) => { setScannerOpen(false); await resolveProductCode(value); };
   const handleSearchKeyDown = (event) => { if (event.key !== "Enter") return; event.preventDefault(); void resolveProductCode(query); };
@@ -131,10 +143,10 @@ export default function AddStockMovementPage() {
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
-    try { if (movementType === "in") await api.inventory.create({ productId: product.id, quantity: Number(quantity), unitCost: Number(cost), note: notes.trim() }); else { const batch = batches.find((item) => item.productId === product.id); if (!batch) throw new Error("Add stock before recording an adjustment."); await api.inventory.adjust(batch.id, { action: adjustmentType === "increase" ? "ADD" : "SUB", quantity: Number(quantity), reason: notes.trim() }); } navigate("/stock/history"); } catch (error) { setErrors((current) => ({ ...current, submit: error.message || "Unable to save stock movement." })); }
+    try { if (movementType === "in") await api.inventory.create({ productId: product.id, quantity: Number(quantity), unitCost: Number(cost), note: notes.trim() }); else { const batch = batches.find((item) => item.productId === product.id); if (!batch) throw new Error("Add stock before recording an adjustment."); await api.inventory.adjust(batch.id, { action: adjustmentType === "increase" ? "ADD" : "SUB", quantity: Number(quantity), reason: notes.trim(), staffName: adjustedBy.trim() }); } await Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.movements(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }), queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] })]); navigate("/stock/history"); } catch (error) { setErrors((current) => ({ ...current, submit: error.message || "Unable to save stock movement." })); }
   };
 
-  if (!isMobile) return <><DesktopAddStockMovement movementType={movementType} setMovementType={setMovementType} adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} query={query} filteredProducts={filteredProducts} product={product} selectProduct={selectProduct} findProduct={findProduct} onProductInputChange={handleProductInputChange} onSearchKeyDown={handleSearchKeyDown} productsLoading={productsLoading} productsError={productsError} quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} supplier={supplier} setSupplier={setSupplier} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} onClose={() => navigate("/stock")} onSave={saveMovement} /><BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScan} /></>;
+  if (!isMobile) return <><DesktopAddStockMovement movementType={movementType} setMovementType={setMovementType} adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} query={query} filteredProducts={filteredProducts} activeProductCount={products.length} product={product} selectProduct={selectProduct} findProduct={findProduct} onProductInputChange={handleProductInputChange} onSearchKeyDown={handleSearchKeyDown} productsLoading={productsLoading} productsError={productsError} quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} supplier={supplier} setSupplier={setSupplier} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} onClose={() => navigate("/stock")} onSave={saveMovement} /><BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScan} /></>;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", pb: "128px", fontFamily: "Inter, Roboto, Noto Sans Myanmar, sans-serif" }}>
@@ -161,7 +173,7 @@ export default function AddStockMovementPage() {
             inputValue={query}
             onInputChange={handleProductInputChange}
             onChange={(_, value) => selectProduct(typeof value === "string" ? findProduct(value) : value)}
-            renderInput={(params) => <TextField {...params} placeholder={productsLoading ? "Loading products…" : "Search product or enter barcode"} disabled={productsLoading} error={Boolean(errors.product || productsError)} helperText={productsError || (typeof errors.product === "string" ? errors.product : errors.product ? "Select a product" : "")} onKeyDown={handleSearchKeyDown} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />}
+            renderInput={(params) => <TextField {...params} placeholder={productsLoading ? "Loading products…" : "Search product or enter barcode"} disabled={productsLoading} error={Boolean(errors.product || productsError)} helperText={productsError || (!productsLoading && products.length === 0 ? "No active products. Create a product first." : typeof errors.product === "string" ? errors.product : errors.product ? "Select a product" : "")} onKeyDown={handleSearchKeyDown} slotProps={{ input: { ...params.slotProps.input, startAdornment: <><InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>{params.slotProps.input.startAdornment}</>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps.input.endAdornment }, htmlInput: params.slotProps.htmlInput }} sx={{ ...fieldSx, mb: 0 }} />}
           />
 
         {product && <SelectedProduct product={product} onClear={() => selectProduct(null)} />}
@@ -187,11 +199,11 @@ export default function AddStockMovementPage() {
   );
 }
 
-function DesktopAddStockMovement({ movementType, setMovementType, adjustmentType, setAdjustmentType, query, filteredProducts, product, selectProduct, findProduct, onProductInputChange, onSearchKeyDown, productsLoading, productsError, quantity, setQuantity, cost, setCost, supplier, setSupplier, notes, setNotes, adjustedBy, setAdjustedBy, errors, onClose, onSave }) {
+function DesktopAddStockMovement({ movementType, setMovementType, adjustmentType, setAdjustmentType, query, filteredProducts, activeProductCount, product, selectProduct, findProduct, onProductInputChange, onSearchKeyDown, productsLoading, productsError, quantity, setQuantity, cost, setCost, supplier, setSupplier, notes, setNotes, adjustedBy, setAdjustedBy, errors, onClose, onSave }) {
   return <Dialog open fullWidth maxWidth="md" onClose={onClose} slotProps={{ paper: { sx: { maxWidth: 920, borderRadius: 3, maxHeight: "88vh" } } }}>
     <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><Box><Typography sx={{ fontSize: 22, fontWeight: 800 }}>Add Stock Movement</Typography><Typography color="text.secondary" sx={{ mt: .4, fontSize: 14 }}>Record stock in or an inventory adjustment.</Typography></Box><IconButton aria-label="Close stock movement" onClick={onClose}><CloseRoundedIcon /></IconButton></Box></DialogTitle>
     <DialogContent dividers sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 3 }}>
-      <Box><Typography sx={sectionLabelSx}>SELECT PRODUCT</Typography><Autocomplete freeSolo autoHighlight autoSelect openOnFocus options={filteredProducts} value={product} filterOptions={(options) => options} isOptionEqualToValue={(option, value) => option.id === value.id} getOptionLabel={(option) => typeof option === "string" ? option : option.name} inputValue={query} onInputChange={onProductInputChange} onChange={(_, value) => selectProduct(typeof value === "string" ? findProduct(value) : value)} renderInput={(params) => <TextField {...params} placeholder={productsLoading ? "Loading products…" : "Search product or enter barcode"} disabled={productsLoading} error={Boolean(errors.product || productsError)} helperText={productsError || (typeof errors.product === "string" ? errors.product : errors.product ? "Select a product" : "")} onKeyDown={onSearchKeyDown} slotProps={{ input: { ...params.slotProps?.input, startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps?.input?.endAdornment } }} sx={{ ...fieldSx, mb: 0 }} />} />
+      <Box><Typography sx={sectionLabelSx}>SELECT PRODUCT</Typography><Autocomplete freeSolo autoHighlight autoSelect openOnFocus options={filteredProducts} value={product} filterOptions={(options) => options} isOptionEqualToValue={(option, value) => option.id === value.id} getOptionLabel={(option) => typeof option === "string" ? option : option.name} inputValue={query} onInputChange={onProductInputChange} onChange={(_, value) => selectProduct(typeof value === "string" ? findProduct(value) : value)} renderInput={(params) => <TextField {...params} placeholder={productsLoading ? "Loading products…" : "Search product or enter barcode"} disabled={productsLoading} error={Boolean(errors.product || productsError)} helperText={productsError || (!productsLoading && activeProductCount === 0 ? "No active products. Create a product first." : typeof errors.product === "string" ? errors.product : errors.product ? "Select a product" : "")} onKeyDown={onSearchKeyDown} slotProps={{ input: { ...params.slotProps.input, startAdornment: <><InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>{params.slotProps.input.startAdornment}</>, endAdornment: product ? <InputAdornment position="end"><IconButton aria-label="Clear selected product" onClick={() => selectProduct(null)}><CloseRoundedIcon /></IconButton></InputAdornment> : params.slotProps.input.endAdornment }, htmlInput: params.slotProps.htmlInput }} sx={{ ...fieldSx, mb: 0 }} />} />
         {product && <SelectedProduct product={product} onClear={() => selectProduct(null)} />}
         <Typography sx={{ ...sectionLabelSx, mt: 3 }}>MOVEMENT DETAILS</Typography><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mb: 2 }}><MovementButton active={movementType === "in"} onClick={() => setMovementType("in")} icon={<AddCircleOutlineRoundedIcon />} label="Stock IN" tone="success" /><MovementButton active={movementType === "adjustment"} onClick={() => setMovementType("adjustment")} icon={<Inventory2RoundedIcon />} label="Adjustment" tone="primary" /></Box>
       </Box>

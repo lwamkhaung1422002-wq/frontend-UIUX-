@@ -518,8 +518,8 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/receive", async (request, r
           ...(input.note ? { reason: input.note } : {}),
           ...(input.receivedAt ? { occurredAt: input.receivedAt } : {}),
         });
-        if (lotId && movement) await tx.inventoryMovement.update({ where: { id: movement.id }, data: { lotId } });
-        await refreshProductWeightedCost(tx, shopId, line.productId);
+        const averageCost = await refreshProductWeightedCost(tx, shopId, line.productId);
+        if (movement) await tx.inventoryMovement.update({ where: { id: movement.id }, data: { ...(lotId ? { lotId } : {}), averageCostAfter: averageCost } });
       }
       const fullyReceived = purchase.items.every((line) =>
         receivedItemBaseQuantity(line)

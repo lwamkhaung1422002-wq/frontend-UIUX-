@@ -24,6 +24,7 @@ import { capabilityInventoryRouter } from "./routes/capability-inventory.routes.
 import { advancedCapabilitiesRouter } from "./routes/advanced-capabilities.routes.js";
 import { auditRouter } from "./routes/audit.routes.js";
 import { pricingRouter } from "./routes/pricing.routes.js";
+import { productReportsRouter } from "./routes/product-reports.routes.js";
 import { requestContext } from "./middleware/request-context.middleware.js";
 
 export const app = express();
@@ -90,6 +91,7 @@ app.use("/shops", capabilityInventoryRouter);
 app.use("/shops", advancedCapabilitiesRouter);
 app.use("/shops", auditRouter);
 app.use("/shops", pricingRouter);
+app.use("/shops", productReportsRouter);
 app.use("/shops", shopSettingsRouter);
 app.use("/shops", customersRouter);
 app.use("/shops", categoriesRouter);

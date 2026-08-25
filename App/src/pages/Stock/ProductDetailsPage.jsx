@@ -6,6 +6,9 @@ import {
   Card,
   CardContent,
   CircularProgress,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   IconButton,
   LinearProgress,
   Toolbar,
@@ -16,6 +19,7 @@ import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
+import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
 import { DesktopPage, DesktopPanel, DesktopStat } from "../../components/Desktop/DesktopUI";
 import { usePosApi } from "../../hooks/useApiResource";
 
@@ -31,6 +35,24 @@ export default function ProductDetailsPage() {
   const [product, setProduct] = useState(null);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [costHistoryOpen, setCostHistoryOpen] = useState(false);
+  const [costHistory, setCostHistory] = useState([]);
+  const [costHistoryError, setCostHistoryError] = useState("");
+  const [costHistoryLoading, setCostHistoryLoading] = useState(false);
+
+  const openCostHistory = async () => {
+    setCostHistoryOpen(true);
+    setCostHistoryLoading(true);
+    setCostHistoryError("");
+    try {
+      const result = await api.products.costHistory(productId);
+      setCostHistory(result.history || []);
+    } catch (requestError) {
+      setCostHistoryError(requestError.message || "Unable to load cost price history.");
+    } finally {
+      setCostHistoryLoading(false);
+    }
+  };
 
   const removeProduct = async () => {
     if (!window.confirm("Remove this product? This cannot be undone from the active product list.")) return;
@@ -107,7 +129,7 @@ export default function ProductDetailsPage() {
   const stockHealth = Math.min(100, Math.round((product.stock / Math.max(product.minimumStock, 1)) * 100));
 
   if (!isMobile) {
-    return <DesktopProductDetails product={product} productId={productId} profit={profit} profitPercent={profitPercent} stockHealth={stockHealth} navigate={navigate} />;
+    return <><DesktopProductDetails product={product} productId={productId} profit={profit} profitPercent={profitPercent} stockHealth={stockHealth} navigate={navigate} onOpenCostHistory={openCostHistory} /><CostHistoryDialog open={costHistoryOpen} onClose={() => setCostHistoryOpen(false)} history={costHistory} loading={costHistoryLoading} error={costHistoryError} /></>;
   }
 
   return (
@@ -147,7 +169,7 @@ export default function ProductDetailsPage() {
         <Card sx={cardSx}>
           <CardContent sx={{ p: 3.5, "&:last-child": { pb: 3.5 } }}>
             <Box sx={{ display: "grid", gap: 2.25 }}>
-              <DetailRow label="Cost Price" value={formatMoney(product.cost)} emphasis />
+              <DetailRow label="Cost Price" value={formatMoney(product.cost)} emphasis action={<IconButton aria-label="View cost price history" onClick={openCostHistory} size="small"><ReceiptLongOutlinedIcon fontSize="small" /></IconButton>} />
               <DetailRow label="Selling Price" value={formatMoney(product.price)} emphasis />
             </Box>
             <Box sx={{ mt: 3.5, p: 2.75, border: 1, borderColor: "success.light", borderRadius: 2.25, bgcolor: "#f0f9f1", display: "grid", gap: 2 }}>
@@ -175,12 +197,13 @@ export default function ProductDetailsPage() {
 
         <MovementPanel product={product} navigate={navigate} />
       </Box>
+      <CostHistoryDialog open={costHistoryOpen} onClose={() => setCostHistoryOpen(false)} history={costHistory} loading={costHistoryLoading} error={costHistoryError} />
     </Box>
   );
 }
 
-function DesktopProductDetails({ product, productId, profit, profitPercent, stockHealth, navigate }) {
-  return <DesktopPage title={product.name} subtitle="Product details, pricing, and current stock." actionLabel="Edit Product" onAction={() => navigate(`/stock/add?edit=${productId}`)} actionIcon={<EditRoundedIcon />}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.75fr) minmax(0, 1.25fr)", gap: 3 }}><DesktopPanel><Box sx={{ width: 260, height: 260, mx: "auto", display: "grid", placeItems: "center", bgcolor: "#f2f2f2", color: "#666", borderRadius: 3, "& .MuiSvgIcon-root": { fontSize: 110 } }}>{product.icon}</Box><Typography align="center" sx={{ fontSize: 28, fontWeight: 700, mt: 2.5 }}>{product.name}</Typography><Box sx={{ display: "grid", gap: 1.5, mt: 3 }}><DesktopDetail label="Description" value={product.description} muted={product.description === "Not set"} /><DesktopDetail label="SKU" value={product.sku} muted={product.sku === "Not set"} /><DesktopDetail label="Barcode" value={product.barcode} muted={product.barcode === "Not set"} /><DesktopDetail label="Item Code" value={product.itemCode} muted={product.itemCode === "Not set"} /><DesktopDetail label="Category" value={product.category} /><DesktopDetail label="Created" value={product.created} /><DesktopDetail label="Updated" value={product.updated} /></Box></DesktopPanel><Box sx={{ display: "grid", gap: 3, alignContent: "start" }}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2.25 }}><DesktopStat label="Cost Price" value={formatMoney(product.cost)} /><DesktopStat label="Selling Price" value={formatMoney(product.price)} color="primary.main" /></Box><DesktopPanel><Typography sx={{ fontSize: 19, fontWeight: 700, mb: 2 }}>Profitability</Typography><Box sx={{ p: 2.5, borderRadius: 2.5, bgcolor: "#f0f9f1", border: "1px solid", borderColor: "success.light", display: "grid", gap: 1.5 }}><DesktopDetail label="Profit Margin" value={formatMoney(profit)} color="success.main" /><DesktopDetail label="Profit %" value={`${profitPercent.toFixed(1)}%`} color="success.main" /></Box></DesktopPanel><DesktopPanel><Box sx={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 3, alignItems: "center" }}><Box sx={{ p: 3, borderRadius: 2.5, bgcolor: "#eaf3ff", textAlign: "center" }}><Typography color="text.secondary">Current Stock</Typography><Typography color="primary.main" sx={{ fontSize: 36, fontWeight: 700, mt: 1 }}>{product.stock} pcs</Typography></Box><Box><DesktopDetail label="Min Stock Alert" value={`${product.minimumStock} pcs`} /><Box sx={{ mt: 2.5 }}><DesktopDetail label="Stock Health" value={`${stockHealth}%`} color="success.main" /><LinearProgress variant="determinate" value={stockHealth} color="success" sx={{ mt: 1.25, height: 10, borderRadius: 99 }} /></Box></Box></Box></DesktopPanel><MovementPanel product={product} navigate={navigate} desktop /></Box></Box></DesktopPage>;
+function DesktopProductDetails({ product, productId, profit, profitPercent, stockHealth, navigate, onOpenCostHistory }) {
+  return <DesktopPage title={product.name} subtitle="Product details, pricing, and current stock." actionLabel="Edit Product" onAction={() => navigate(`/stock/add?edit=${productId}`)} actionIcon={<EditRoundedIcon />}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(360px, 0.75fr) minmax(0, 1.25fr)", gap: 3 }}><DesktopPanel><Box sx={{ width: 260, height: 260, mx: "auto", display: "grid", placeItems: "center", bgcolor: "#f2f2f2", color: "#666", borderRadius: 3, "& .MuiSvgIcon-root": { fontSize: 110 } }}>{product.icon}</Box><Typography align="center" sx={{ fontSize: 28, fontWeight: 700, mt: 2.5 }}>{product.name}</Typography><Box sx={{ display: "grid", gap: 1.5, mt: 3 }}><DesktopDetail label="Description" value={product.description} muted={product.description === "Not set"} /><DesktopDetail label="SKU" value={product.sku} muted={product.sku === "Not set"} /><DesktopDetail label="Barcode" value={product.barcode} muted={product.barcode === "Not set"} /><DesktopDetail label="Item Code" value={product.itemCode} muted={product.itemCode === "Not set"} /><DesktopDetail label="Category" value={product.category} /><DesktopDetail label="Created" value={product.created} /><DesktopDetail label="Updated" value={product.updated} /></Box></DesktopPanel><Box sx={{ display: "grid", gap: 3, alignContent: "start" }}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2.25 }}><DesktopStat label="Cost Price" value={formatMoney(product.cost)} action={<IconButton aria-label="View cost price history" onClick={onOpenCostHistory} size="small"><ReceiptLongOutlinedIcon fontSize="small" /></IconButton>} /><DesktopStat label="Selling Price" value={formatMoney(product.price)} color="primary.main" /></Box><DesktopPanel><Typography sx={{ fontSize: 19, fontWeight: 700, mb: 2 }}>Profitability</Typography><Box sx={{ p: 2.5, borderRadius: 2.5, bgcolor: "#f0f9f1", border: "1px solid", borderColor: "success.light", display: "grid", gap: 1.5 }}><DesktopDetail label="Profit Margin" value={formatMoney(profit)} color="success.main" /><DesktopDetail label="Profit %" value={`${profitPercent.toFixed(1)}%`} color="success.main" /></Box></DesktopPanel><DesktopPanel><Box sx={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 3, alignItems: "center" }}><Box sx={{ p: 3, borderRadius: 2.5, bgcolor: "#eaf3ff", textAlign: "center" }}><Typography color="text.secondary">Current Stock</Typography><Typography color="primary.main" sx={{ fontSize: 36, fontWeight: 700, mt: 1 }}>{product.stock} pcs</Typography></Box><Box><DesktopDetail label="Min Stock Alert" value={`${product.minimumStock} pcs`} /><Box sx={{ mt: 2.5 }}><DesktopDetail label="Stock Health" value={`${stockHealth}%`} color="success.main" /><LinearProgress variant="determinate" value={stockHealth} color="success" sx={{ mt: 1.25, height: 10, borderRadius: 99 }} /></Box></Box></Box></DesktopPanel><MovementPanel product={product} navigate={navigate} desktop /></Box></Box></DesktopPage>;
 }
 
 function MovementPanel({ product, navigate, desktop = false }) {
@@ -193,8 +216,13 @@ function DesktopDetail({ label, value, muted, color = "text.primary" }) { return
 
 function ProductImage({ product }) { return <Box sx={{ display: "grid", placeItems: "center", width: "min(78vw, 320px)", height: "min(78vw, 320px)", mx: "auto", mb: 3.5, borderRadius: 3, bgcolor: "#f2f2f2", color: "#666", "& .MuiSvgIcon-root": { fontSize: 112 } }}>{product.icon}</Box>; }
 
-function DetailRow({ label, value, muted = false, emphasis = false, valueColor = "text.primary" }) { return <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 2, alignItems: "baseline" }}><Typography color="text.secondary" sx={{ fontSize: 18, lineHeight: 1.3 }}>{label}</Typography><Typography color={muted ? "text.disabled" : valueColor} sx={{ fontSize: emphasis ? 21 : 18, fontWeight: emphasis ? 700 : 600, textAlign: "right", lineHeight: 1.3 }}>{value}</Typography></Box>; }
+function DetailRow({ label, value, muted = false, emphasis = false, valueColor = "text.primary", action }) { return <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 1, alignItems: "center" }}><Typography color="text.secondary" sx={{ fontSize: 18, lineHeight: 1.3 }}>{label}</Typography><Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: .5 }}><Typography color={muted ? "text.disabled" : valueColor} sx={{ fontSize: emphasis ? 21 : 18, fontWeight: emphasis ? 700 : 600, textAlign: "right", lineHeight: 1.3 }}>{value}</Typography>{action}</Box></Box>; }
 
 function ProductNotFound({ message, navigate }) { return <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3, textAlign: "center" }}><Box><Typography variant="h6" fontWeight={700}>Product not found</Typography><Typography color="text.secondary" sx={{ mt: 1 }}>{message}</Typography><IconButton onClick={() => navigate("/stock")} sx={{ mt: 2 }}><ArrowBackRoundedIcon /></IconButton></Box></Box>; }
+
+function CostHistoryDialog({ open, onClose, history, loading, error }) {
+  const gridSx = { display: "grid", gridTemplateColumns: "1fr .62fr .86fr .86fr 1fr", gap: 1, alignItems: "center" };
+  return <Dialog open={open} onClose={onClose} fullWidth maxWidth="md"><DialogTitle sx={{ fontWeight: 700 }}>Cost Price History</DialogTitle><DialogContent dividers>{loading && <Box sx={{ py: 4, display: "grid", placeItems: "center" }}><CircularProgress size={28} /></Box>}{error && <Typography color="error">{error}</Typography>}{!loading && !error && history.length === 0 && <Typography color="text.secondary">No stock-in cost records yet.</Typography>}{!loading && !error && history.length > 0 && <><Box sx={{ ...gridSx, pb: 1, borderBottom: "1px solid", borderColor: "divider" }}><Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700 }}>DATE</Typography><Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700 }}>STOCK IN</Typography><Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700 }}>UNIT COST</Typography><Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700 }}>AVG COST</Typography><Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700 }}>SOURCE</Typography></Box>{history.map((entry) => <Box key={entry.id} sx={{ ...gridSx, py: 1.5, borderBottom: "1px solid", borderColor: "divider", "&:last-child": { borderBottom: 0 } }}><Typography sx={{ fontWeight: 700, fontSize: 14 }}>{formatDate(entry.date)}</Typography><Typography sx={{ fontSize: 14 }}>+{Number(entry.stockIn)} pcs</Typography><Typography sx={{ fontSize: 14 }}>{formatMoney(entry.unitCost)}</Typography><Typography sx={{ fontSize: 14, fontWeight: 700 }}>{entry.averageCost === null ? "—" : formatMoney(entry.averageCost)}</Typography><Typography color="text.secondary" sx={{ fontSize: 14 }}>{entry.source}</Typography></Box>)}</>}</DialogContent></Dialog>;
+}
 
 const cardSx = { borderRadius: 3, bgcolor: "background.paper", boxShadow: "0 4px 12px rgba(15,23,42,0.16)" };

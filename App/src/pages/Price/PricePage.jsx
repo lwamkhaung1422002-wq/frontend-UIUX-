@@ -15,24 +15,9 @@ import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SpaOutlinedIcon from "@mui/icons-material/SpaOutlined";
 import LocalDrinkOutlinedIcon from "@mui/icons-material/LocalDrinkOutlined";
 import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
-
-const products = [
-  { id: "jasmine", name: "Jasmine Perfume", code: "JAS-001", cost: 2900, price: 3500, promotion: true, start: "2026-08-01", end: "2026-08-31" },
-  { id: "nivea", name: "Nivea Roll On", code: "NIV-002", cost: 5800, price: 6500, promotion: false },
-  { id: "coke", name: "Coca-Cola 330ml", code: "COC-003", cost: 800, price: 1000, promotion: true, start: "2026-08-01", end: "2026-08-15" },
-];
-const desktopProducts = [
-  { id: "jasmine", name: "Jasmine Perfume", code: "JAS-001", cost: 2900, price: 3500, icon: "spa", color: "#f7d8e4", reason: "New supplier cost" },
-  { id: "nivea", name: "Nivea Roll On", code: "NIV-002", cost: 5800, price: 6500, icon: "care", color: "#d9e8ff", reason: "Market price increased" },
-  { id: "coke", name: "Coca-Cola 330ml", code: "COC-003", cost: 800, price: 1000, icon: "drink", color: "#ffe0de", promotion: true, reason: "Seasonal promotion" },
-  { id: "water", name: "Water Bottle 600ml", code: "WTR-004", cost: 450, price: 600, icon: "water", color: "#d9f0ff", reason: "Standard margin" },
-  { id: "dettol", name: "Dettol Soap 125g", code: "DET-005", cost: 1200, price: 1500, icon: "box", color: "#e0f5dd", reason: "New selling price" },
-  { id: "cellox", name: "Cellox Facial Tissue", code: "CEL-006", cost: 980, price: 1200, icon: "box", color: "#ffe4ef", reason: "Supplier price update" },
-  { id: "sun", name: "Nivea Sun Protect", code: "NIV-007", cost: 6800, price: 7900, icon: "care", color: "#fff1ba", promotion: true, reason: "Summer promotion" },
-  { id: "oreo", name: "Oreo Biscuit 137g", code: "ORE-008", cost: 1100, price: 1400, icon: "box", color: "#dce8ff", reason: "Standard margin" },
-  { id: "lux", name: "Lux Body Wash 250ml", code: "LUX-009", cost: 3400, price: 4200, icon: "spa", color: "#eee0ff", reason: "New supplier cost" },
-  { id: "lays", name: "Lay's Potato Chips", code: "LAY-010", cost: 900, price: 1200, icon: "box", color: "#e7f7cf", promotion: true, reason: "Promotion pricing" },
-];
+import { useCategoriesQuery, useProductsQuery, usePromotionCampaignsQuery } from "../../hooks/usePosQueries";
+import { usePosApi } from "../../hooks/useApiResource";
+import { useQueryClient } from "@tanstack/react-query";
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
 export default function PricePage() {
@@ -45,7 +30,12 @@ export default function PricePage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [desktopDialog, setDesktopDialog] = useState("");
-  const sourceProducts = mobile ? products : desktopProducts;
+  const { data: productResult } = useProductsQuery({ status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" });
+  const { data: categoryResult } = useCategoriesQuery();
+  const { data: campaignResult } = usePromotionCampaignsQuery();
+  const catalog = useMemo(() => (productResult?.products || []).map((product) => ({ ...product, code: product.sku || product.barcodes?.[0]?.value || "", cost: Number(product.cost || 0), price: Number(product.price || 0), start: product.createdAt, icon: "box", color: "#eaf3ff" })), [productResult]);
+  const promotionRows = useMemo(() => (campaignResult?.campaigns || []).map((campaign) => { const sample = campaign.sampleProduct || {}; const first = campaign.promotions?.[0] || {}; return { id: campaign.id, name: campaign.name, code: sample.sku || "", cost: Number(sample.cost || 0), price: Number(sample.price || 0), promotion: true, start: first.startsAt, end: first.endsAt, reason: first.reason || "", icon: "box", color: "#e5f5e8" }; }), [campaignResult]);
+  const sourceProducts = tab === "promotion" ? promotionRows : catalog;
   const visible = useMemo(() => sourceProducts.filter((product) => {
     const query = search.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
@@ -57,7 +47,7 @@ export default function PricePage() {
   }), [dateMode, from, search, sourceProducts, tab, to]);
   const total = visible.reduce((sum, product) => sum + product.price, 0);
 
-  if (!mobile) return <DesktopPricePromotion tab={tab} setTab={setTab} search={search} setSearch={setSearch} products={visible} total={total} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} dialog={desktopDialog} setDialog={setDesktopDialog} />;
+  if (!mobile) return <DesktopPricePromotion tab={tab} setTab={setTab} search={search} setSearch={setSearch} products={visible} catalog={catalog} categories={categoryResult?.categories || []} total={total} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} dialog={desktopDialog} setDialog={setDesktopDialog} />;
   return <Box sx={{ minHeight: "100dvh", pb: "104px", bgcolor: "#fff", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <Box sx={barSx}><IconButton aria-label="Back to settings" onClick={() => navigate("/settings")} sx={barIconSx}><ArrowBackRoundedIcon sx={{ fontSize: 32 }} /></IconButton><Typography align="center" sx={{ fontSize: 22, fontWeight: 700 }}>Price &amp; Promotion</Typography><IconButton aria-label="Filter prices and promotions" onClick={() => setFilterOpen(true)} sx={barIconSx}><FilterAltOutlinedIcon sx={{ fontSize: 30 }} /></IconButton></Box>
     <Box sx={{ px: 2.5, pt: 2 }}>
@@ -86,7 +76,7 @@ function ProductCard({ product, promotion, onEdit }) {
 }
 function Metric({ label, value }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>{label}</Typography><Typography sx={{ mt: 0.5, fontSize: 17, fontWeight: 600 }}>{value}</Typography></Box>; }
 
-function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visibleProducts, total, dateMode, setDateMode, from, setFrom, to, setTo, dialog, setDialog }) {
+function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visibleProducts, catalog, categories, total, dateMode, setDateMode, from, setFrom, to, setTo, dialog, setDialog }) {
   const tabLabel = tab === "price" ? "Products" : "Promotions";
   const closeDialog = () => setDialog("");
   return <Paper sx={desktopPricePageSx}>
@@ -107,7 +97,7 @@ function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visib
     </Box>
     <Box sx={desktopProductGridSx}>{visibleProducts.map((product) => <DesktopProductCard key={product.id} product={product} promotion={tab === "promotion"} onEdit={() => setDialog(tab === "promotion" ? "promotion" : "price")} />)}</Box>
     {!visibleProducts.length && <Typography align="center" color="text.secondary" sx={{ py: 8 }}>No {tabLabel.toLowerCase()} found.</Typography>}
-    <DesktopPriceDialog type={dialog} onClose={closeDialog} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} />
+    <DesktopPriceDialog type={dialog} onClose={closeDialog} products={catalog} categories={categories} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} />
   </Paper>;
 }
 
@@ -139,23 +129,25 @@ function ProductArtwork({ product }) {
 
 function DesktopPriceMetric({ label, value }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 11.5, lineHeight: 1.2 }}>{label}</Typography><Typography sx={{ mt: .3, fontSize: 14, lineHeight: 1.25, fontWeight: 700 }}>{value}</Typography></Box>; }
 
-function DesktopPriceDialog({ type, onClose, dateMode, setDateMode, from, setFrom, to, setTo }) {
+function DesktopPriceDialog({ type, onClose, products, categories, dateMode, setDateMode, from, setFrom, to, setTo }) {
   const isDate = type === "date";
   const isHistory = type === "history";
   const isPromotion = type === "promotion";
   const isPrice = type === "price";
   return <Dialog open={Boolean(type)} onClose={onClose} fullWidth maxWidth={isHistory ? "md" : "sm"} slotProps={{ paper: { sx: { borderRadius: 2.5, m: 2.5, maxHeight: "calc(100vh - 40px)" } } }}>
     {isDate && <DialogContent sx={desktopDialogContentSx}><Box sx={desktopDialogTitleSx}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>Date and time</Typography><IconButton aria-label="Close date filter" onClick={onClose}><CloseRoundedIcon /></IconButton></Box><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1.25 }}><DesktopDateChoice label="All" active={dateMode === "all"} onClick={() => setDateMode("all")} /><DesktopDateChoice label="Today" active={dateMode === "today"} onClick={() => setDateMode("today")} /><DesktopDateChoice label="Custom" active={dateMode === "custom"} onClick={() => setDateMode("custom")} /></Box>{dateMode === "custom" && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 2 }}><TextField label="From date" type="date" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="To date" type="date" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /></Box>}<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1.25, mt: 3 }}><Button onClick={() => { setDateMode("all"); setFrom(""); setTo(""); }} sx={desktopTextButtonSx}>Reset</Button><Button variant="contained" onClick={onClose} sx={desktopModalButtonSx}>Apply</Button></Box></DialogContent>}
-    {(isPrice || isPromotion) && <DesktopPriceForm promotion={isPromotion} onClose={onClose} />}
+    {(isPrice || isPromotion) && <DesktopPriceForm products={products} categories={categories} promotion={isPromotion} onClose={onClose} />}
     {isHistory && <DesktopPriceHistory onClose={onClose} />}
   </Dialog>;
 }
 
 function DesktopDateChoice({ label, active, onClick }) { return <Button onClick={onClick} variant={active ? "contained" : "outlined"} sx={{ minHeight: 48, borderRadius: 1.5, textTransform: "none", fontWeight: 700 }}>{label}</Button>; }
 
-function DesktopPriceForm({ promotion, onClose }) {
+function DesktopPriceForm({ products, categories, promotion, onClose }) {
+  const api = usePosApi();
+  const queryClient = useQueryClient();
   const [scope, setScope] = useState("all");
-  const [category, setCategory] = useState("Beauty");
+  const [category, setCategory] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [percentage, setPercentage] = useState("");
@@ -164,25 +156,43 @@ function DesktopPriceForm({ promotion, onClose }) {
   const [promotionName, setPromotionName] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const selected = desktopProducts.find((product) => product.id === selectedId);
-  const results = desktopProducts.filter((product) => !query || [product.name, product.code].some((value) => value.toLowerCase().includes(query.toLowerCase())));
+  const [submitError, setSubmitError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const selected = products.find((product) => product.id === selectedId);
+  const results = products.filter((product) => !query || [product.name, product.code].some((value) => value.toLowerCase().includes(query.toLowerCase())));
   const updatePercentage = (value) => { setPercentage(value.replace(/[^0-9.]/g, "")); setManualPrice(""); };
   const updateManualPrice = (value) => { setManualPrice(value.replace(/[^0-9]/g, "")); setPercentage(""); };
   const calculated = selected && percentage ? Math.round((promotion ? selected.price * (1 - Number(percentage) / 100) : selected.cost * (1 + Number(percentage) / 100))) : "";
   const shownPrice = manualPrice || (calculated ? String(calculated) : "");
   const manualPercentage = selected && manualPrice ? (promotion ? ((selected.price - Number(manualPrice)) / selected.price) * 100 : ((Number(manualPrice) - selected.cost) / selected.cost) * 100) : null;
   const shownPercentage = manualPercentage !== null && Number.isFinite(manualPercentage) ? manualPercentage.toFixed(1) : percentage;
+  const submit = async () => {
+    if (!reason.trim() || (!promotion && !shownPrice && !percentage) || (promotion && (!promotionName.trim() || !start || !end || !percentage))) { setSubmitError("Complete the required fields before saving."); return; }
+    if (scope === "individual" && !selectedId) { setSubmitError("Select a product."); return; }
+    if (scope === "category" && !category) { setSubmitError("Select a category."); return; }
+    setSaving(true); setSubmitError("");
+    try {
+      if (promotion) {
+        await api.pricing.createPromotionCampaign({ name: promotionName.trim(), scope: scope === "individual" ? "PRODUCT" : scope.toUpperCase(), ...(scope === "individual" ? { productId: selectedId } : scope === "category" ? { categoryId: category } : {}), type: "PERCENTAGE", value: Number(percentage), startsAt: start, endsAt: end, state: "SCHEDULED", reason: reason.trim(), timeZone: "Asia/Yangon" });
+      } else if (scope === "individual") {
+        await api.pricing.createPrice({ productId: selectedId, unitPrice: Number(shownPrice), effectiveFrom: new Date().toISOString(), reason: reason.trim() });
+      } else {
+        await api.pricing.bulkPrices({ scope: scope.toUpperCase(), ...(scope === "category" ? { categoryId: category } : {}), marginPercent: Number(percentage), reason: reason.trim() });
+      }
+      await queryClient.invalidateQueries(); onClose();
+    } catch (error) { setSubmitError(error.message || "Unable to save pricing."); } finally { setSaving(false); }
+  };
   return <DialogContent sx={desktopDialogContentSx}>
     <Box sx={desktopDialogTitleSx}><Box><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{promotion ? "Add Promotion" : "Add Price"}</Typography><Typography color="text.secondary" sx={{ mt: .35, fontSize: 13 }}>{promotion ? "Set a discount price and promotion period." : "Set a selling price and margin."}</Typography></Box><IconButton aria-label="Close dialog" onClick={onClose}><CloseRoundedIcon /></IconButton></Box>
     <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1 }}>Apply {promotion ? "promotion" : "price"} to</Typography>
     <Paper variant="outlined" sx={{ p: .75, borderRadius: 1.75 }}><RadioGroup row value={scope} onChange={(event) => { setScope(event.target.value); if (event.target.value !== "individual") setSelectedId(""); }} sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}><DesktopScope value="individual" label="Individual" /><DesktopScope value="category" label="Category" /><DesktopScope value="all" label="All" /></RadioGroup></Paper>
-    {scope === "category" && <FormControl fullWidth sx={{ mt: 2 }}><InputLabel>Select category</InputLabel><Select label="Select category" value={category} onChange={(event) => setCategory(event.target.value)}><MenuItem value="Beauty">Beauty</MenuItem><MenuItem value="Drinks">Drinks</MenuItem><MenuItem value="Household">Household</MenuItem></Select></FormControl>}
+    {scope === "category" && <FormControl fullWidth sx={{ mt: 2 }}><InputLabel>Select category</InputLabel><Select label="Select category" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</Select></FormControl>}
     {scope === "individual" && <><TextField fullWidth value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search product by name or barcode" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment> } }} sx={{ mt: 2 }} /><Paper variant="outlined" sx={{ mt: 1, borderRadius: 1.5, overflow: "hidden", maxHeight: 170, overflowY: "auto" }}>{results.map((product, index) => <Box key={product.id} onClick={() => setSelectedId(product.id)} sx={{ px: 1.75, py: 1.2, cursor: "pointer", bgcolor: selectedId === product.id ? "#eaf3ff" : "background.paper" }}><Typography sx={{ fontSize: 14, fontWeight: 700 }}>{product.name} <Box component="span" sx={{ color: "text.secondary", fontWeight: 400 }}>· {product.code}</Box></Typography>{index < results.length - 1 && <Divider sx={{ mt: 1.15 }} />}</Box>)}</Paper></>}
     {promotion && <><TextField fullWidth label="Promotion name" value={promotionName} onChange={(event) => setPromotionName(event.target.value)} placeholder="e.g. August discount" sx={{ mt: 2 }} /><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 1.5 }}><TextField label="Start date" type="date" value={start} onChange={(event) => setStart(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="End date" type="date" value={end} onChange={(event) => setEnd(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /></Box></>}
     {selected && <Paper variant="outlined" sx={{ mt: 2, p: 1.5, borderRadius: 1.5 }}><Typography sx={{ fontSize: 15, fontWeight: 700 }}>{selected.name}</Typography><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", columnGap: 1.5, mt: 1.25 }}><DesktopPriceMetric label={promotion ? "Current Sell Price" : "Cost Price"} value={money(promotion ? selected.price : selected.cost)} /><Box sx={{ bgcolor: "divider" }} /><DesktopPriceMetric label={promotion ? "Promotion Price" : "Current Sell Price"} value={shownPrice ? money(Number(shownPrice)) : money(selected.price)} /></Box></Paper>}
     {scope === "individual" ? <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 2 }}><TextField label={promotion ? "Discount percentage" : "Margin percentage"} value={shownPercentage} onChange={(event) => updatePercentage(event.target.value)} placeholder={promotion ? "e.g. 10" : "e.g. 15"} inputMode="decimal" /><TextField label={promotion ? "Manual promotion price" : "New sell price"} value={shownPrice} onChange={(event) => updateManualPrice(event.target.value)} inputMode="numeric" /></Box> : <TextField fullWidth label={promotion ? "Discount percentage" : "Margin percentage"} value={percentage} onChange={(event) => updatePercentage(event.target.value)} placeholder={promotion ? "e.g. 10" : "e.g. 15"} inputMode="decimal" sx={{ mt: 2 }} />}
     <TextField fullWidth label="Reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={promotion ? "Why is this promotion being created?" : "Why is this price being changed?"} multiline minRows={2} sx={{ mt: 1.5 }} />
-    <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1.25, mt: 2.5 }}><Button onClick={onClose} variant="outlined" sx={desktopCancelButtonSx}>Cancel</Button><Button onClick={onClose} variant="contained" startIcon={<CheckRoundedIcon />} sx={desktopModalButtonSx}>{promotion ? "Create Promotion" : "Apply Price"}</Button></Box>
+    {submitError && <Typography color="error" sx={{ mt: 1.5 }}>{submitError}</Typography>}<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1.25, mt: 2.5 }}><Button onClick={onClose} variant="outlined" sx={desktopCancelButtonSx}>Cancel</Button><Button onClick={submit} disabled={saving} variant="contained" startIcon={<CheckRoundedIcon />} sx={desktopModalButtonSx}>{saving ? "Saving…" : promotion ? "Create Promotion" : "Apply Price"}</Button></Box>
   </DialogContent>;
 }
 

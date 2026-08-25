@@ -106,10 +106,17 @@ pricingRouter.get("/:shopId/barcode-lookup/:value", async (request, response, ne
     await assertUserOwnsShop(auth.id, shopId);
     const normalizedValue = normalizeBarcode(z.string().min(1).parse(request.params.value));
     const barcode = await prisma.productBarcode.findFirst({
-      where: { shopId, normalizedValue, status: "ACTIVE" },
+      where: { shopId, normalizedValue, status: "ACTIVE", product: { isActive: true } },
       include: { product: true, variant: true, productUnit: { include: { unit: true } } },
     });
-    if (!barcode) { response.json({ known: false, normalizedValue }); return; }
+    if (!barcode) {
+      const inactiveBarcode = await prisma.productBarcode.findFirst({
+        where: { shopId, normalizedValue },
+        include: { product: { select: { id: true, isActive: true } } },
+      });
+      response.json({ known: false, normalizedValue, inactive: Boolean(inactiveBarcode?.product && !inactiveBarcode.product.isActive) });
+      return;
+    }
     const pricing = await prisma.$transaction((tx) => resolvePrice(tx, shopId, {
       productId: barcode.productId, variantId: barcode.variantId, productUnitId: barcode.productUnitId,
       quantity: new Prisma.Decimal(barcode.packageQuantity ?? 1), channel: String(request.query.channel ?? "ALL"),
@@ -183,6 +190,14 @@ pricingRouter.post("/:shopId/barcodes/internal", async (request, response, next)
     });
     response.status(201).json({ barcode });
   } catch (error) { next(error); }
+});
+const campaignInput = promotionInput.omit({ productId: true, variantId: true, productUnitId: true }).extend({
+  scope: z.enum(["PRODUCT", "CATEGORY", "ALL"]),
+  productId: z.string().min(1).optional(),
+  categoryId: z.string().min(1).optional(),
+}).superRefine((value, context) => {
+  if (value.scope === "PRODUCT" && !value.productId) context.addIssue({ code: "custom", message: "Product is required." });
+  if (value.scope === "CATEGORY" && !value.categoryId) context.addIssue({ code: "custom", message: "Category is required." });
 });
 
 const reservationInput = z.object({
@@ -429,6 +444,44 @@ pricingRouter.get("/:shopId/promotions", async (request, response, next) => {
     ]);
     const promotions = raw.map((item) => ({ ...item, effectiveState: effectivePromotionState(item) })).filter((item) => !query.status || item.effectiveState === query.status.toUpperCase());
     response.json({ promotions, page: query.page, pageSize: query.pageSize, totalCount });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.get("/:shopId/promotion-campaigns", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
+    const campaigns = await prisma.promotionCampaign.findMany({ where: { shopId }, include: { category: true, promotions: { include: { product: true }, orderBy: { createdAt: "asc" } } }, orderBy: { createdAt: "desc" } });
+    response.json({ campaigns: campaigns.map((campaign) => ({ ...campaign, effectiveState: campaign.promotions[0] ? effectivePromotionState(campaign.promotions[0]) : campaign.state, productCount: campaign.promotions.length, sampleProduct: campaign.promotions[0]?.product || null })) });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.post("/:shopId/promotion-campaigns", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const input = campaignInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
+    if (input.endsAt <= input.startsAt) throw badRequest("Promotion end time must be after its start time.");
+    if (input.type === "PERCENTAGE" && input.value > 100) throw badRequest("Percentage promotion cannot exceed 100%.");
+    const campaign = await prisma.$transaction(async (tx) => {
+      const where = { shopId, isActive: true, ...(input.scope === "PRODUCT" && input.productId ? { id: input.productId } : {}), ...(input.scope === "CATEGORY" && input.categoryId ? { categoryId: input.categoryId } : {}) };
+      const products = await tx.product.findMany({ where, select: { id: true } });
+      if (!products.length) throw badRequest("No active products match this promotion.");
+      const created = await tx.promotionCampaign.create({ data: { shopId, name: input.name, scope: input.scope, state: input.state, ...(input.categoryId ? { categoryId: input.categoryId } : {}) } });
+      for (const product of products) {
+        const targetKey = priceTargetKey(product.id);
+        const overlap = await tx.promotion.findFirst({ where: { shopId, targetKey, state: { in: ["SCHEDULED", "RUNNING"] }, startsAt: { lt: input.endsAt }, endsAt: { gt: input.startsAt } } });
+        if (overlap && input.state !== "DRAFT") throw conflict("Promotion overlaps another scheduled or running promotion for a selected product.");
+        await tx.promotion.create({ data: { shopId, campaignId: created.id, name: input.name, productId: product.id, targetKey, channel: input.channel.toUpperCase(), type: input.type, value: String(input.value), minimumQuantity: String(input.minimumQuantity), discountBase: input.discountBase, startsAt: input.startsAt, endsAt: input.endsAt, timeZone: input.timeZone, state: input.state, priority: input.priority, actorId: auth.id, ...(input.note !== undefined ? { note: input.note } : {}), ...(input.reason !== undefined ? { reason: input.reason } : {}) } });
+      }
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "promotion.campaign.create", entity: "PromotionCampaign", entityId: created.id, metadata: { scope: input.scope, productCount: products.length } });
+      return created;
+    });
+    response.status(201).json({ campaign });
+  } catch (error) { next(error); }
+});
+
+pricingRouter.patch("/:shopId/promotion-campaigns/:id", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); const input = z.object({ expectedVersion: z.coerce.number().int().positive(), state: z.enum(["DRAFT", "SCHEDULED", "PAUSED", "CANCELLED"]).optional(), reason: z.string().trim().max(500).optional() }).parse(request.body); await assertUserOwnsShop(auth.id, shopId);
+    const campaign = await prisma.$transaction(async (tx) => { const existing = await tx.promotionCampaign.findFirst({ where: { id, shopId } }); if (!existing) throw notFound("Promotion campaign not found."); if (existing.version !== input.expectedVersion) throw conflict("Promotion campaign was changed by another request."); const state = input.state ?? existing.state; await tx.promotion.updateMany({ where: { campaignId: id }, data: { state, ...(input.reason ? { reason: input.reason } : {}), actorId: auth.id, version: { increment: 1 } } }); const updated = await tx.promotionCampaign.update({ where: { id }, data: { state, version: { increment: 1 } } }); await writeAuditLog(tx, { shopId, actorId: auth.id, action: `promotion.campaign.${state.toLowerCase()}`, entity: "PromotionCampaign", entityId: id }); return updated; }); response.json({ campaign });
   } catch (error) { next(error); }
 });
 

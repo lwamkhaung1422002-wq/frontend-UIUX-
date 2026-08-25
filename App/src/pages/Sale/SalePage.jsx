@@ -35,6 +35,7 @@ import ReceiptLongRoundedIcon from "@mui/icons-material/ReceiptLongRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useOrderCancelMutation, useOrdersQuery } from "../../hooks/usePosQueries";
 
 const initialFilters = {
   range: "all",
@@ -43,6 +44,7 @@ const initialFilters = {
   orderStatus: "all",
   paymentStatus: "all",
 };
+const ordersSearchStorageKey = "pos.orders.search";
 
 const formatKyat = (amount) =>
   `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
@@ -92,8 +94,9 @@ export default function SalePage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
-  const [orders, setOrders] = useState([]);
-  const [search, setSearch] = useState("");
+  const { data: orderResponse } = useOrdersQuery({ pageSize: 100 });
+  const cancelOrderMutation = useOrderCancelMutation();
+  const [search, setSearch] = useState(() => window.sessionStorage.getItem(ordersSearchStorageKey) || "");
   const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters] = useState(initialFilters);
   const [draftFilters, setDraftFilters] = useState(initialFilters);
@@ -110,12 +113,16 @@ export default function SalePage() {
   }, [filters]);
 
   useEffect(() => {
-    let active = true;
-    api.orders.list({ pageSize: 100 }).then(({ orders: records }) => {
-      if (!active) return;
-      setOrders((records || []).map((order) => {
+    if (search.trim()) window.sessionStorage.setItem(ordersSearchStorageKey, search);
+    else window.sessionStorage.removeItem(ordersSearchStorageKey);
+  }, [search]);
+
+  const orders = useMemo(() => (orderResponse?.orders || []).filter((order) => order.fulfillmentStatus !== "cancelled").map((order) => {
         const createdAt = new Date(order.createdAt);
-        const payment = [...(order.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
+        const paymentStatus = String(order.paymentStatus || "unpaid").replace(/^./, (letter) => letter.toUpperCase());
+        const payment = [...(order.payments || [])]
+          .filter((entry) => Number(entry.amount || 0) > 0)
+          .sort((a, b) => new Date(b.paidAt || b.createdAt) - new Date(a.paidAt || a.createdAt))[0];
         return {
           id: order.id,
           displayId: order.orderNumber || order.id,
@@ -123,14 +130,14 @@ export default function SalePage() {
           quantity: (order.items || []).reduce((total, item) => total + Number(item.quantity || 0), 0),
           time: createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           date: createdAt.toISOString().slice(0, 10),
-          status: order.fulfillmentStatus === "completed" ? "Done" : order.fulfillmentStatus === "cancelled" ? "Cancel" : "Pending",
-          paymentStatus: String(order.paymentStatus || "unpaid").replace(/^./, (letter) => letter.toUpperCase()),
-          paymentMethod: payment?.method === "KBZ Pay" ? "KPay" : payment?.method || "Cash",
+          status: order.fulfillmentStatus === "cancelled" ? "Cancel" : "Done",
+          paymentStatus,
+          paymentMethod: payment?.method === "KBZ Pay" ? "KPay" : payment?.method || (paymentStatus === "Unpaid" ? "Unpaid" : "Cash"),
+          subtotal: Number(order.subtotal || order.total || 0),
+          discount: Number(order.discount || 0),
+          items: order.items || [],
         };
-      }));
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [api]);
+      }), [orderResponse]);
 
   const filteredOrders = useMemo(() => {
     const latestOrderDate = orders.reduce(
@@ -139,9 +146,10 @@ export default function SalePage() {
     );
 
     return orders.filter((order) => {
-      const matchesSearch = (order.displayId || order.id)
-        .toLowerCase()
-        .includes(search.trim().toLowerCase());
+      const normalizedSearch = search.trim().toLowerCase();
+      const matchesSearch = !normalizedSearch || [order.displayId, order.id, order.paymentMethod]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedSearch));
       const matchesOrderStatus =
         filters.orderStatus === "all" ||
         order.status.toLowerCase() === filters.orderStatus;
@@ -182,8 +190,14 @@ export default function SalePage() {
   };
 
   const deleteOrder = async (id) => {
-    await api.orders.remove(id);
-    setOrders((currentOrders) => currentOrders.filter((order) => order.id !== id));
+    if (!window.confirm("Cancel this order? Paid orders will be refunded and stock will be restored.")) return;
+    try {
+      const { order } = await api.orders.get(id);
+      if (order.fulfillmentStatus !== "cancelled") await cancelOrderMutation.mutateAsync({ id, reason: "Order cancelled" });
+    } catch (error) {
+      window.alert(error.message || "This order cannot be deleted.");
+      throw error;
+    }
   };
   const removeOrder = () => {
     deleteOrder(menuOrder?.id).catch(() => {});
@@ -191,7 +205,7 @@ export default function SalePage() {
     setMenuOrder(null);
   };
 
-  if (!isMobile) return <DesktopOrdersPage orders={filteredOrders} search={search} setSearch={setSearch} totalAmount={totalAmount} filters={filters} setFilters={setFilters} onDelete={(id) => deleteOrder(id).catch(() => {})} />;
+  if (!isMobile) return <DesktopOrdersPage orders={filteredOrders} search={search} setSearch={setSearch} totalAmount={totalAmount} filters={filters} setFilters={setFilters} onDelete={(id) => deleteOrder(id).catch(() => {})} onCreateOrder={() => navigate("/sale/create")} />;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f8fafc", px: 3, py: 3 }}>
@@ -199,7 +213,7 @@ export default function SalePage() {
         fullWidth
         value={search}
         onChange={(event) => setSearch(event.target.value)}
-        placeholder="Search by order number"
+        placeholder="Search by order number or payment method"
         InputProps={{
           startAdornment: (
             <InputAdornment position="start">
@@ -229,6 +243,7 @@ export default function SalePage() {
         {filteredOrders.map((order) => (
           <Card
             key={order.id}
+            onClick={() => navigate(`/sale/${order.id}`)}
             sx={{ borderRadius: 2.5, boxShadow: "0 3px 9px rgba(15, 23, 42, 0.16)" }}
           >
             <CardContent sx={{ position: "relative", px: 2, py: 1.5, "&:last-child": { pb: 1.5 } }}>
@@ -255,7 +270,7 @@ export default function SalePage() {
                     }}
                   />
                   <Chip
-                    label="Paid"
+                    label={order.paymentMethod}
                     size="small"
                     icon={<CreditCardRoundedIcon />}
                     variant="outlined"
@@ -275,6 +290,7 @@ export default function SalePage() {
                     size="small"
                     sx={{ position: "absolute", right: 10, bottom: 10 }}
                     onClick={(event) => {
+                      event.stopPropagation();
                       setMenuAnchor(event.currentTarget);
                       setMenuOrder(order);
                     }}
@@ -381,7 +397,7 @@ export default function SalePage() {
   );
 }
 
-function DesktopOrdersPage({ orders, search, setSearch, totalAmount, filters, setFilters, onDelete }) {
+function DesktopOrdersPage({ orders, search, setSearch, totalAmount, filters, setFilters, onDelete, onCreateOrder }) {
   const updateFilter = (field, value) => setFilters((current) => ({ ...current, [field]: value }));
   const [dateFilterAnchor, setDateFilterAnchor] = useState(null);
   const [detailOrder, setDetailOrder] = useState(null);
@@ -397,20 +413,21 @@ function DesktopOrdersPage({ orders, search, setSearch, totalAmount, filters, se
     }));
   };
   const orderStatusTone = (status) => status === "Done" ? { bgcolor: "#e8f6ec", color: "#278a45" } : { bgcolor: "#fff1f0", color: "#d14343" };
-  const paymentTone = (status) => status === "Paid" ? { bgcolor: "#eaf3ff", color: "#1769e0" } : status === "Partial" ? { bgcolor: "#fff5e6", color: "#e47616" } : { bgcolor: "#fff1f0", color: "#d14343" };
+  const paymentTone = (status) => status === "Paid" ? { bgcolor: "#e8f6ec", color: "#278a45" } : status === "Partial" ? { bgcolor: "#fff5e6", color: "#e47616" } : { bgcolor: "#fff1f0", color: "#d14343" };
   return <Box sx={{ width: "100%" }}>
     <Card sx={desktopOrdersPanelSx}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-      <Box sx={{ display: "grid", gridTemplateColumns: "minmax(250px, 1fr) 145px 166px 190px auto", gap: 1, alignItems: "center" }}>
-        <TextField value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by order number" InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ "& .MuiOutlinedInput-root": { minHeight: 44, borderRadius: 1.5 } }} />
+      <Box sx={{ display: "grid", gridTemplateColumns: "minmax(250px, 1fr) 145px 166px 190px auto auto", gap: 1, alignItems: "center" }}>
+        <TextField value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by order number or payment method" InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ "& .MuiOutlinedInput-root": { minHeight: 44, borderRadius: 1.5 } }} />
         <TextField select value={filters.orderStatus} onChange={(event) => updateFilter("orderStatus", event.target.value)} size="small" sx={desktopFilterSx}><MenuItem value="all">All status</MenuItem><MenuItem value="done">Done</MenuItem><MenuItem value="cancelled">Cancel</MenuItem></TextField>
         <TextField select value={filters.paymentStatus} onChange={(event) => updateFilter("paymentStatus", event.target.value)} size="small" sx={desktopFilterSx}><MenuItem value="all">All payment</MenuItem><MenuItem value="paid">Paid</MenuItem><MenuItem value="unpaid">Unpaid</MenuItem><MenuItem value="partial">Partial</MenuItem></TextField>
         <Button onClick={(event) => setDateFilterAnchor(event.currentTarget)} startIcon={<CalendarMonthRoundedIcon />} variant="outlined" sx={{ ...desktopDateFilterSx, justifyContent: "flex-start" }}>Date and time</Button>
         <Button onClick={clearDesktopFilters} variant="contained" sx={{ minHeight: 42, textTransform: "none", whiteSpace: "nowrap", px: 2 }}>Clear</Button>
+        <Button onClick={onCreateOrder} variant="contained" startIcon={<AddRoundedIcon />} sx={{ minHeight: 42, textTransform: "none", whiteSpace: "nowrap", px: 2 }}>Create Order</Button>
       </Box>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mt: 2.25, mb: 1.75, px: 1, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}><Typography sx={{ fontSize: 16, fontWeight: 700 }}>Qty {orders.length} orders</Typography><Typography sx={{ fontSize: 16, fontWeight: 800 }}>Total Amount&nbsp;&nbsp;{formatKyat(totalAmount)}</Typography></Box>
       <Box sx={desktopTableHeaderSx}><TableHeader>NO.</TableHeader><TableHeader>ORDER</TableHeader><TableHeader>DATE & TIME</TableHeader><TableHeader>STATUS</TableHeader><TableHeader>PAYMENT</TableHeader><TableHeader align="right" sx={desktopAmountSx}>AMOUNT</TableHeader><TableHeader align="right">ACTIONS</TableHeader></Box>
       <Divider />
-      <Box>{orders.map((order, index) => <Box key={order.id} sx={desktopTableRowSx}><Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600 }}>{index + 1}</Typography><Typography noWrap sx={{ fontSize: 14, fontWeight: 700 }}>{order.displayId || order.id}</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 1.25, whiteSpace: "nowrap" }}><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><CalendarMonthRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.date.split("-").reverse().join("/")}</Typography></Stack><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><AccessTimeRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.time}</Typography></Stack></Box><Chip label={order.status} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...orderStatusTone(order.status) }} /><Chip label={order.paymentStatus} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...paymentTone(order.paymentStatus) }} /><Typography noWrap sx={{ ...desktopAmountSx, fontSize: 14, fontWeight: 700, textAlign: "right", justifySelf: "end", whiteSpace: "nowrap" }}>{formatKyat(order.amount)}</Typography><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}><IconButton aria-label={`View ${order.displayId || order.id} details`} onClick={() => setDetailOrder(order)} color="primary" size="small" sx={desktopOrderActionSx}><VisibilityRoundedIcon fontSize="small" /></IconButton><IconButton aria-label={`Delete ${order.displayId || order.id}`} onClick={() => onDelete(order.id)} color="error" size="small" sx={desktopOrderActionSx}><DeleteOutlineRoundedIcon fontSize="small" /></IconButton></Box></Box>)}</Box>
+      <Box>{orders.map((order, index) => <Box key={order.id} sx={desktopTableRowSx}><Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600 }}>{index + 1}</Typography><Typography noWrap sx={{ fontSize: 14, fontWeight: 700 }}>{order.displayId || order.id}</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 1.25, whiteSpace: "nowrap" }}><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><CalendarMonthRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.date.split("-").reverse().join("/")}</Typography></Stack><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><AccessTimeRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.time}</Typography></Stack></Box><Chip label={order.status} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...orderStatusTone(order.status) }} /><Chip label={order.paymentMethod} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...paymentTone(order.paymentStatus) }} /><Typography noWrap sx={{ ...desktopAmountSx, fontSize: 14, fontWeight: 700, textAlign: "right", justifySelf: "end", whiteSpace: "nowrap" }}>{formatKyat(order.amount)}</Typography><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}><IconButton aria-label={`View ${order.displayId || order.id} details`} onClick={() => setDetailOrder(order)} color="primary" size="small" sx={desktopOrderActionSx}><VisibilityRoundedIcon fontSize="small" /></IconButton><IconButton aria-label={`Delete ${order.displayId || order.id}`} onClick={() => onDelete(order.id)} color="error" size="small" sx={desktopOrderActionSx}><DeleteOutlineRoundedIcon fontSize="small" /></IconButton></Box></Box>)}</Box>
     </CardContent></Card>
     <Popover open={Boolean(dateFilterAnchor)} anchorEl={dateFilterAnchor} onClose={() => setDateFilterAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} slotProps={{ paper: { sx: { width: 360, p: 2, borderRadius: 2 } } }}>
       <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Date and time</Typography>
@@ -433,13 +450,13 @@ const desktopOrderActionSx = { width: 44, height: 44, border: "1px solid", borde
 
 function TableHeader({ children, align, sx }) { return <Typography color="text.secondary" sx={{ fontSize: 12, fontWeight: 700, textAlign: align, ...sx }}>{children}</Typography>; }
 
-function DesktopOrderDetailsModal({ order, onClose, onDelete }) {
+function LegacyDesktopOrderDetailsModal({ order, onClose, onDelete }) {
   if (!order) return null;
-  const itemName = order.quantity > 1 ? "Store items" : "Store item";
+  const orderItems = order.items || [];
   return <Dialog open={Boolean(order)} onClose={onClose} fullWidth maxWidth="md" PaperProps={{ sx: { borderRadius: 3, maxWidth: 860 } }}>
     <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>Order Details</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 14 }}>{order.displayId || order.id}</Typography></Box><Chip label="Done" icon={<CheckRoundedIcon />} sx={{ bgcolor: "#e8f6ec", color: "#278a45", fontWeight: 700 }} /></Stack></DialogTitle>
     <DialogContent sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(270px, .78fr)", gap: 2.5 }}>
-      <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontWeight: 800, fontSize: 17 }}>Order items ({order.quantity})</Typography><Divider sx={{ my: 1.75 }} /><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2 }}><Box><Typography sx={{ fontWeight: 700 }}>{itemName}</Typography><Typography color="text.secondary" sx={{ mt: .5, fontSize: 14 }}>{formatKyat(order.amount)} × {order.quantity}</Typography></Box><Typography sx={{ fontWeight: 800, fontSize: 18 }}>{formatKyat(order.amount)}</Typography></Box></CardContent></Card>
+      <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontWeight: 800, fontSize: 17 }}>Order items ({order.quantity})</Typography><Divider sx={{ my: 1.75 }} /><Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2 }}><Box><Typography sx={{ fontWeight: 700 }}>{orderItems.map((item) => item.productName || item.product?.name || "Item").join(", ")}</Typography><Typography color="text.secondary" sx={{ mt: .5, fontSize: 14 }}>{formatKyat(order.amount)} × {order.quantity}</Typography></Box><Typography sx={{ fontWeight: 800, fontSize: 18 }}>{formatKyat(order.amount)}</Typography></Box></CardContent></Card>
       <Stack spacing={2}><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order information</Typography><Stack spacing={1.1}><DesktopDetailRow label="Order date" value={`${order.date.split("-").reverse().join("/")} · ${order.time}`} /><DesktopDetailRow label="Payment status" value={order.paymentStatus} tone="#278a45" /><DesktopDetailRow label="Payment method" value={order.paymentMethod} /></Stack></CardContent></Card><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order summary</Typography><Stack spacing={1.1}><DesktopDetailRow label="Subtotal" value={formatKyat(order.amount)} /><DesktopDetailRow label="Discount" value={formatKyat(0)} /><Divider /><DesktopDetailRow label="Total" value={formatKyat(order.amount)} tone="primary.main" strong /></Stack></CardContent></Card></Stack>
     </Box></DialogContent>
     <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid", borderColor: "divider", justifyContent: "space-between" }}><Button color="error" startIcon={<DeleteOutlineRoundedIcon />} onClick={onDelete} sx={{ textTransform: "none", fontWeight: 700 }}>Delete order</Button><Stack direction="row" spacing={1}><Button onClick={onClose} sx={{ textTransform: "none" }}>Close</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => window.print()} sx={{ textTransform: "none" }}>Print receipt</Button></Stack></DialogActions>
@@ -447,3 +464,18 @@ function DesktopOrderDetailsModal({ order, onClose, onDelete }) {
 }
 
 function DesktopDetailRow({ label, value, tone = "text.primary", strong = false }) { return <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 14 }}>{label}</Typography><Typography color={tone} sx={{ fontSize: 14, textAlign: "right", fontWeight: strong ? 800 : 700 }}>{value}</Typography></Box>; }
+
+void LegacyDesktopOrderDetailsModal;
+
+function DesktopOrderDetailsModal({ order, onClose, onDelete }) {
+  if (!order) return null;
+  const items = order.items || [];
+  return <Dialog open={Boolean(order)} onClose={onClose} fullWidth maxWidth="md" PaperProps={{ sx: { borderRadius: 3, maxWidth: 860 } }}>
+    <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>Order Details</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 14 }}>{order.displayId || order.id}</Typography></Box><Chip label="Done" icon={<CheckRoundedIcon />} sx={{ bgcolor: "#e8f6ec", color: "#278a45", fontWeight: 700 }} /></Stack></DialogTitle>
+    <DialogContent sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(270px, .78fr)", gap: 2.5 }}>
+      <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontWeight: 800, fontSize: 17 }}>Order items ({order.quantity})</Typography><Divider sx={{ my: 1.75 }} /><Stack spacing={1.25}>{items.map((item) => <Box key={item.id} sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2 }}><Box><Typography sx={{ fontWeight: 700 }}>{item.productName || item.product?.name || "Item"}</Typography><Typography color="text.secondary" sx={{ mt: .5, fontSize: 14 }}>{Number(item.quantity || 0)} x {formatKyat(Number(item.unitPrice || 0))}</Typography></Box><Typography sx={{ fontWeight: 800, fontSize: 18 }}>{formatKyat(Number(item.lineTotal || 0))}</Typography></Box>)}</Stack></CardContent></Card>
+      <Stack spacing={2}><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order information</Typography><Stack spacing={1.1}><DesktopDetailRow label="Order date" value={`${order.date.split("-").reverse().join("/")} · ${order.time}`} /><DesktopDetailRow label="Payment status" value={order.paymentStatus} tone="#278a45" /><DesktopDetailRow label="Payment method" value={order.paymentMethod} /></Stack></CardContent></Card><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order summary</Typography><Stack spacing={1.1}><DesktopDetailRow label="Subtotal" value={formatKyat(order.subtotal)} /><DesktopDetailRow label="Discount" value={order.discount > 0 ? `- ${formatKyat(order.discount)}` : formatKyat(0)} /><Divider /><DesktopDetailRow label="Total" value={formatKyat(order.amount)} tone="primary.main" strong /></Stack></CardContent></Card></Stack>
+    </Box></DialogContent>
+    <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid", borderColor: "divider", justifyContent: "space-between" }}><Button color="error" startIcon={<DeleteOutlineRoundedIcon />} onClick={onDelete} sx={{ textTransform: "none", fontWeight: 700 }}>Delete order</Button><Stack direction="row" spacing={1}><Button onClick={onClose} sx={{ textTransform: "none" }}>Close</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => window.print()} sx={{ textTransform: "none" }}>Print receipt</Button></Stack></DialogActions>
+  </Dialog>;
+}

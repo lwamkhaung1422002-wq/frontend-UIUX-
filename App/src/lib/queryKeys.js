@@ -1,0 +1,16 @@
+export const queryKeys = {
+  dashboard: (shopId) => ["shops", shopId, "dashboard"],
+  products: (shopId, query = {}) => ["shops", shopId, "products", query],
+  product: (shopId, productId) => ["shops", shopId, "products", productId],
+  categories: (shopId) => ["shops", shopId, "categories"],
+  units: (shopId) => ["shops", shopId, "units"],
+  inventory: (shopId, query = {}) => ["shops", shopId, "inventory", query],
+  movements: (shopId, query = {}) => ["shops", shopId, "movements", query],
+  orders: (shopId, query = {}) => ["shops", shopId, "orders", query],
+  order: (shopId, orderId) => ["shops", shopId, "orders", orderId],
+  settings: (shopId) => ["shops", shopId, "settings"],
+  pricing: (shopId, query = {}) => ["shops", shopId, "pricing", query],
+  promotionCampaigns: (shopId) => ["shops", shopId, "promotion-campaigns"],
+  reports: (shopId, name, query = {}) => ["shops", shopId, "reports", name, query],
+};
+

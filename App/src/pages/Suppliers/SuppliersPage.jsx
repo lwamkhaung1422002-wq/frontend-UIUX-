@@ -36,6 +36,7 @@ import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
 import { useNavigate } from "react-router";
+import { usePurchasesQuery } from "../../hooks/usePosQueries";
 import { usePosApi } from "../../hooks/useApiResource";
 
 const supplierRecords = [
@@ -163,6 +164,8 @@ const desktopHistoryRecords = [
   { id: "EXP-20260701-0001", supplier: "Expense record", amount: 250000, method: "Cash", kind: "expense", dateLabel: "Expense Date", paymentDate: "01/07/2026", relativeTime: "1 week ago", timestamp: "01/07/2026 08:30 AM" },
 ];
 
+void supplierRecords;
+void desktopSupplierRecords;
 const supplierDate = (value) => value ? new Date(value).toISOString().slice(0, 10) : "";
 async function loadSupplierRecords(api) {
   const { purchases = [] } = await api.purchases.list({ pageSize: 100 });
@@ -173,11 +176,11 @@ async function loadSupplierRecords(api) {
     return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "" };
   });
 }
+void loadSupplierRecords;
 
 export default function SuppliersPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
-  const api = usePosApi();
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -185,18 +188,27 @@ export default function SuppliersPage() {
   const [to, setTo] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRecord, setMenuRecord] = useState(null);
-  const [apiRecords, setApiRecords] = useState(null);
+  const [archiveTarget, setArchiveTarget] = useState(null);
+  const [archiveError, setArchiveError] = useState("");
+  const [archiving, setArchiving] = useState(false);
+  const api = usePosApi();
+  const { data: purchasesResult } = usePurchasesQuery({ pageSize: 100 });
+  const apiRecords = useMemo(() => (purchasesResult?.purchases || []).map((purchase) => {
+    const paid = Number(purchase.paidAmount || 0) >= Number(purchase.total || 0);
+    const payment = [...(purchase.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
+    const date = supplierDate(paid ? payment?.paidAt || purchase.updatedAt : purchase.expectedAt || purchase.createdAt);
+    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "" };
+  }), [purchasesResult]);
 
   useEffect(() => {
     const openFilter = () => setFilterOpen(true);
     window.addEventListener("suppliers-filter", openFilter);
     return () => window.removeEventListener("suppliers-filter", openFilter);
   }, []);
-  useEffect(() => { let active = true; loadSupplierRecords(api).then((records) => { if (active) setApiRecords(records); }).catch(() => {}); return () => { active = false; }; }, [api]);
 
   const visibleRecords = useMemo(
     () =>
-      (apiRecords || supplierRecords).filter((record) => {
+      apiRecords.filter((record) => {
         const query = search.trim().toLowerCase();
         return (
           (status === "All" || record.status === status) &&
@@ -214,6 +226,19 @@ export default function SuppliersPage() {
     setFrom("");
     setTo("");
   };
+  const archiveSupplier = async () => {
+    if (!archiveTarget?.supplierId) return;
+    setArchiving(true);
+    setArchiveError("");
+    try {
+      await api.suppliers.remove(archiveTarget.supplierId);
+      setArchiveTarget(null);
+    } catch (error) {
+      setArchiveError(error.message || "Unable to archive supplier.");
+    } finally {
+      setArchiving(false);
+    }
+  };
   const today = () => {
     const value = new Date().toISOString().slice(0, 10);
     setFrom(value);
@@ -221,7 +246,7 @@ export default function SuppliersPage() {
   };
 
   if (!isMobile)
-    return <DesktopSuppliers key={(apiRecords || desktopSupplierRecords).map((record) => record.id).join("|")} initialRecords={apiRecords || desktopSupplierRecords} />;
+    return <DesktopSuppliers key={apiRecords.map((record) => record.id).join("|")} initialRecords={apiRecords} />;
 
   return (
     <Box
@@ -523,7 +548,7 @@ export default function SuppliersPage() {
           Edit
         </MenuItem>
         <MenuItem
-          onClick={() => setMenuAnchor(null)}
+          onClick={() => { setArchiveTarget(menuRecord); setMenuAnchor(null); setMenuRecord(null); }}
           sx={{ ...menuItemSx, color: "error.main" }}
         >
           <DeleteOutlineRoundedIcon
@@ -532,12 +557,18 @@ export default function SuppliersPage() {
           Delete
         </MenuItem>
       </Menu>
+      <Dialog open={Boolean(archiveTarget)} onClose={archiving ? undefined : () => { setArchiveTarget(null); setArchiveError(""); }} fullWidth slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } } }}>
+        <DialogTitle>Archive Supplier</DialogTitle>
+        <DialogContent><Typography color="text.secondary">Archive <strong>{archiveTarget?.name}</strong>? Purchase history will be retained.</Typography>{archiveError && <Typography color="error" sx={{ mt: 1 }}>{archiveError}</Typography>}</DialogContent>
+        <DialogActions><Button onClick={() => { setArchiveTarget(null); setArchiveError(""); }} disabled={archiving}>Cancel</Button><Button color="error" variant="contained" onClick={archiveSupplier} disabled={archiving}>{archiving ? "Archiving…" : "Archive"}</Button></DialogActions>
+      </Dialog>
     </Box>
   );
 }
 
 function DesktopSuppliers({ initialRecords }) {
-  const [records, setRecords] = useState(initialRecords);
+  const api = usePosApi();
+  const [records] = useState(initialRecords);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const [dialog, setDialog] = useState(null);
@@ -560,8 +591,9 @@ function DesktopSuppliers({ initialRecords }) {
   const total = visibleRecords.reduce((sum, record) => sum + record.amount, 0);
   const open = (mode, record = null) => setDialog({ mode, record });
   const close = () => setDialog(null);
-  const handleDelete = (record) => {
-    setRecords((current) => current.filter((item) => item.id !== record.id));
+  const handleDelete = async (record) => {
+    if (!record.supplierId) return;
+    await api.suppliers.remove(record.supplierId);
     close();
   };
   const chooseRange = (range) => {
@@ -933,8 +965,7 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
       <DialogContent dividers sx={{ p: mode === "history" ? 2 : 2.5 }}>
         {mode === "delete" ? (
           <Typography color="text.secondary">
-            Delete <strong>{record.name}</strong>? This action removes the
-            supplier from this desktop demo list.
+            Archive <strong>{record.name}</strong>? Purchase history will be retained.
           </Typography>
         ) : mode === "history" ? (
           <DesktopSupplierHistory />
@@ -980,7 +1011,7 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
             onClick={() => onDelete(record)}
             sx={{ textTransform: "none" }}
           >
-            Delete
+            Archive
           </Button>
         ) : (
           !isHistory &&

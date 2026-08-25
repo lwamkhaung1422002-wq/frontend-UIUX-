@@ -11,12 +11,12 @@ export async function refreshProductWeightedCost(
 ): Promise<number> {
   const batches = await tx.inventoryBatch.findMany({
     where: { shopId, productId, quantity: { gt: 0 } },
-    select: { quantity: true, baseQuantity: true, unitCost: true },
+    select: { quantity: true, unitCost: true },
   });
 
   const totals = batches.reduce(
     (current, batch) => {
-      const quantity = Number(batch.baseQuantity ?? batch.quantity ?? 0);
+      const quantity = Number(batch.quantity ?? 0);
       return {
         quantity: current.quantity + quantity,
         value: current.value + (quantity * Number(batch.unitCost || 0)),

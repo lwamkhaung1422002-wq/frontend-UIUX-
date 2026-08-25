@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   Box,
@@ -51,6 +51,8 @@ const desktopPayments = [
   { id: "EXP-260722", name: "Delivery fuel", amount: 14500, status: "Paid", method: "Cash", dateLabel: "Paid", date: "2026-07-22", kind: "expense", remark: "Delivery vehicle fuel", settlement: { receiver: "Ko Lin", signature: "Ko Lin", paidDate: "2026-07-22" } },
   { id: "REC-260725", name: "Ko Min Thu", amount: 26700, status: "Unpaid", method: "", dateLabel: "Due", date: "2026-07-25", kind: "receivable", buyer: "Ko Min Thu", qty: 3 },
 ];
+void payments;
+void desktopPayments;
 
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
@@ -91,9 +93,16 @@ export default function PaymentPage() {
   const [to, setTo] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuPayment, setMenuPayment] = useState(null);
-  const [paymentRecords, setPaymentRecords] = useState(payments);
+  const [paymentRecords, setPaymentRecords] = useState([]);
   const [mobileDialog, setMobileDialog] = useState(null);
+  const reloadPayments = useCallback(async () => {
+    setPaymentRecords(await loadPaymentRecords(api));
+  }, [api]);
   useEffect(() => { let active = true; loadPaymentRecords(api).then((records) => { if (active) setPaymentRecords(records); }).catch(() => {}); return () => { active = false; }; }, [api]);
+  const saveExpense = async (entry) => {
+    await api.expenses.create({ title: entry.name, amount: Number(entry.amount), method: entry.method === "KBZPay" ? "KBZ Pay" : entry.method, spentAt: entry.date || undefined, note: entry.remark || undefined });
+    await reloadPayments();
+  };
 
   const visiblePayments = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -165,13 +174,13 @@ export default function PaymentPage() {
       <MenuItem onClick={() => { navigate(`/suppliers/add?edit=${menuPayment?.supplierId}`); closeMenu(); }} sx={menuItemSx}><EditOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />Edit</MenuItem>
       <MenuItem onClick={closeMenu} sx={{ ...menuItemSx, color: "error.main" }}><DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />Delete</MenuItem>
     </Menu>
-    <MobilePaymentDialog dialog={mobileDialog} onClose={() => setMobileDialog(null)} onSave={(entry) => { setPaymentRecords((current) => [{ id: `${entry.type === "expense" ? "EXP" : "INC"}-${Date.now()}`, name: entry.name, amount: Number(entry.amount) || 0, status: "Paid", method: entry.method, dateLabel: "Paid", date: entry.date, isoDate: entry.date, kind: entry.type, remark: entry.remark }, ...current]); setMobileDialog(null); }} />
+    <MobilePaymentDialog dialog={mobileDialog} onClose={() => setMobileDialog(null)} onSave={async (entry) => { await saveExpense(entry); setMobileDialog(null); }} />
   </Box>;
 }
 
 function DesktopPaymentsPage() {
   const api = usePosApi();
-  const [records, setRecords] = useState(desktopPayments);
+  const [records, setRecords] = useState([]);
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [dateMode, setDateMode] = useState("all");
@@ -186,14 +195,19 @@ function DesktopPaymentsPage() {
   });
   const total = visible.reduce((sum, record) => sum + record.amount, 0);
   const close = () => setDialog(null);
-  const deleteRecord = (record) => { setRecords((current) => current.filter((item) => item.id !== record.id)); close(); };
+  const deleteRecord = async (record) => {
+    if (record.kind !== "expense") throw new Error("Only expense records can be deleted.");
+    await api.expenses.remove(record.apiId);
+    setRecords(await loadPaymentRecords(api));
+    close();
+  };
   return <Paper sx={desktopPaymentPageSx}>
     <Box sx={desktopPaymentToolbarSx}><TextField fullWidth value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payments by name or invoice number" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> } }} sx={desktopPaymentSearchSx} /><Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => setDialog({ mode: "entry" })} sx={desktopPaymentPrimarySx}>Add Payment</Button><Button variant="outlined" startIcon={<CalendarTodayOutlinedIcon />} onClick={() => setDialog({ mode: "date" })} sx={desktopPaymentDateSx}>Date and time</Button></Box>
     <Stack direction="row" spacing={1.5} sx={{ mt: 2 }}><DesktopPaymentFilter label="All" active={status === "All"} onClick={() => setStatus("All")} /><DesktopPaymentFilter label="Expense" active={status === "Expense"} onClick={() => setStatus("Expense")} tone="#b45309" /><DesktopPaymentFilter label="Paid" active={status === "Paid"} onClick={() => setStatus("Paid")} tone="success.main" icon={<CheckCircleOutlineRoundedIcon />} /><DesktopPaymentFilter label="Unpaid" active={status === "Unpaid"} onClick={() => setStatus("Unpaid")} tone="#ef6c00" icon={<CreditCardOutlinedIcon />} /><Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => setDialog({ mode: "supplier-history" })} sx={desktopPaymentHistorySx}>History</Button></Stack>
     <Box sx={desktopPaymentSummarySx}><Typography sx={{ fontSize: 14, fontWeight: 700 }}>{visible.length} Payments</Typography><Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 13 }}>Total Amount</Typography><Typography sx={{ fontSize: 20, fontWeight: 800 }}>{money(total)}</Typography></Box></Box>
     <Box sx={desktopPaymentGridSx}>{visible.map((record) => <DesktopPaymentCard key={record.id} payment={record} onDetails={() => setDialog({ mode: "details", record })} onPay={() => setDialog({ mode: "pay", record })} onMenu={(event) => setMenu({ anchor: event.currentTarget, record })} />)}</Box>
     {!visible.length && <Typography align="center" color="text.secondary" sx={{ py: 7 }}>No payments found.</Typography>}
-    <Menu anchorEl={menu?.anchor} open={Boolean(menu)} onClose={() => setMenu(null)} transformOrigin={{ vertical: "top", horizontal: "right" }} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} slotProps={{ paper: { sx: { minWidth: 142, borderRadius: 1.5 } } }}><MenuItem onClick={() => { setDialog({ mode: "edit", record: menu.record }); setMenu(null); }} sx={desktopPaymentMenuItemSx}><EditOutlinedIcon fontSize="small" />Edit</MenuItem><MenuItem onClick={() => { setDialog({ mode: "delete", record: menu.record }); setMenu(null); }} sx={{ ...desktopPaymentMenuItemSx, color: "error.main" }}><DeleteOutlineRoundedIcon fontSize="small" />Delete</MenuItem></Menu>
+    <Menu anchorEl={menu?.anchor} open={Boolean(menu)} onClose={() => setMenu(null)} transformOrigin={{ vertical: "top", horizontal: "right" }} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} slotProps={{ paper: { sx: { minWidth: 142, borderRadius: 1.5 } } }}>{menu?.record.kind === "expense" && <><MenuItem onClick={() => { setDialog({ mode: "edit", record: menu.record }); setMenu(null); }} sx={desktopPaymentMenuItemSx}><EditOutlinedIcon fontSize="small" />Edit</MenuItem><MenuItem onClick={() => { setDialog({ mode: "delete", record: menu.record }); setMenu(null); }} sx={{ ...desktopPaymentMenuItemSx, color: "error.main" }}><DeleteOutlineRoundedIcon fontSize="small" />Delete</MenuItem></>}</Menu>
     <DesktopPaymentDialog dialog={dialog} onClose={close} onDelete={deleteRecord} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} />
   </Paper>;
 }
@@ -220,7 +234,7 @@ function DesktopPaymentDialog({ dialog, onClose, onDelete, dateMode, setDateMode
   if (mode === "supplier-history") return <Dialog open onClose={onClose} fullWidth maxWidth="md" slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}><DialogContent sx={desktopPaymentDialogContentSx}><DesktopSupplierHistory /></DialogContent><Divider /><Box sx={{ display: "flex", justifyContent: "flex-end", px: 2.5, py: 1.5 }}><Button onClick={onClose} sx={desktopPaymentTextButtonSx}>Close</Button></Box></Dialog>;
   if (mode === "date") return <Dialog open onClose={onClose} fullWidth maxWidth="xs" slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}><DialogContent sx={desktopPaymentDialogContentSx}><Box sx={desktopPaymentDialogTitleSx}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>Date and time</Typography><IconButton aria-label="Close date filter" onClick={onClose}><CloseRoundedIcon /></IconButton></Box><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1 }}><FilterButton label="All" active={dateMode === "all"} onClick={() => setDateMode("all")} /><FilterButton label="Today" active={dateMode === "today"} onClick={() => setDateMode("today")} /><FilterButton label="Custom" active={dateMode === "custom"} onClick={() => setDateMode("custom")} /></Box>{dateMode === "custom" && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 1.75 }}><TextField label="From" type="date" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="To" type="date" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /></Box>}<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mt: 2.5 }}><Button onClick={() => { setDateMode("all"); setFrom(""); setTo(""); }} sx={desktopPaymentTextButtonSx}>Reset</Button><Button variant="contained" onClick={onClose} sx={desktopPaymentActionSx}>Apply</Button></Box></DialogContent></Dialog>;
   if (mode === "history") return <DesktopPaymentHistory onClose={onClose} />;
-  return <Dialog open onClose={onClose} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}><DialogContent sx={desktopPaymentDialogContentSx}><Box sx={desktopPaymentDialogTitleSx}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{title}</Typography><IconButton aria-label="Close payment dialog" onClick={onClose}><CloseRoundedIcon /></IconButton></Box>{mode === "delete" ? <Typography color="text.secondary">Delete <strong>{record.name}</strong>? This removes the payment from the desktop demo list.</Typography> : mode === "details" ? <DesktopPaymentDetails record={record} /> : mode === "pay" ? <DesktopSupplierPaymentForm record={record} /> : <DesktopPaymentForm record={record} />}</DialogContent><Divider /><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, px: 2.5, py: 1.5 }}><Button onClick={onClose} sx={desktopPaymentTextButtonSx}>{mode === "details" ? "Close" : "Cancel"}</Button>{mode === "delete" ? <Button variant="contained" color="error" onClick={() => onDelete(record)} sx={desktopPaymentActionSx}>Delete</Button> : mode !== "details" && <Button variant="contained" onClick={onClose} sx={desktopPaymentActionSx}>{mode === "edit" ? "Save Payment" : mode === "pay" ? "Record Payment" : "Add Payment"}</Button>}</Box></Dialog>;
+  return <Dialog open onClose={onClose} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}><DialogContent sx={desktopPaymentDialogContentSx}><Box sx={desktopPaymentDialogTitleSx}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{title}</Typography><IconButton aria-label="Close payment dialog" onClick={onClose}><CloseRoundedIcon /></IconButton></Box>{mode === "delete" ? <Typography color="text.secondary">Delete <strong>{record.name}</strong>? This permanently removes this expense record.</Typography> : mode === "details" ? <DesktopPaymentDetails record={record} /> : mode === "pay" ? <DesktopSupplierPaymentForm record={record} /> : <DesktopPaymentForm record={record} />}</DialogContent><Divider /><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, px: 2.5, py: 1.5 }}><Button onClick={onClose} sx={desktopPaymentTextButtonSx}>{mode === "details" ? "Close" : "Cancel"}</Button>{mode === "delete" ? <Button variant="contained" color="error" onClick={() => onDelete(record).catch(() => {})} sx={desktopPaymentActionSx}>Delete</Button> : mode !== "details" && <Button variant="contained" onClick={onClose} sx={desktopPaymentActionSx}>{mode === "edit" ? "Save Payment" : mode === "pay" ? "Record Payment" : "Add Payment"}</Button>}</Box></Dialog>;
 }
 
 function DesktopPaymentForm({ record }) { const [method, setMethod] = useState(record?.method || "Cash"); const [type, setType] = useState(record?.kind === "income" ? "income" : "expense"); return <Stack spacing={1.5}><TextField label="Name" defaultValue={record?.name ?? ""} fullWidth /><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}><TextField select label="Type" value={type} onChange={(event) => setType(event.target.value)}><MenuItem value="expense">Expense</MenuItem><MenuItem value="income">Income</MenuItem></TextField><TextField label="Amount" type="number" defaultValue={record?.amount ?? ""} /></Box><TextField select label="Payment method" value={method} onChange={(event) => setMethod(event.target.value)}><MenuItem value="Cash">Cash</MenuItem><MenuItem value="KBZPay">KBZPay</MenuItem><MenuItem value="Wave">Wave</MenuItem></TextField><TextField label="Date" type="date" defaultValue={record?.date ?? ""} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="Remark" defaultValue={record?.remark ?? ""} multiline minRows={2} /></Stack>; }

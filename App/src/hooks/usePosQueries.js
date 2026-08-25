@@ -1,0 +1,97 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../context/AuthContext";
+import { queryKeys } from "../lib/queryKeys";
+import { usePosApi } from "./useApiResource";
+
+const catalogOptions = { staleTime: 5 * 60_000 };
+
+function useShopQuery(key, queryFn, options = {}) {
+  const { shop, isGuest } = useAuth();
+  const { enabled: isQueryEnabled = true, ...queryOptions } = options;
+  return useQuery({
+    queryKey: key(shop?.id),
+    queryFn,
+    ...queryOptions,
+    enabled: Boolean(shop?.id) && !isGuest && isQueryEnabled,
+  });
+}
+
+export const useDashboardQuery = () => {
+  const api = usePosApi();
+  return useShopQuery(queryKeys.dashboard, () => api.dashboard());
+};
+export const useProductsQuery = (query = {}, options = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.products(shopId, query), () => api.products.list(query), { ...catalogOptions, ...options });
+};
+export const useProductQuery = (productId) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.product(shopId, productId), () => api.products.get(productId), { enabled: Boolean(productId) });
+};
+export const useCategoriesQuery = () => {
+  const api = usePosApi();
+  return useShopQuery(queryKeys.categories, () => api.categories.list(), catalogOptions);
+};
+export const useUnitsQuery = () => {
+  const api = usePosApi();
+  return useShopQuery(queryKeys.units, () => api.units.list(), catalogOptions);
+};
+export const useOrdersQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.orders(shopId, query), () => api.orders.list(query));
+};
+export const useOrderQuery = (orderId) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.order(shopId, orderId), () => api.orders.get(orderId), { enabled: Boolean(orderId) });
+};
+export const useInventoryQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.inventory(shopId, query), () => api.inventory.list(query));
+};
+export const useStockMovementsQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.movements(shopId, query), () => api.inventory.movements(query));
+};
+export const useShopSettingsQuery = () => {
+  const api = usePosApi();
+  return useShopQuery(queryKeys.settings, () => api.shop.getSettings(), catalogOptions);
+};
+export const usePromotionCampaignsQuery = () => {
+  const api = usePosApi();
+  return useShopQuery(queryKeys.promotionCampaigns, () => api.pricing.promotionCampaigns());
+};
+export const usePriceHistoryQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.pricing(shopId, { history: true, ...query }), () => api.pricing.prices(query));
+};
+export const useProductReportQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.reports(shopId, "products", query), () => api.reports.products(query));
+};
+export const useSalesReportQuery = (query = {}, options = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.reports(shopId, "sales", query), () => api.reports.sales(query), options);
+};
+export const usePurchasesQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => ["shops", shopId, "purchases", query], () => api.purchases.list(query));
+};
+
+export function useShopMutation(mutationFn, invalidate = []) {
+  const { shop } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: async () => {
+      await Promise.all(invalidate.map((key) => queryClient.invalidateQueries({ queryKey: key(shop?.id) })));
+    },
+  });
+}
+
+export function useOrderCancelMutation() {
+  const api = usePosApi();
+  return useShopMutation(
+    ({ id, reason }) => api.orders.cancel(id, { reason }),
+    [queryKeys.orders, queryKeys.inventory, queryKeys.movements, queryKeys.dashboard],
+  );
+}

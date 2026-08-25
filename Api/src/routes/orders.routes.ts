@@ -1019,8 +1019,29 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
         throw badRequest("Order is already cancelled.");
       }
       const paidAmount = existingOrder.payments.reduce((sum, payment) => sum + payment.amount, 0);
-      if (existingOrder.paymentStatus === "paid" || paidAmount > 0) {
-        throw badRequest("Refund the payment before cancelling this order.");
+      if (existingOrder.paymentStatus === "paid" && paidAmount > 0) {
+        const refund = await tx.payment.create({
+          data: {
+            shopId,
+            orderId,
+            type: "refund",
+            scope: "refund",
+            method: existingOrder.payments.find((payment) => payment.amount > 0)?.method ?? "Cash",
+            amount: -Math.abs(paidAmount),
+            reason: input.reason ?? "Order cancelled",
+            note: input.reason ?? "Order cancelled",
+          },
+        });
+        await writeAuditLog(tx, {
+          shopId,
+          actorId: authUser.id,
+          action: "payment.refund",
+          entity: "Payment",
+          entityId: refund.id,
+          metadata: { orderId, amount: paidAmount, reason: input.reason ?? null },
+        });
+      } else if (paidAmount > 0) {
+        throw badRequest("Refund or void received payments before cancelling a partial order.");
       }
 
       for (const item of existingOrder.items) {
@@ -1047,10 +1068,37 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
               ),
             },
           });
+          if (existingOrder.fulfillmentStatus === "completed") {
+            const saleMovements = await tx.inventoryMovement.findMany({
+              where: { shopId, sourceType: "OrderItemAllocation", sourceId: { startsWith: allocation.id }, direction: "OUT" },
+            });
+            const reversals = saleMovements.length ? saleMovements : [{
+              inventoryBatchId: allocation.inventoryBatchId,
+              lotId: null,
+              baseQuantity: storedAllocationBaseQuantity(allocation),
+              unitCost: allocation.unitCost,
+            }];
+            for (const [movementIndex, saleMovement] of reversals.entries()) {
+              const quantity = storedItemBaseQuantity({ quantity: 0, baseQuantity: saleMovement.baseQuantity });
+              if (saleMovement.lotId) {
+                const lot = await tx.inventoryLot.findUnique({ where: { id: saleMovement.lotId } });
+                if (lot) await tx.inventoryLot.update({ where: { id: lot.id }, data: { quantity: quantityDecimal(lot.quantity).plus(quantity).toString(), status: "ACTIVE" } });
+              }
+              await recordInventoryMovement(tx, {
+                shopId, productId: item.productId, variantId: item.variantId,
+                inventoryBatchId: saleMovement.inventoryBatchId ?? allocation.inventoryBatchId,
+                ...(saleMovement.lotId ? { lotId: saleMovement.lotId } : {}),
+                type: "SALE_REVERSAL", direction: "IN", quantity: quantity.toString(), unitCost: saleMovement.unitCost ?? allocation.unitCost,
+                sourceType: "OrderCancellation", sourceId: `${orderId}:${allocation.id}:${movementIndex}`,
+                idempotencyKey: `order.cancel:${orderId}:${allocation.id}:${movementIndex}`,
+                reason: input.reason ?? "Order cancelled",
+              });
+            }
+          }
         }
         if (item.serialAllocations.length) {
           await tx.inventorySerial.updateMany({
-            where: { id: { in: item.serialAllocations.map((entry) => entry.serialId) }, shopId, status: "RESERVED" },
+            where: { id: { in: item.serialAllocations.map((entry) => entry.serialId) }, shopId, status: { in: ["RESERVED", "SOLD"] } },
             data: { status: "IN_STOCK", soldAt: null },
           });
         }
@@ -1067,6 +1115,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
           fulfillmentStatus: "cancelled",
           cancelledAt: new Date(),
           note: input.reason ?? existingOrder.note,
+          ...(existingOrder.paymentStatus === "paid" ? { paymentStatus: "refunded" } : {}),
         },
         include: {
           customer: true,

@@ -43,11 +43,12 @@ const catalogSettingsSchema = z.object({
   notifyPayments: z.boolean().optional(),
 });
 
-const defaultPaymentMethods = [
-  { id: "cod", name: "COD", type: "cod", active: true, sortOrder: 0 },
-  { id: "cash", name: "Cash", type: "normal", active: true, sortOrder: 1 },
-  { id: "kbz-pay", name: "KBZ Pay", type: "normal", active: true, sortOrder: 2 },
-] as const;
+// Cash is a system payment method.  Only custom methods are persisted in the
+// shop setting; this prevents newly registered shops from inheriting demo
+// wallets such as KBZ Pay or COD.
+const cashPaymentMethod = { id: "cash", name: "Cash", type: "normal", active: true, sortOrder: 0 } as const;
+const defaultPaymentMethods: readonly [] = [];
+type PaymentMethodSetting = { id: string; name: string; type: "normal" | "cod"; active: boolean; sortOrder: number };
 
 const defaultCatalogSettings = {
   productLabel: "Product",
@@ -80,6 +81,7 @@ function normalizePaymentMethods(methods: z.infer<typeof catalogSettingsSchema>[
     }))
     .filter((method) => {
       const key = method.id.toLowerCase();
+      if (key === "cash" || method.type === "cod") return false;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -100,7 +102,8 @@ function toResponseSettings<T extends { option1Values: string; option2Values: st
     ...settings,
     option1Values: parseJsonFallback(settings.option1Values, [] as string[]),
     option2Values: parseJsonFallback(settings.option2Values, [] as string[]),
-    paymentMethods: parseJsonFallback(settings.paymentMethods, [...defaultPaymentMethods]),
+    paymentMethods: [cashPaymentMethod, ...parseJsonFallback<PaymentMethodSetting[]>(settings.paymentMethods, [])
+      .filter((method) => method.id.toLowerCase() !== "cash" && method.type !== "cod")],
   };
 }
 

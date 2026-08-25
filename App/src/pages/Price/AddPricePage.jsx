@@ -1,50 +1,62 @@
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router";
 import { AppBar, Box, Button, Divider, FormControl, FormControlLabel, IconButton, InputAdornment, InputLabel, MenuItem, Paper, Radio, RadioGroup, Select, TextField, Toolbar, Typography } from "@mui/material";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import { Alert } from "@mui/material";
+import { usePosApi } from "../../hooks/useApiResource";
+import { useCategoriesQuery, useProductsQuery } from "../../hooks/usePosQueries";
+import { useAuth } from "../../context/AuthContext";
+import { queryKeys } from "../../lib/queryKeys";
 
-const products = [
-  { id: "jasmine", name: "Jasmine Perfume", description: "Long-lasting floral fragrance", code: "JAS-001", group: "Beauty", cost: 2900, price: 3500 },
-  { id: "nivea", name: "Nivea Roll On", description: "48-hour deodorant protection", code: "NIV-002", group: "Beauty", cost: 5800, price: 6500 },
-  { id: "coke", name: "Coca-Cola 330ml", description: "Carbonated soft drink", code: "COC-003", group: "Drinks", cost: 800, price: 1000 },
-];
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
 export default function AddPricePage() {
   const navigate = useNavigate();
+  const api = usePosApi();
+  const queryClient = useQueryClient();
+  const { shop } = useAuth();
   const [params] = useSearchParams();
   const editing = Boolean(params.get("edit"));
   const [scope, setScope] = useState(editing ? "individual" : "all");
-  const [category, setCategory] = useState("Beauty");
+  const [category, setCategory] = useState("");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(editing ? params.get("edit") : "");
   const [margin, setMargin] = useState("");
   const [newSellPrice, setNewSellPrice] = useState("");
   const [reason, setReason] = useState("");
+  const { data: productData, error: productsError } = useProductsQuery({ status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" });
+  const { data: categoryData, error: categoriesError } = useCategoriesQuery();
+  const products = useMemo(() => (productData?.products || []).map((product) => ({ ...product, code: product.sku || product.barcodes?.[0]?.value || "", group: product.category?.name || "Uncategorized", cost: Number(product.cost || 0), price: Number(product.price || 0), description: product.description || "" })), [productData]);
+  const categories = categoryData?.categories || [];
+  const [error, setError] = useState(""); const [saving, setSaving] = useState(false);
   const visibleProducts = useMemo(() => products.filter((product) => {
     const query = search.trim().toLowerCase();
     return !query || [product.name, product.description, product.group, product.code].some((value) => value.toLowerCase().includes(query));
-  }), [search]);
+  }), [products, search]);
   const selectedProduct = products.find((product) => product.id === selectedId);
   const numericMargin = Number(margin);
   const calculatedPrice = selectedProduct && Number.isFinite(numericMargin) && margin !== "" ? Math.round(selectedProduct.cost * (1 + numericMargin / 100)) : null;
   const updateMargin = (value) => { setMargin(value.replace(/[^0-9.]/g, "")); setNewSellPrice(""); };
   const updateManualPrice = (value) => { setNewSellPrice(value.replace(/[^0-9]/g, "")); setMargin(""); };
 
+  const loadError = productsError || categoriesError;
+  const save = async () => { if (!reason.trim()) { setError("A reason is required."); return; } if (scope === "individual" && !selectedProduct) { setError("Select a product."); return; } setSaving(true); setError(""); try { if (scope === "individual") await api.pricing.createPrice({ productId: selectedProduct.id, unitPrice: Number(newSellPrice || calculatedPrice), reason }); else await api.pricing.bulkPrices({ scope: scope.toUpperCase(), ...(scope === "category" ? { categoryId: category } : {}), marginPercent: Number(margin), reason }); await Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }), queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] })]); navigate("/price"); } catch (err) { setError(err.message || "Price could not be saved."); } finally { setSaving(false); } };
   return <Box sx={{ minHeight: "100dvh", bgcolor: "#f8fafc", pb: 12, fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: "primary.main" }}><Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}><IconButton aria-label="Back to price and promotion" onClick={() => navigate("/price")} sx={{ color: "common.white", justifySelf: "start" }}><ArrowBackRoundedIcon /></IconButton><Typography fontWeight={700}>{editing ? "Edit Price" : "Add Price"}</Typography><Box /></Toolbar></AppBar>
     <Box sx={{ p: 2.5, maxWidth: 620, mx: "auto" }}>
+      {(error || loadError) && <Alert severity="error" sx={{ mb: 2 }}>{error || loadError?.message || "Products could not be loaded."}</Alert>}
       <Typography sx={{ fontSize: 18, fontWeight: 700, mb: 1 }}>Apply price to</Typography>
       <Paper elevation={0} sx={{ px: 0.75, py: 0.75, borderRadius: 2, border: "1px solid", borderColor: "divider" }}><RadioGroup row value={scope} onChange={(event) => { setScope(event.target.value); if (event.target.value !== "individual") setSelectedId(""); }} sx={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", alignItems: "center" }}><FormControlLabel value="individual" control={<Radio />} label="Individual" sx={scopeOptionSx} /><FormControlLabel value="category" control={<Radio />} label="Category" sx={scopeOptionSx} /><FormControlLabel value="all" control={<Radio />} label="All" sx={scopeOptionSx} /></RadioGroup></Paper>
-      {scope === "category" && <FormControl fullWidth sx={{ mt: 2 }}><InputLabel>Select category</InputLabel><Select label="Select category" value={category} onChange={(event) => setCategory(event.target.value)}><MenuItem value="Beauty">Beauty</MenuItem><MenuItem value="Drinks">Drinks</MenuItem></Select></FormControl>}
+      {scope === "category" && <FormControl fullWidth sx={{ mt: 2 }}><InputLabel>Select category</InputLabel><Select label="Select category" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</Select></FormControl>}
       {scope === "individual" && <><TextField fullWidth value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search product by name or barcode" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon color="action" /></InputAdornment>, endAdornment: <InputAdornment position="end"><IconButton aria-label="Scan barcode" edge="end"><QrCodeScannerRoundedIcon /></IconButton></InputAdornment> } }} sx={{ mt: 2, "& .MuiOutlinedInput-root": { minHeight: 56, borderRadius: 1.5, bgcolor: "background.paper" } }} /><Paper elevation={1} sx={{ mt: 1.25, borderRadius: 2, overflow: "hidden" }}>{visibleProducts.map((product, index) => <Box key={product.id} role="button" tabIndex={0} onClick={() => setSelectedId(product.id)} onKeyDown={(event) => event.key === "Enter" && setSelectedId(product.id)} sx={{ px: 2, py: 1.5, cursor: "pointer", bgcolor: selectedId === product.id ? "#eaf3ff" : "background.paper", "&:hover": { bgcolor: "action.hover" } }}><Typography noWrap sx={{ fontSize: 15, fontWeight: 600 }}>{product.name} <Box component="span" sx={{ color: "text.secondary", fontSize: 13, fontWeight: 400 }}>· {product.description} · {product.group}</Box></Typography>{index < visibleProducts.length - 1 && <Divider sx={{ mt: 1.5 }} />}</Box>)}</Paper></>}
       {scope === "individual" && selectedProduct && <IndividualPriceEditor product={selectedProduct} margin={margin} newSellPrice={newSellPrice} calculatedPrice={calculatedPrice} onMargin={updateMargin} onManualPrice={updateManualPrice} reason={reason} onReason={(event) => setReason(event.target.value)} />}
       {scope !== "individual" && <BulkPriceEditor scope={scope} category={category} margin={margin} onMargin={updateMargin} reason={reason} onReason={(event) => setReason(event.target.value)} />}
     </Box>
-    <Paper elevation={5} sx={{ position: "fixed", bottom: 0, left: 0, right: 0, p: 2.5, bgcolor: "background.paper" }}><Box sx={{ display: "grid", gridTemplateColumns: "0.85fr 1.4fr", gap: 1.5 }}><Button variant="outlined" onClick={() => navigate("/price")} sx={{ minHeight: 56, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 700, borderColor: "divider", color: "text.secondary" }}>Cancel</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => navigate("/price")} sx={{ minHeight: 56, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 700 }}>{editing ? "Save Price" : "Apply Price"}</Button></Box></Paper>
+    <Paper elevation={5} sx={{ position: "fixed", bottom: 0, left: 0, right: 0, p: 2.5, bgcolor: "background.paper" }}><Box sx={{ display: "grid", gridTemplateColumns: "0.85fr 1.4fr", gap: 1.5 }}><Button variant="outlined" onClick={() => navigate("/price")} sx={{ minHeight: 56, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 700, borderColor: "divider", color: "text.secondary" }}>Cancel</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} disabled={saving} onClick={save} sx={{ minHeight: 56, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 700 }}>{saving ? "Saving…" : editing ? "Save Price" : "Apply Price"}</Button></Box></Paper>
   </Box>;
 }
 

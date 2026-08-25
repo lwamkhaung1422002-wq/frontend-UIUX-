@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Alert, AppBar, Box, Button, Card, CardContent, CircularProgress, IconButton, Popover, Stack, TextField, Toolbar, Typography, useMediaQuery } from "@mui/material";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
@@ -7,7 +7,7 @@ import ShoppingBagRoundedIcon from "@mui/icons-material/ShoppingBagRounded";
 import Inventory2RoundedIcon from "@mui/icons-material/Inventory2Rounded";
 import MonetizationOnRoundedIcon from "@mui/icons-material/MonetizationOnRounded";
 import AccountBalanceWalletRoundedIcon from "@mui/icons-material/AccountBalanceWalletRounded";
-import { usePosApi } from "../../hooks/useApiResource";
+import { useSalesReportQuery } from "../../hooks/usePosQueries";
 import { useAuth } from "../../context/AuthContext";
 import { useNavigate } from "react-router";
 import MobileReportNavigation from "../../components/Report/MobileReportNavigation";
@@ -140,34 +140,25 @@ function compactKpiRangeLabel(from, to) {
     : `${startParts.day} ${startParts.month}\u2013${endParts.day} ${endParts.month}`;
 }
 
+void guestDemoReport;
+
 export default function SalesReportPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
-  const api = usePosApi();
   const { isGuest } = useAuth();
   const [tab, setTab] = useState("Overview");
   const [trend, setTrend] = useState("daily");
   const [dateAnchor, setDateAnchor] = useState(null);
   const [draftRange, setDraftRange] = useState({ mode: "mtd", ...monthToDate() });
   const [range, setRange] = useState({ mode: "mtd", ...monthToDate() });
-  const [report, setReport] = useState(null);
-  const [error, setError] = useState("");
   const [comparisonFocused, setComparisonFocused] = useState(false);
   const comparisonRef = useRef(null);
   const mobileComparisonRef = useRef(null);
   const query = useMemo(() => reportQuery(range, trend), [range, trend]);
-  const activeReport = useMemo(() => isGuest ? guestDemoReport(query) : report, [isGuest, query, report]);
-  const loading = !isGuest && report === null && !error;
-
-  useEffect(() => {
-    let active = true;
-    if (isGuest) return () => { active = false; };
-    const loadReport = api.reports.sales(query);
-    loadReport
-      .then((response) => { if (active) { setReport(response); setError(""); } })
-      .catch((requestError) => { if (active) { setReport(null); setError(requestError.message || "Could not load sales analytics."); } })
-    return () => { active = false; };
-  }, [api, isGuest, isMobile, query]);
+  const { data: report, error: reportError, isLoading } = useSalesReportQuery(query, { enabled: !isGuest });
+  const activeReport = isGuest ? null : report;
+  const error = reportError?.message || "";
+  const loading = !isGuest && isLoading;
 
   const selectTab = (next) => {
     setTab(next);

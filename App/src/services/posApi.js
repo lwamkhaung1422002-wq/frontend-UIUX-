@@ -27,6 +27,7 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
     dashboard: (query) => shopRequest(`/dashboard${queryString(query)}`),
     reports: {
       sales: (query) => shopRequest(`/reports/sales${queryString(query)}`),
+      products: (query) => shopRequest(`/product-report${queryString(query)}`),
     },
     shop: {
       get: () => shopRequest(""),
@@ -43,6 +44,7 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
     products: {
       list: (query) => shopRequest(`/products${queryString(query)}`),
       get: (id) => shopRequest(`/products/${id}`),
+      costHistory: (id) => shopRequest(`/products/${id}/cost-history`),
       create: (body) => shopRequest("/products", { method: "POST", body }),
       update: (id, body) => shopRequest(`/products/${id}`, { method: "PATCH", body }),
       generateShortCode: (id) => shopRequest(`/products/${id}/short-code/generate`, { method: "POST" }),
@@ -68,10 +70,13 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
       list: (query) => shopRequest(`/purchases${queryString(query)}`),
       create: (body) => shopRequest("/purchases", { method: "POST", body }),
       pay: (id, body) => shopRequest(`/purchases/${id}/payments`, { method: "POST", body }),
+      reversePayment: (purchaseId, paymentId, body) => shopRequest(`/purchases/${purchaseId}/payments/${paymentId}/reverse`, { method: "POST", body }),
     },
     payments: {
       list: (query) => shopRequest(`/payments${queryString(query)}`),
       addToOrder: (orderId, body) => shopRequest(`/orders/${orderId}/payments`, { method: "POST", body }),
+      refundOrder: (orderId, body) => shopRequest(`/orders/${orderId}/refunds`, { method: "POST", body }),
+      createCodSettlement: (body) => shopRequest("/payments/cod-settlements", { method: "POST", body }),
       void: (paymentId, body) => shopRequest(`/payments/${paymentId}/void`, { method: "POST", body }),
     },
     expenses: {
@@ -98,6 +103,9 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
       promotions: (query) => shopRequest(`/promotions${queryString(query)}`),
       createPromotion: (body) => shopRequest("/promotions", { method: "POST", body }),
       updatePromotion: (id, body) => shopRequest(`/promotions/${id}`, { method: "PATCH", body }),
+      promotionCampaigns: () => shopRequest("/promotion-campaigns"),
+      createPromotionCampaign: (body) => shopRequest("/promotion-campaigns", { method: "POST", body }),
+      updatePromotionCampaign: (id, body) => shopRequest(`/promotion-campaigns/${id}`, { method: "PATCH", body }),
       barcodeLookup: (value, query) => shopRequest(`/barcode-lookup/${encodeURIComponent(value)}${queryString(query)}`),
       barcodes: (query) => shopRequest(`/barcodes${queryString(query)}`),
       createBarcode: (body) => shopRequest("/barcodes", { method: "POST", body }),

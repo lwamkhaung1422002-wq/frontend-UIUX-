@@ -107,6 +107,13 @@ categoriesRouter.delete("/:shopId/categories/:categoryId", async (request, respo
       throw error;
     }
 
+    const productCount = await prisma.product.count({ where: { shopId, categoryId } });
+    if (productCount > 0) {
+      const error = new Error("This category still has products. Move or remove those products before deleting it.");
+      error.name = "ConflictError";
+      throw error;
+    }
+
     await prisma.category.delete({ where: { id: categoryId } });
 
     response.status(204).send();

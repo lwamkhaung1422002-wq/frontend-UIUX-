@@ -1,42 +1,46 @@
+import { lazy, Suspense } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router";
+import { LoadingState } from "./components/ApiState/ApiState";
+import RouteErrorBoundary from "./components/RouteErrorBoundary/RouteErrorBoundary";
 
 import App from "./App";
 import Home from "./pages/Home/HomePage";
-import Sale from "./pages/Sale/SalePage";
-import Stock from "./pages/Stock/StockPage";
-import AddProduct from "./pages/Stock/AddProductPage";
-import StockHistory from "./pages/Stock/StockHistoryPage";
-import AddStockMovement from "./pages/Stock/AddStockMovementPage";
-import ProductDetails from "./pages/Stock/ProductDetailsPage";
-import Note from "./pages/Note/NotePage";
-import Payment from "./pages/Payment/PaymentPage";
-import Price from "./pages/Price/PricePage";
-import AddPrice from "./pages/Price/AddPricePage";
-import AddPromotion from "./pages/Price/AddPromotionPage";
-import PriceHistory from "./pages/Price/PriceHistoryPage";
-import Report from "./pages/Report/ReportPage";
-import ProductReport from "./pages/Report/ProductReportPage";
-import SalesReport from "./pages/Report/SalesReportPage";
-import SaleRecord from "./pages/SaleRecord/SaleRecordPage";
-import Suppliers from "./pages/Suppliers/SuppliersPage";
-import AddSupplier from "./pages/Suppliers/AddSupplierPage";
-import RecordSupplierPayment from "./pages/Suppliers/RecordSupplierPaymentPage";
-import SupplierDetails from "./pages/Suppliers/SupplierDetailsPage";
-import SupplierHistory from "./pages/Suppliers/SupplierHistoryPage";
-import Settings from "./pages/Settings/SettingsPage";
-import CategoryManagement from "./pages/Settings/CategoryManagementPage";
-import PaymentMethodManagement from "./pages/Settings/PaymentMethodManagementPage";
-import ShopDetailsPage from "./pages/Settings/ShopDetailsPage";
-import CreateOrder from "./pages/CreateOrder/CreateOrderPage";
-import OrderDetails from "./pages/Sale/OrderDetailsPage";
-import AuthPage from "./pages/Auth/AuthPage";
+const AuthPage = lazy(() => import("./pages/Auth/AuthPage"));
+const Sale = lazy(() => import("./pages/Sale/SalePage"));
+const Stock = lazy(() => import("./pages/Stock/StockPage"));
+const AddProduct = lazy(() => import("./pages/Stock/AddProductPage"));
+const StockHistory = lazy(() => import("./pages/Stock/StockHistoryPage"));
+const AddStockMovement = lazy(() => import("./pages/Stock/AddStockMovementPage"));
+const ProductDetails = lazy(() => import("./pages/Stock/ProductDetailsPage"));
+const Note = lazy(() => import("./pages/Note/NotePage"));
+const Payment = lazy(() => import("./pages/Payment/PaymentPage"));
+const Price = lazy(() => import("./pages/Price/PricePage"));
+const AddPrice = lazy(() => import("./pages/Price/AddPricePage"));
+const AddPromotion = lazy(() => import("./pages/Price/AddPromotionPage"));
+const PriceHistory = lazy(() => import("./pages/Price/PriceHistoryPage"));
+const Report = lazy(() => import("./pages/Report/ReportPage"));
+const ProductReport = lazy(() => import("./pages/Report/ProductReportPage"));
+const SalesReport = lazy(() => import("./pages/Report/SalesReportPage"));
+const SaleRecord = lazy(() => import("./pages/SaleRecord/SaleRecordPage"));
+const Suppliers = lazy(() => import("./pages/Suppliers/SuppliersPage"));
+const AddSupplier = lazy(() => import("./pages/Suppliers/AddSupplierPage"));
+const RecordSupplierPayment = lazy(() => import("./pages/Suppliers/RecordSupplierPaymentPage"));
+const SupplierDetails = lazy(() => import("./pages/Suppliers/SupplierDetailsPage"));
+const SupplierHistory = lazy(() => import("./pages/Suppliers/SupplierHistoryPage"));
+const Settings = lazy(() => import("./pages/Settings/SettingsPage"));
+const CategoryManagement = lazy(() => import("./pages/Settings/CategoryManagementPage"));
+const PaymentMethodManagement = lazy(() => import("./pages/Settings/PaymentMethodManagementPage"));
+const ShopDetailsPage = lazy(() => import("./pages/Settings/ShopDetailsPage"));
+const CreateOrder = lazy(() => import("./pages/CreateOrder/CreateOrderPage"));
+const OrderDetails = lazy(() => import("./pages/Sale/OrderDetailsPage"));
 
 const router = createBrowserRouter([
-  { path: "/login", element: <AuthPage mode="login" /> },
-  { path: "/register", element: <AuthPage mode="register" /> },
+  { path: "/login", element: <AuthPage mode="login" />, errorElement: <RouteErrorBoundary /> },
+  { path: "/register", element: <AuthPage mode="register" />, errorElement: <RouteErrorBoundary /> },
   {
     path: "/",
     element: <App />,
+    errorElement: <RouteErrorBoundary />,
     children: [
       {
         index: true,
@@ -86,5 +90,5 @@ const router = createBrowserRouter([
   },
 ]);
 export default function AppRouter() {
-  return <RouterProvider router={router} />;
+  return <Suspense fallback={<LoadingState minHeight="100vh" />}><RouterProvider router={router} /></Suspense>;
 }

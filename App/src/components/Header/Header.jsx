@@ -5,9 +5,7 @@ import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import NotificationsRoundedIcon from "@mui/icons-material/NotificationsRounded";
 import AccountCircleRoundedIcon from "@mui/icons-material/AccountCircleRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
-import StoreRoundedIcon from "@mui/icons-material/StoreRounded";
 import { useLocation, useNavigate } from "react-router";
-import { useAppPreferences } from "../../context/AppPreferenceContext";
 
 const pageTitles = {
   "/": "Home",
@@ -31,7 +29,6 @@ export default function Header() {
   const isDesktopStockHistory = pathname === "/stock/history";
   const mobileTitle = pathname === "/" ? "Dashboard" : pageTitles[pathname] ?? "POS System";
   const [sortAnchor, setSortAnchor] = useState(null);
-  const { shop } = useAppPreferences();
 
   if (isMobile) {
     if (pathname.startsWith("/sale/") || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/") || pathname.startsWith("/report/")) return null;
@@ -48,7 +45,7 @@ export default function Header() {
     return (
       <AppBar position="sticky" elevation={0} sx={{ bgcolor: "#1976d2", borderBottom: 0 }}>
         <Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}>
-          <Box sx={{ width: 36, height: 36, borderRadius: "50%", overflow: "hidden", bgcolor: "rgba(255,255,255,.18)", display: "grid", placeItems: "center" }}>{shop.logo ? <Box component="img" src={shop.logo} alt={`${shop.name} logo`} sx={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <StoreRoundedIcon sx={{ fontSize: 21 }} />}</Box>
+          <Box />
           <Typography variant="h6" fontWeight={700}>{mobileTitle}</Typography>
           {action ? <IconButton aria-label={action.label} onClick={(event) => action.event === "inventory-sort" ? setSortAnchor(event.currentTarget) : window.dispatchEvent(new Event(action.event))} sx={{ justifySelf: "end", color: "common.white" }}>{action.icon}</IconButton> : <Box />}
         </Toolbar>

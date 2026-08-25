@@ -8,14 +8,16 @@ import BarcodeScannerDialog from "../BarcodeScanner/BarcodeScannerDialog";
 
 const internalCode = /^[A-Z]{2}[0-9]{4}$/;
 
-function printLabel(productName, barcodeValue, svg) {
-  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-  const popup = window.open("", "_blank", "noopener,noreferrer,width=480,height=640");
+function openPrintWindow() {
+  const popup = window.open("", "_blank", "width=480,height=640");
   if (!popup) {
-    URL.revokeObjectURL(url);
     throw new Error("The print window was blocked. Allow pop-ups and try again.");
   }
-  popup.document.write(`<!doctype html><html><head><title>Barcode label</title><style>@page{size:50mm 30mm;margin:0}html,body{width:50mm;height:30mm;margin:0;padding:0}.label{box-sizing:border-box;width:50mm;height:30mm;padding:2mm;font-family:Arial,sans-serif;text-align:center;overflow:hidden}.name{font-weight:800;text-transform:uppercase;font-size:9pt;line-height:11pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.barcode{display:block;width:46mm;height:15mm;margin:1mm auto 0}.code{font-weight:700;font-size:9pt;letter-spacing:1.2px;margin-top:.5mm}@media screen{body{background:#eee;padding:16px}.label{background:#fff;box-shadow:0 1px 4px #999}}</style></head><body><main class="label"><div class="name"></div><img class="barcode" alt="${barcodeValue}" src="${url}"><div class="code"></div></main><script>document.querySelector('.name').textContent=${JSON.stringify(productName || "Internal Barcode")};document.querySelector('.code').textContent=${JSON.stringify(barcodeValue)};window.onload=()=>{window.print();};window.onafterprint=()=>window.close();</script></body></html>`);
+  return popup;
+}
+function printLabel(popup, productName, barcodeValue, svg) {
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  popup.document.write(`<!doctype html><html><head><title>Barcode label</title><style>@page{size:50mm 30mm;margin:0}html,body{width:50mm;height:30mm;margin:0;padding:0}.label{box-sizing:border-box;width:50mm;height:30mm;padding:2mm;font-family:Arial,sans-serif;text-align:center;overflow:hidden}.name{font-weight:800;text-transform:uppercase;font-size:9pt;line-height:11pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.barcode{display:block;width:46mm;height:15mm;margin:1mm auto 0}.code{font-weight:700;font-size:9pt;letter-spacing:1.2px;margin-top:.5mm}@media screen{body{background:#eee;padding:16px}.label{background:#fff;box-shadow:0 1px 4px #999}}</style></head><body><main class="label"><div class="name"></div><img class="barcode" alt="${barcodeValue}" src="${url}"><div class="code"></div></main><script>const image=document.querySelector('.barcode');document.querySelector('.name').textContent=${JSON.stringify(productName || "Internal Barcode")};document.querySelector('.code').textContent=${JSON.stringify(barcodeValue)};image.onload=()=>window.print();image.onerror=()=>window.print();window.onafterprint=()=>window.close();</script></body></html>`);
   popup.document.close();
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
@@ -49,8 +51,8 @@ export default function BarcodeManagerDialog({ open, onClose, api, productName, 
   };
   const printDraft = async () => {
     if (!candidate) return; setBusy(true); setError("");
-    try { if (!candidateReservation) throw new Error("Generate a barcode first."); printLabel("Internal Barcode", candidate, previewSvg || await api.pricing.reservationLabel(candidateReservation.id)); }
-    catch (requestError) { setError(requestError.message || "Barcode printing failed."); }
+    let popup; try { popup = openPrintWindow(); if (!candidateReservation) throw new Error("Generate a barcode first."); printLabel(popup, "Internal Barcode", candidate, previewSvg || await api.pricing.reservationLabel(candidateReservation.id)); }
+    catch (requestError) { popup?.close(); setError(requestError.message || "Barcode printing failed."); }
     finally { setBusy(false); }
   };
 
@@ -65,8 +67,8 @@ export default function BarcodeManagerDialog({ open, onClose, api, productName, 
 
   const print = async () => {
     setBusy(true); setError("");
-    try { printLabel(productName, barcode.value, await api.pricing.barcodeLabel(barcode.id)); }
-    catch (requestError) { onNotice?.({ severity: "warning", text: "Product saved successfully. Barcode printing failed." }); setError(requestError.message || "Barcode printing failed."); }
+    let popup; try { popup = openPrintWindow(); printLabel(popup, productName, barcode.value, await api.pricing.barcodeLabel(barcode.id)); }
+    catch (requestError) { popup?.close(); onNotice?.({ severity: "warning", text: "Product saved successfully. Barcode printing failed." }); setError(requestError.message || "Barcode printing failed."); }
     finally { setBusy(false); }
   };
 

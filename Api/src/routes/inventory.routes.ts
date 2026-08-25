@@ -38,6 +38,7 @@ const adjustmentSchema = z.object({
   action: z.enum(["ADD", "REMOVE", "SUB", "SET"]),
   quantity: z.coerce.number().int().nonnegative(),
   reason: z.string().trim().min(1, "Reason is required."),
+  staffName: z.string().trim().min(1, "Staff name is required."),
 });
 
 inventoryRouter.use(requireAuth);
@@ -189,7 +190,7 @@ inventoryRouter.post("/:shopId/inventory", async (request, response, next) => {
           deliveryCost: input.deliveryCost ?? 0,
         },
       });
-      await recordInventoryMovement(tx, {
+      const movement = await recordInventoryMovement(tx, {
         shopId, productId: createdBatch.productId, variantId: createdBatch.variantId,
         inventoryBatchId: createdBatch.id, type: "OPENING", direction: "IN",
         quantity: createdBatch.quantity, unitCost: createdBatch.unitCost,
@@ -198,7 +199,10 @@ inventoryRouter.post("/:shopId/inventory", async (request, response, next) => {
         ...(input.note ? { reason: input.note } : {}),
         occurredAt: createdBatch.receivedAt,
       });
-      await refreshProductWeightedCost(tx, shopId, input.productId);
+      const averageCost = await refreshProductWeightedCost(tx, shopId, input.productId);
+      if (movement) {
+        await tx.inventoryMovement.update({ where: { id: movement.id }, data: { averageCostAfter: averageCost } });
+      }
 
       return createdBatch;
     });
@@ -282,13 +286,16 @@ inventoryRouter.post(
       const authUser = getAuthUser(request);
       const { shopId } = paramsSchema.parse(request.params);
       const inventoryBatchId = z.string().min(1).parse(request.params.inventoryBatchId);
+      await assertUserOwnsShop(authUser.id, shopId);
+      // Resolve the scoped resource before validating its mutation payload so a
+      // foreign-shop batch cannot leak validation details.
+      const scopedBatch = await prisma.inventoryBatch.findFirst({ where: { id: inventoryBatchId, shopId }, select: { id: true } });
+      if (!scopedBatch) throw notFound("Inventory batch not found.");
       const input = adjustmentSchema.parse(request.body);
 
       if (input.action !== "SET" && input.quantity < 1) {
         throw badRequest("Quantity must be greater than 0.");
       }
-
-      await assertUserOwnsShop(authUser.id, shopId);
 
       const result = await prisma.$transaction(async (tx) => {
         const batch = await tx.inventoryBatch.findFirst({
@@ -336,6 +343,7 @@ inventoryRouter.post(
             beforeQuantity,
             afterQuantity,
             reason: input.reason,
+            staffName: input.staffName,
           },
         });
 
@@ -352,6 +360,7 @@ inventoryRouter.post(
             beforeQuantity,
             afterQuantity,
             reason: input.reason,
+            staffName: input.staffName,
           },
         });
         const delta = afterQuantity - beforeQuantity;
@@ -364,6 +373,7 @@ inventoryRouter.post(
             unitCost: batch.unitCost, sourceType: "StockAdjustment", sourceId: adjustment.id,
             idempotencyKey: String(request.header("Idempotency-Key") || `inventory.adjust:${adjustment.id}`),
             reason: input.reason,
+            staffName: input.staffName,
           });
         }
         await refreshProductWeightedCost(tx, shopId, batch.productId);

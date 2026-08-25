@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { AppBar, Box, Button, IconButton, InputAdornment, Paper, TextField, Toolbar, Typography } from "@mui/material";
 import AddAPhotoRoundedIcon from "@mui/icons-material/AddAPhotoRounded";
@@ -7,12 +8,37 @@ import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import LocationOnRoundedIcon from "@mui/icons-material/LocationOnRounded";
 import StorefrontRoundedIcon from "@mui/icons-material/StorefrontRounded";
 import { useAppPreferences } from "../../context/AppPreferenceContext";
+import { useAuth } from "../../context/AuthContext";
+import { usePosApi } from "../../hooks/useApiResource";
 
 export default function ShopDetailsPage() {
-  const navigate = useNavigate(); const fileRef = useRef(null); const { shop, setShop } = useAppPreferences(); const [form, setForm] = useState(shop);
+  const navigate = useNavigate(); const fileRef = useRef(null); const { shop, setShop } = useAppPreferences(); const { shop: authenticatedShop, selectShop } = useAuth(); const api = usePosApi(); const queryClient = useQueryClient(); const [form, setForm] = useState(shop);
+  useEffect(() => {
+    let active = true;
+    api.shop.get().then(({ shop: persistedShop }) => {
+      if (!active || !persistedShop) return;
+      const next = { name: persistedShop.name, address: persistedShop.address || "", logo: persistedShop.logoUrl || "" };
+      setForm(next); setShop(next);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [api, setShop]);
   const change = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   const chooseLogo = (event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setForm((current) => ({ ...current, logo: String(reader.result) })); reader.readAsDataURL(file); };
-  const save = () => { setShop({ ...form, name: form.name.trim() || "POS System" }); navigate("/settings"); };
+  const save = async () => {
+    const next = { ...form, name: form.name.trim() || "POS System" };
+    try {
+      const logoUrl = /^https?:\/\//i.test(next.logo || "") ? next.logo : undefined;
+      const result = await api.shop.update({ name: next.name, address: next.address || null, ...(logoUrl !== undefined ? { logoUrl } : {}) });
+      const updated = result.shop;
+      const preferenceShop = { name: updated.name, address: updated.address || "", logo: updated.logoUrl || (logoUrl === undefined ? next.logo : "") };
+      setShop(preferenceShop);
+      if (authenticatedShop) selectShop({ ...authenticatedShop, ...updated });
+      await queryClient.invalidateQueries({ queryKey: ["shops", authenticatedShop?.id, "settings"] });
+      navigate("/settings");
+    } catch {
+      // Existing UI has no error slot; retain entered values and do not navigate on failed save.
+    }
+  };
   return <Box sx={{ minHeight: "100dvh", pb: 12, bgcolor: "#f8fafc", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: "primary.main" }}><Toolbar sx={{ minHeight: 70, display: "grid", gridTemplateColumns: "48px minmax(0,1fr) 48px" }}><IconButton aria-label="Back to settings" onClick={() => navigate("/settings")} sx={{ color: "common.white" }}><ArrowBackRoundedIcon sx={{ fontSize: 32 }} /></IconButton><Typography align="center" sx={{ fontSize: 22, fontWeight: 700 }}>Edit Shop Details</Typography><Box /></Toolbar></AppBar>
     <Box sx={{ px: { xs: 3.25, sm: 4 }, pt: 3.5, maxWidth: 640, mx: "auto" }}>
