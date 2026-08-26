@@ -11,6 +11,6 @@ export const queryKeys = {
   settings: (shopId) => ["shops", shopId, "settings"],
   pricing: (shopId, query = {}) => ["shops", shopId, "pricing", query],
   promotionCampaigns: (shopId) => ["shops", shopId, "promotion-campaigns"],
+  supplierDeliveries: (shopId, query = {}) => ["shops", shopId, "supplier-deliveries", query],
   reports: (shopId, name, query = {}) => ["shops", shopId, "reports", name, query],
 };
-

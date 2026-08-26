@@ -26,8 +26,10 @@ import { auditRouter } from "./routes/audit.routes.js";
 import { pricingRouter } from "./routes/pricing.routes.js";
 import { productReportsRouter } from "./routes/product-reports.routes.js";
 import { requestContext } from "./middleware/request-context.middleware.js";
+import { workspaceAlertsRouter } from "./routes/workspace-alerts.routes.js";
 
 export const app = express();
+app.set("trust proxy", 1);
 
 const configuredOrigins = (process.env.CORS_ORIGIN ?? "")
   .split(",")
@@ -66,6 +68,7 @@ app.use(pinoHttp());
 app.use(compression());
 app.use(
   cors({
+    credentials: true,
     origin(origin, callback) {
       if (!origin || allowedOrigins.includes(origin) || isAllowedDevelopmentOrigin(origin)) {
         callback(null, true);
@@ -90,6 +93,7 @@ app.use("/shops", storeConfigRouter);
 app.use("/shops", capabilityInventoryRouter);
 app.use("/shops", advancedCapabilitiesRouter);
 app.use("/shops", auditRouter);
+app.use("/shops", workspaceAlertsRouter);
 app.use("/shops", pricingRouter);
 app.use("/shops", productReportsRouter);
 app.use("/shops", shopSettingsRouter);

@@ -32,6 +32,9 @@ NODE_ENV=production
 DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
 JWT_SECRET="replace-with-a-long-random-secret-at-least-32-characters"
 CORS_ORIGIN="https://your-netlify-site.netlify.app"
+UPSTASH_REDIS_REST_URL="https://your-upstash-instance.upstash.io"
+UPSTASH_REDIS_REST_TOKEN="replace-with-upstash-rest-token"
+REFRESH_COOKIE_PATH="/api/auth"
 ```
 
 3. Railway build command:
@@ -40,7 +43,9 @@ CORS_ORIGIN="https://your-netlify-site.netlify.app"
 npm install --include=dev && npm run build
 ```
 
-4. Railway start command:
+4. Configure the Netlify `netlify.toml` `/api/*` redirect with the Railway public API host. The browser must use `/api` as `VITE_API_BASE_URL`, so refresh cookies remain same-origin.
+
+5. Railway start command:
 
 ```bash
 npm run prisma:deploy && npm run start

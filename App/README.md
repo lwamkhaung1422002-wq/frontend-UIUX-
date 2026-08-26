@@ -18,17 +18,20 @@ npm install
 npm run dev
 ```
 
-The web client runs at `http://localhost:5173` and, by default, calls the API
-at `http://localhost:3108`.
+The web client runs at `http://localhost:5173` and calls the API through the
+same-origin `/api` proxy. Vite forwards that route to `http://localhost:3108`
+by default.
 
 ## Environment
 
 | Variable | Purpose |
 | --- | --- |
-| `VITE_API_BASE_URL` | Public base URL of the API, without a trailing slash. |
+| `VITE_API_BASE_URL` | Public API base path; use `/api` in production. |
+| `VITE_API_PROXY_TARGET` | Local Vite proxy target, defaulting to `http://localhost:3108`. |
 
-Use the deployed Railway API URL in production. Camera barcode scanning requires
-HTTPS outside localhost.
+Keep `/api` in production and configure `../netlify.toml` to proxy it to the
+deployed Railway API. This preserves same-origin refresh-cookie sessions.
+Camera barcode scanning requires HTTPS outside localhost.
 
 ## Checks
 

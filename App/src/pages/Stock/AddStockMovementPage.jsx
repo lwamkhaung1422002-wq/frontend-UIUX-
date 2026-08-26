@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
@@ -64,7 +64,6 @@ export default function AddStockMovementPage() {
   const [products, setProducts] = useState([]); const [batches, setBatches] = useState([]); const [scannerOpen, setScannerOpen] = useState(false);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState("");
-  const stockTotalsRef = useRef(new Map());
 
   useEffect(() => {
     let active = true;
@@ -83,7 +82,7 @@ export default function AddStockMovementPage() {
         if (!active) return;
         setProducts((productResult.products || []).map((item) => {
           const barcodeValues = (item.barcodes || []).map((barcode) => barcode.value).filter(Boolean);
-          return { ...item, stock: stockTotalsRef.current.get(item.id) || 0, cost: item.cost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
+          return { ...item, stock: Number(item.currentStock ?? 0), cost: item.cost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
         }));
       })
       .catch((error) => active && setProductsError(error.message || "Unable to load products. Please try again."))
@@ -92,11 +91,7 @@ export default function AddStockMovementPage() {
       .then((inventoryResult) => {
         if (!active) return;
         const inventory = inventoryResult.inventory || [];
-        const totals = new Map();
-        inventory.forEach((batch) => totals.set(batch.productId, (totals.get(batch.productId) || 0) + Number(batch.quantity || 0)));
-        stockTotalsRef.current = totals;
         setBatches(inventory);
-        setProducts((current) => current.map((item) => ({ ...item, stock: totals.get(item.id) || 0 })));
       })
       .catch(() => { if (active) setBatches([]); });
     return () => { active = false; };
@@ -121,7 +116,34 @@ export default function AddStockMovementPage() {
       .filter(Boolean)
       .some((candidate) => String(candidate).toLowerCase() === normalizedValue)) || null;
   };
-  const resolveProductCode = async (value) => { const code = String(value || "").trim(); if (!code) return; const localProduct = findProduct(code); if (localProduct) { selectProduct(localProduct); return; } try { const result = await api.pricing.barcodeLookup(code); if (!result.known) throw new Error(result.inactive ? "This barcode belongs to an archived product and cannot be used for Stock In." : "No active product was found for this code."); const scannedProduct = products.find((item) => item.id === result.product?.id) || (result.product ? { ...result.product, stock: 0, barcode: result.barcode?.value || code, barcodeValues: [result.barcode?.value || code], icon: <Inventory2RoundedIcon />, color: "#1976d2" } : null); if (!scannedProduct) throw new Error("No active product was found for this code."); selectProduct(scannedProduct); } catch (error) { setProduct(null); setErrors((current) => ({ ...current, product: error.message || "No active product was found for this code." })); } };
+  const resolveProductCode = async (value) => {
+    const code = String(value || "").trim();
+    if (!code) return;
+    const localProduct = findProduct(code);
+    if (localProduct) {
+      selectProduct(localProduct);
+      return;
+    }
+    try {
+      const result = await api.pricing.barcodeLookup(code);
+      if (!result.known) {
+        throw new Error(result.inactive ? "This barcode belongs to an archived product and cannot be used for Stock In." : "No active product was found for this code.");
+      }
+      const listedProduct = products.find((item) => item.id === result.product?.id);
+      if (listedProduct) {
+        selectProduct(listedProduct);
+        return;
+      }
+      if (!result.product?.id) throw new Error("No active product was found for this code.");
+      const productResult = await api.products.get(result.product.id);
+      const apiProduct = productResult.product;
+      const barcode = result.barcode?.value || code;
+      selectProduct({ ...apiProduct, stock: Number(apiProduct.currentStock ?? 0), cost: apiProduct.cost ?? 0, barcode, barcodeValues: [barcode], icon: <Inventory2RoundedIcon />, color: "#1976d2" });
+    } catch (error) {
+      setProduct(null);
+      setErrors((current) => ({ ...current, product: error.message || "No active product was found for this code." }));
+    }
+  };
   const scanBarcode = () => setScannerOpen(true);
   const handleScan = async (value) => { setScannerOpen(false); await resolveProductCode(value); };
   const handleSearchKeyDown = (event) => { if (event.key !== "Enter") return; event.preventDefault(); void resolveProductCode(query); };

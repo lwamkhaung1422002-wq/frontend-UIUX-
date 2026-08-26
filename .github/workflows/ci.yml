@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            App/package-lock.json
+            Api/package-lock.json
+      - run: npm ci && npm run lint && npm run test:unit && npm run build
+        working-directory: App
+      - run: npm ci && npm run prisma:generate && npm run typecheck && npm run prisma:validate && npm run test:unit
+        working-directory: Api

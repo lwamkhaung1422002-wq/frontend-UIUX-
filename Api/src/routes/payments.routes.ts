@@ -17,7 +17,7 @@ const positiveMoneySchema = z.coerce.number().int().positive();
 
 const receivePaymentSchema = z.object({
   method: z.string().trim().min(1, "Payment method is required."),
-  scope: z.enum(["order-payment", "advanced-payment"]).optional(),
+  scope: z.enum(["order-payment", "advanced-payment", "credit-settlement"]).optional(),
   amount: positiveMoneySchema.optional(),
   billNumber: z.string().trim().optional(),
   transactionId: z.string().trim().optional(),
@@ -254,7 +254,7 @@ paymentsRouter.post("/:shopId/orders/:orderId/payments", async (request, respons
           shopId,
           orderId: order.id,
           type: "payment",
-          scope: input.scope ?? "order-payment",
+          scope: input.scope ?? (["unpaid", "partial"].includes(order.paymentStatus) ? "credit-settlement" : "order-payment"),
           method: input.method,
           amount,
           ...(input.billNumber !== undefined ? { billNumber: input.billNumber } : {}),
@@ -458,25 +458,26 @@ paymentsRouter.post("/:shopId/orders/:orderId/refunds", async (request, response
       });
 
       if (!order) throw notFound("Order not found.");
-      if (order.paymentStatus !== "paid") {
-        throw badRequest("Only paid orders can be refunded.");
-      }
-
+      let originalPayment: { id: string; amount: number } | null = null;
       if (input.originalPaymentId) {
-        const originalPayment = await tx.payment.findFirst({
-          where: { id: input.originalPaymentId, shopId },
+        originalPayment = await tx.payment.findFirst({
+          where: { id: input.originalPaymentId, shopId, orderId: order.id, amount: { gt: 0 } },
+          select: { id: true, amount: true },
         });
 
         if (!originalPayment) throw notFound("Original payment not found.");
-        if (originalPayment.method === "COD") {
+        const originalPaymentMethod = await tx.payment.findUnique({ where: { id: originalPayment.id }, select: { method: true } });
+        if (originalPaymentMethod?.method === "COD") {
           throw badRequest("Void COD settlements instead of refunding them.");
         }
+        const priorReversal = await tx.payment.findFirst({ where: { shopId, originalPaymentId: originalPayment.id, amount: { lt: 0 } }, select: { id: true } });
+        if (priorReversal) throw badRequest("This payment has already been cancelled.");
       }
 
       const paidAmount = await paidAmountForOrder(tx, shopId, order.id);
       const refundAmount = input.amount ?? paidAmount;
 
-      if (refundAmount <= 0 || refundAmount > paidAmount) {
+      if (refundAmount <= 0 || refundAmount > paidAmount || (originalPayment && refundAmount > originalPayment.amount)) {
         throw badRequest("Refund amount must be within the paid order balance.");
       }
 
@@ -499,7 +500,7 @@ paymentsRouter.post("/:shopId/orders/:orderId/refunds", async (request, response
       const updatedOrder = await tx.order.update({
         where: { id: order.id },
         data: {
-          paymentStatus: refundAmount >= paidAmount ? "refunded" : "unpaid",
+          paymentStatus: refundAmount >= paidAmount ? "refunded" : "partial",
           refundId: refund.id,
         },
         include: {

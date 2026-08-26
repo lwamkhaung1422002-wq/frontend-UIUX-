@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
@@ -75,11 +75,69 @@ void printReceipt;
 const formatMoney = (amount) =>
   `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 
+function QuantityButton({ item, change, onQuantityChange, children, ...props }) {
+  const delayTimerRef = useRef(null);
+  const repeatTimerRef = useRef(null);
+  const ignoreClickRef = useRef(false);
+
+  const stopRepeating = () => {
+    if (delayTimerRef.current) window.clearTimeout(delayTimerRef.current);
+    if (repeatTimerRef.current) window.clearInterval(repeatTimerRef.current);
+    delayTimerRef.current = null;
+    repeatTimerRef.current = null;
+  };
+
+  useEffect(() => stopRepeating, []);
+
+  const startRepeating = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    ignoreClickRef.current = true;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    onQuantityChange(item.id, change);
+    delayTimerRef.current = window.setTimeout(() => {
+      repeatTimerRef.current = window.setInterval(
+        () => onQuantityChange(item.id, change),
+        120,
+      );
+    }, 350);
+  };
+
+  const releaseRepeating = () => {
+    stopRepeating();
+    // Pointer clicks are dispatched immediately after pointer-up. Clearing on the
+    // next task keeps that click from applying the change a second time.
+    window.setTimeout(() => {
+      ignoreClickRef.current = false;
+    }, 0);
+  };
+
+  return (
+    <IconButton
+      {...props}
+      onPointerDown={startRepeating}
+      onPointerUp={releaseRepeating}
+      onPointerCancel={releaseRepeating}
+      onPointerLeave={releaseRepeating}
+      onClick={() => {
+        if (ignoreClickRef.current) {
+          ignoreClickRef.current = false;
+          return;
+        }
+        onQuantityChange(item.id, change);
+      }}
+      sx={{ touchAction: "manipulation", userSelect: "none", ...props.sx }}
+    >
+      {children}
+    </IconButton>
+  );
+}
+
 function ProductCard({ item, onQuantityChange }) {
   const lineTotal = item.price * item.quantity;
   const promotionText =
     item.promotion.type === "discount"
-      ? `Discount  ${formatMoney(item.promotion.value)}`
+      ? `${item.promotion.text} · Discount ${formatMoney(item.promotion.value)}`
       : item.promotion.text;
 
   return (
@@ -139,10 +197,12 @@ function ProductCard({ item, onQuantityChange }) {
                     overflow: "hidden",
                   }}
                 >
-                  <IconButton
+                  <QuantityButton
                     size="small"
                     aria-label={`Reduce ${item.name} quantity`}
-                    onClick={() => onQuantityChange(item.id, -1)}
+                    item={item}
+                    change={-1}
+                    onQuantityChange={onQuantityChange}
                     sx={{
                       borderRadius: 0,
                       color: "#1976d2",
@@ -150,7 +210,7 @@ function ProductCard({ item, onQuantityChange }) {
                     }}
                   >
                     <RemoveRoundedIcon />
-                  </IconButton>
+                  </QuantityButton>
                   <Typography
                     sx={{
                       display: "grid",
@@ -160,10 +220,12 @@ function ProductCard({ item, onQuantityChange }) {
                   >
                     {item.quantity}
                   </Typography>
-                  <IconButton
+                  <QuantityButton
                     size="small"
                     aria-label={`Increase ${item.name} quantity`}
-                    onClick={() => onQuantityChange(item.id, 1)}
+                    item={item}
+                    change={1}
+                    onQuantityChange={onQuantityChange}
                     sx={{
                       borderRadius: 0,
                       color: "#1976d2",
@@ -171,7 +233,7 @@ function ProductCard({ item, onQuantityChange }) {
                     }}
                   >
                     <AddRoundedIcon />
-                  </IconButton>
+                  </QuantityButton>
                 </Box>
                 <Typography fontWeight={700} sx={{ mt: 0.8 }}>
                   {formatMoney(lineTotal)}
@@ -215,10 +277,12 @@ export default function CreateOrderPage() {
   const { shop } = useAuth();
   const queryClient = useQueryClient();
   const [items, setItems] = useState(initialItems);
+  const itemsRef = useRef(initialItems);
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [otherAnchor, setOtherAnchor] = useState(null);
   const [otherPayment, setOtherPayment] = useState("unpaid");
-  const [amountReceived, setAmountReceived] = useState("10000");
+  const [amountReceived, setAmountReceived] = useState("0");
+  const [amountReceivedTouched, setAmountReceivedTouched] = useState(false);
   const [buyerName, setBuyerName] = useState("");
   const [note, setNote] = useState("");
   const [productPickerOpen, setProductPickerOpen] = useState(false);
@@ -230,9 +294,28 @@ export default function CreateOrderPage() {
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [createdOrder, setCreatedOrder] = useState(null);
   const [orderError, setOrderError] = useState("");
-  const { data: catalogResponse, error: catalogQueryError } = useProductsQuery({ status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" });
+  const {
+    data: catalogResponse,
+    error: catalogQueryError,
+    refetch: refetchCatalog,
+  } = useProductsQuery(
+    { status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" },
+    { staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: "always" },
+  );
   const catalog = useMemo(() => (catalogResponse?.products || []).map((product) => ({ ...product, price: Number(product.price || 0), stock: Number(product.currentStock || 0), color: "#1976d2", icon: <Inventory2RoundedIcon />, promotion: { type: "regular", text: "Regular price" } })), [catalogResponse]);
   const catalogError = catalogQueryError?.message || "";
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    const refreshCatalog = () => {
+      void refetchCatalog();
+    };
+    window.addEventListener("inventory-updated", refreshCatalog);
+    return () => window.removeEventListener("inventory-updated", refreshCatalog);
+  }, [refetchCatalog]);
 
   useEffect(() => {
     if (!createdOrder) return undefined;
@@ -271,6 +354,12 @@ export default function CreateOrderPage() {
   const cashAmount = Number(amountReceived.replace(/,/g, "")) || 0;
   const isPartial = paymentMethod === "other" && otherPayment === "partial";
   const showsAmountReceived = paymentMethod === "cash" || isPartial;
+  const insufficientAmount = items.length > 0 && paymentMethod === "cash" && amountReceivedTouched && cashAmount < totals.total;
+  const invalidPartialAmount = items.length > 0 && isPartial && (!amountReceivedTouched || cashAmount <= 0 || cashAmount >= totals.total);
+  const updateAmountReceived = (value) => {
+    setAmountReceived(value.replace(/[^0-9]/g, ""));
+    setAmountReceivedTouched(true);
+  };
   const nonCashMethods = configuredMethods.filter(
     (method) => method.active && method.id !== "cash" && method.type !== "cod",
   );
@@ -308,16 +397,19 @@ export default function CreateOrderPage() {
         : configuredMethods.find((method) => method.id === paymentMethod)
             ?.name || paymentMethod;
   const createOrder = async () => {
+    if (creatingOrder) return;
+    if (insufficientAmount) { setOrderError("Amount received must be at least the total amount."); return; }
+    if (invalidPartialAmount) { setOrderError("Enter a partial amount greater than zero and less than the total."); return; }
     if (!items.length) {
       setOrderError("Add at least one product before creating the order.");
       return;
     }
     if (
       paymentMethod === "other" &&
-      otherPayment === "unpaid" &&
+      ["unpaid", "partial"].includes(otherPayment) &&
       !buyerName.trim()
     ) {
-      setOrderError("Buyer name is required for an unpaid order.");
+      setOrderError("Buyer name is required for unpaid and partial orders.");
       return;
     }
     setCreatingOrder(true);
@@ -325,6 +417,7 @@ export default function CreateOrderPage() {
     try {
       const result = await api.orders.create({
         fulfillmentStatus: "reserved",
+        paymentTracking: paymentMethod === "other" && ["unpaid", "partial"].includes(otherPayment),
         ...(buyerName.trim() ? { customer: { name: buyerName.trim() } } : {}),
         note: note.trim() || undefined,
         items: items.map((item) => ({
@@ -339,17 +432,24 @@ export default function CreateOrderPage() {
           ? 0
           : paymentMethod === "cash" ||
               (paymentMethod === "other" && otherPayment === "partial")
-            ? Math.min(totals.total, cashAmount)
+            ? paymentMethod === "cash" && !amountReceivedTouched
+              ? totals.total
+              : Math.min(totals.total, cashAmount)
             : totals.total;
       if (amount > 0)
         await api.payments.addToOrder(order.id, {
           method: paymentName,
           amount,
+          scope: isPartial ? "credit-settlement" : "order-payment",
           note: note.trim() || undefined,
         });
       const completed = await api.orders.updateStatus(order.id, { fulfillmentStatus: "completed" });
+      window.dispatchEvent(new Event("inventory-updated"));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.orders(shop?.id) }),
+        queryClient.invalidateQueries({
+          queryKey: ["shops", shop?.id, "products"],
+        }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shop?.id) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.movements(shop?.id) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }),
@@ -360,7 +460,8 @@ export default function CreateOrderPage() {
       setProductSearch("");
       setBuyerName("");
       setNote("");
-      setAmountReceived("");
+      setAmountReceived("0");
+      setAmountReceivedTouched(false);
       setPaymentMethod("cash");
       setOtherPayment("unpaid");
       setOtherAnchor(null);
@@ -371,20 +472,43 @@ export default function CreateOrderPage() {
     }
   };
 
+  const priceCartItem = async (product, quantity) => {
+    const resolved = await api.pricing.resolve({ productId: product.id, quantity });
+    const pricing = resolved.pricing;
+    return { ...product, price: Number(pricing.regularUnitPrice ?? product.price ?? 0), quantity, promotion: pricing.promotionId ? { type: "discount", value: Number(pricing.promotionDiscount || 0) * quantity, text: `Promotion${pricing.promotionName ? `: ${pricing.promotionName}` : ""}` } : { type: "regular", text: "Regular price" } };
+  };
   const changeQuantity = (id, change) => {
-    setItems((current) =>
-      current.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              quantity: Math.max(
-                1,
-                Math.min(item.stock, item.quantity + change),
-              ),
-            }
-          : item,
-      ),
+    const item = itemsRef.current.find((current) => current.id === id);
+    if (!item) return;
+    const quantity = item.quantity + change;
+
+    if (quantity <= 0) {
+      const nextItems = itemsRef.current.filter((entry) => entry.id !== id);
+      itemsRef.current = nextItems;
+      setItems(nextItems);
+      return;
+    }
+    if (quantity > item.stock) return;
+
+    const nextItems = itemsRef.current.map((entry) =>
+      entry.id === id ? { ...entry, quantity } : entry,
     );
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+    void priceCartItem(item, quantity)
+      .then((priced) => {
+        // A delayed pricing response must not overwrite a later hold-to-repeat change.
+        if (itemsRef.current.find((entry) => entry.id === id)?.quantity !== quantity)
+          return;
+        const pricedItems = itemsRef.current.map((entry) =>
+          entry.id === id ? priced : entry,
+        );
+        itemsRef.current = pricedItems;
+        setItems(pricedItems);
+      })
+      .catch((error) =>
+        setOrderError(error.message || "Promotion price could not be refreshed."),
+      );
   };
 
   const selectOtherPayment = (value) => {
@@ -393,18 +517,15 @@ export default function CreateOrderPage() {
     setOtherAnchor(null);
   };
 
-  const addProductFromPicker = (product) => {
+  const addProductFromPicker = async (product) => {
     if (product.stock <= 0) return;
-    setItems((current) => {
-      const existing = current.find((item) => item.id === product.id);
-      return existing
-        ? current.map((item) =>
-            item.id === product.id
-              ? { ...item, quantity: Math.min(item.stock, item.quantity + 1) }
-              : item,
-          )
-        : [...current, { ...product, quantity: 1 }];
-    });
+    const existing = items.find((item) => item.id === product.id);
+    const quantity = existing ? Math.min(product.stock, existing.quantity + 1) : 1;
+    try {
+      const priced = await priceCartItem(product, quantity);
+      setItems((current) => existing ? current.map((item) => item.id === product.id ? priced : item) : [...current, priced]);
+      setOrderError("");
+    } catch (error) { setOrderError(error.message || "Promotion price could not be loaded."); }
     setProductPickerOpen(false);
     setProductSearch("");
   };
@@ -465,7 +586,7 @@ export default function CreateOrderPage() {
         paymentMethod={paymentMethod}
         setPaymentMethod={setPaymentMethod}
         amountReceived={amountReceived}
-        setAmountReceived={setAmountReceived}
+        setAmountReceived={updateAmountReceived}
         buyerName={buyerName}
         setBuyerName={setBuyerName}
         note={note}
@@ -475,6 +596,9 @@ export default function CreateOrderPage() {
         navigate={navigate}
         createOrder={createOrder}
         creatingOrder={creatingOrder}
+        insufficientAmount={insufficientAmount}
+        invalidPartialAmount={invalidPartialAmount}
+        cashChange={amountReceivedTouched ? cashAmount - totals.total : 0}
         createdOrder={createdOrder}
         orderError={orderError}
         quickMethods={quickMethods}
@@ -689,7 +813,7 @@ export default function CreateOrderPage() {
               />
             )}
 
-            {paymentMethod === "other" && otherPayment === "unpaid" && (
+            {paymentMethod === "other" && ["unpaid", "partial"].includes(otherPayment) && (
               <>
                 <Typography variant="body2" sx={{ mt: 1.75, mb: 0.7 }}>
                   Buyer name
@@ -712,9 +836,7 @@ export default function CreateOrderPage() {
                 <TextField
                   fullWidth
                   value={amountReceived}
-                  onChange={(event) =>
-                    setAmountReceived(event.target.value.replace(/[^0-9]/g, ""))
-                  }
+                  onChange={(event) => updateAmountReceived(event.target.value)}
                   inputMode="numeric"
                   InputProps={{
                     endAdornment: (
@@ -732,7 +854,7 @@ export default function CreateOrderPage() {
                 </Typography>
                 <TextField
                   fullWidth
-                  value={formatMoney(Math.max(0, cashAmount - totals.total))}
+                  value={formatMoney(amountReceivedTouched ? cashAmount - totals.total : 0)}
                   InputProps={{ readOnly: true }}
                   sx={{ "& .MuiOutlinedInput-root": { bgcolor: "#f1f5f9" } }}
                 />
@@ -779,6 +901,8 @@ export default function CreateOrderPage() {
             {orderError}
           </Alert>
         )}
+        {insufficientAmount && <Alert severity="warning" sx={{ mt: 2 }}>Amount received is lower than the total amount.</Alert>}
+        {invalidPartialAmount && <Alert severity="warning" sx={{ mt: 2 }}>Enter an amount less than the total for a partial payment.</Alert>}
         {createdOrder && (
           <Alert severity="success" sx={{ mt: 2 }}>
             Order {createdOrder.orderNumber || createdOrder.id} created
@@ -790,7 +914,7 @@ export default function CreateOrderPage() {
           fullWidth
           variant="contained"
           startIcon={<CheckRoundedIcon />}
-          disabled={creatingOrder}
+          disabled={creatingOrder || insufficientAmount || invalidPartialAmount}
           onClick={() => void createOrder()}
           sx={{
             mt: 2,
@@ -1037,6 +1161,9 @@ export function DesktopCreateOrder({
   navigate,
   createOrder,
   creatingOrder,
+  insufficientAmount,
+  invalidPartialAmount,
+  cashChange,
   createdOrder,
   orderError,
   quickMethods,
@@ -1052,7 +1179,7 @@ export function DesktopCreateOrder({
   savePaymentMethod,
 }) {
   const received = Number(amountReceived.replace(/,/g, "")) || 0;
-  const change = Math.max(0, received - totals.total);
+  const change = cashChange;
   const isPartialPayment = paymentMethod === "other" && otherPayment === "partial";
   const query = productSearch.trim().toLowerCase();
   const visibleCatalog = catalog.filter(
@@ -1234,11 +1361,7 @@ export function DesktopCreateOrder({
                   <TextField
                     fullWidth
                     value={amountReceived}
-                    onChange={(event) =>
-                      setAmountReceived(
-                        event.target.value.replace(/[^0-9]/g, ""),
-                      )
-                    }
+                    onChange={(event) => setAmountReceived(event.target.value)}
                     sx={{ "& .MuiOutlinedInput-root": { borderRadius: 1.5 } }}
                   />
                   <Box sx={{ mt: 1.75 }}>
@@ -1251,11 +1374,11 @@ export function DesktopCreateOrder({
                   </Box>
                 </>
               )}
-              {paymentMethod === "other" && otherPayment === "unpaid" && <TextField
+              {paymentMethod === "other" && ["unpaid", "partial"].includes(otherPayment) && <TextField
                 fullWidth
                 value={buyerName}
                 onChange={(event) => setBuyerName(event.target.value)}
-                placeholder="Buyer name (for unpaid orders)"
+                placeholder="Buyer name (for unpaid or partial orders)"
                 sx={{
                   mt: 2,
                   "& .MuiOutlinedInput-root": { borderRadius: 1.5 },
@@ -1284,7 +1407,7 @@ export function DesktopCreateOrder({
                 <Button
                   variant="contained"
                   startIcon={<CheckRoundedIcon />}
-                  disabled={creatingOrder}
+                  disabled={creatingOrder || insufficientAmount || invalidPartialAmount}
                   onClick={() => void createOrder()}
                   sx={{ minHeight: 44, textTransform: "none", fontWeight: 700 }}
                 >
@@ -1300,6 +1423,8 @@ export function DesktopCreateOrder({
                 </Button>
               </Box>
               {orderError && <Alert severity="error" sx={{ mt: 1.25 }}>{orderError}</Alert>}
+              {insufficientAmount && <Alert severity="warning" sx={{ mt: 1.25 }}>Amount received is lower than the total amount.</Alert>}
+              {invalidPartialAmount && <Alert severity="warning" sx={{ mt: 1.25 }}>Enter an amount less than the total for a partial payment.</Alert>}
               {createdOrder && <Alert severity="success" sx={{ mt: 1.25 }}>Order {createdOrder.orderNumber || createdOrder.id} created successfully.</Alert>}
             </CardContent>
           </Card>
@@ -1314,7 +1439,7 @@ function DesktopOrderItem({ item, onQuantityChange }) {
   const subtotal = item.price * item.quantity;
   const promotionText =
     item.promotion.type === "discount"
-      ? `Discount ${formatMoney(item.promotion.value)}`
+      ? `${item.promotion.text} · Discount ${formatMoney(item.promotion.value)}`
       : item.promotion.text;
   return (
     <Box
@@ -1365,9 +1490,11 @@ function DesktopOrderItem({ item, onQuantityChange }) {
           overflow: "hidden",
         }}
       >
-        <IconButton
+        <QuantityButton
           aria-label={`Reduce ${item.name} quantity`}
-          onClick={() => onQuantityChange(item.id, -1)}
+          item={item}
+          change={-1}
+          onQuantityChange={onQuantityChange}
           sx={{
             borderRadius: 0,
             color: "primary.main",
@@ -1376,7 +1503,7 @@ function DesktopOrderItem({ item, onQuantityChange }) {
           }}
         >
           <RemoveRoundedIcon sx={{ fontSize: 28 }} />
-        </IconButton>
+        </QuantityButton>
         <Typography
           sx={{
             display: "grid",
@@ -1387,9 +1514,11 @@ function DesktopOrderItem({ item, onQuantityChange }) {
         >
           {item.quantity}
         </Typography>
-        <IconButton
+        <QuantityButton
           aria-label={`Increase ${item.name} quantity`}
-          onClick={() => onQuantityChange(item.id, 1)}
+          item={item}
+          change={1}
+          onQuantityChange={onQuantityChange}
           sx={{
             borderRadius: 0,
             color: "primary.main",
@@ -1398,7 +1527,7 @@ function DesktopOrderItem({ item, onQuantityChange }) {
           }}
         >
           <AddRoundedIcon sx={{ fontSize: 30 }} />
-        </IconButton>
+        </QuantityButton>
       </Box>
       <Box sx={{ textAlign: "right" }}>
         <Typography sx={{ fontSize: 16, fontWeight: 700 }}>

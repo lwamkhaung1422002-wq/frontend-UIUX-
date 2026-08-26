@@ -18,6 +18,24 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   shops     Shop[]
+  sessions  AuthSession[]
+}
+
+model AuthSession {
+  id              String   @id @default(cuid())
+  userId          String
+  tokenHash       String   @unique
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  replacedById    String?  @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy      AuthSession?  @relation("SessionRotation", fields: [replacedById], references: [id])
+  replacedSession AuthSession?  @relation("SessionRotation")
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Shop {
@@ -39,6 +57,8 @@ model Shop {
   expenses            Expense[]
   auditLogs           AuditLog[]
   suppliers           Supplier[]
+  supplierDeliveryRecords SupplierDeliveryRecord[]
+  supplierDeliveryPayments SupplierDeliveryPayment[]
   purchases           Purchase[]
   productSuppliers    ProductSupplier[]
   setting             ShopSetting?
@@ -66,6 +86,7 @@ model Shop {
   promotions          Promotion[]
   promotionCampaigns  PromotionCampaign[]
   saleSequence        Int                    @default(0)
+  notifications       Notification[]
 
   @@index([ownerId])
 }
@@ -253,9 +274,9 @@ model Supplier {
   updatedAt     DateTime   @updatedAt
   shop          Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
   purchases     Purchase[]
+  deliveryRecords SupplierDeliveryRecord[]
   productLinks  ProductSupplier[]
 
-  @@unique([shopId, name])
   @@index([shopId])
 }
 
@@ -436,6 +457,7 @@ model Order {
   completedAt       DateTime?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+  paymentTracking   Boolean          @default(false)
   shop              Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
   customer          Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items             OrderItem[]
@@ -925,6 +947,73 @@ model ProductBarcode {
   @@unique([shopId, normalizedValue])
   @@index([shopId, status, normalizedValue])
   @@index([productId, variantId, productUnitId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  shopId    String
+  type      String
+  entityId  String
+  dateKey   String
+  title     String
+  message   String
+  readAt    DateTime?
+  resolvedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, type, entityId, dateKey])
+  @@index([shopId, readAt, createdAt])
+}
+
+model SupplierDeliveryRecord {
+  id            String   @id @default(cuid())
+  shopId        String
+  supplierId    String?
+  supplierName  String
+  supplierPhone String
+  invoiceNumber String
+  deliveryName  String
+  deliveryPhone String
+  receiverName  String
+  receivedAt    DateTime
+  dueAt         DateTime
+  amount        Int
+  status        String   @default("active")
+  cancelledAt   DateTime?
+  cancelReason  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  supplier      Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  payments      SupplierDeliveryPayment[]
+
+  @@unique([shopId, invoiceNumber])
+  @@index([shopId, supplierId, receivedAt])
+}
+
+model SupplierDeliveryPayment {
+  id                String   @id @default(cuid())
+  shopId            String
+  deliveryRecordId  String
+  amount            Int
+  method            String
+  reference         String?
+  notes             String?
+  payerName         String?
+  payerPhone        String?
+  signatureDataUrl  String?
+  mobileAccountName String?
+  paidAt            DateTime @default(now())
+  reversedAt        DateTime?
+  reversalReason    String?
+  createdAt         DateTime @default(now())
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  deliveryRecord    SupplierDeliveryRecord @relation(fields: [deliveryRecordId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, paidAt])
+  @@index([deliveryRecordId])
 }
 
 model GeneratedBarcode {

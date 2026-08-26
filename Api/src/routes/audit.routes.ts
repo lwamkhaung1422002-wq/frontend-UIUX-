@@ -10,6 +10,7 @@ export const auditRouter = Router();
 const paramsSchema = z.object({ shopId: z.string().min(1) });
 const querySchema = z.object({
   entity: z.string().trim().min(1).max(80).optional(),
+  entityId: z.string().trim().min(1).max(120).optional(),
   actionPrefix: z.string().trim().min(1).max(80).optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -26,6 +27,7 @@ auditRouter.get("/:shopId/audit-logs", async (request, response, next) => {
     const where = {
       shopId,
       ...(query.entity ? { entity: query.entity } : {}),
+      ...(query.entityId ? { entityId: query.entityId } : {}),
       ...(query.actionPrefix ? { action: { startsWith: query.actionPrefix } } : {}),
     };
     const [auditLogs, totalCount] = await prisma.$transaction([

@@ -63,10 +63,6 @@ expensesRouter.post("/:shopId/expenses", async (request, response, next) => {
     const { shopId } = paramsSchema.parse(request.params);
     const input = expenseSchema.parse(request.body);
 
-    if (requiresTransactionId(input.method) && !input.transactionId) {
-      throw new Error("Transaction ID is required for non-cash expenses.");
-    }
-
     await assertUserOwnsShop(authUser.id, shopId);
 
     const data: Prisma.ExpenseUncheckedCreateInput = {
@@ -105,10 +101,6 @@ expensesRouter.patch("/:shopId/expenses/:expenseId", async (request, response, n
     const { shopId } = paramsSchema.parse(request.params);
     const expenseId = z.string().min(1).parse(request.params.expenseId);
     const input = updateExpenseSchema.parse(request.body);
-
-    if (requiresTransactionId(input.method) && !input.transactionId) {
-      throw new Error("Transaction ID is required for non-cash expenses.");
-    }
 
     await assertUserOwnsShop(authUser.id, shopId);
 

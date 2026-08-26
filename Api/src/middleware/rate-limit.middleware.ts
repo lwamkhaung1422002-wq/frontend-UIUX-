@@ -1,23 +1,56 @@
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
 import type { NextFunction, Request, Response } from "express";
 
-type Bucket = { count: number; resetAt: number };
-const buckets = new Map<string, Bucket>();
+// Local development must never depend on a remote Redis service. A stale or
+// unreachable Upstash configuration otherwise blocks login before the API can
+// even query the local database.
+const hasUpstashConfiguration = process.env.NODE_ENV === "production" && Boolean(
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN,
+);
+const maximum = Number(process.env.AUTH_RATE_LIMIT_MAX ?? 10);
+const limiter = hasUpstashConfiguration
+  ? new Ratelimit({
+    redis: new Redis({ url: process.env.UPSTASH_REDIS_REST_URL!, token: process.env.UPSTASH_REDIS_REST_TOKEN! }),
+    limiter: Ratelimit.slidingWindow(maximum, "1 m"),
+    prefix: "general-pos:auth",
+  })
+  : null;
+const developmentBuckets = new Map<string, { count: number; resetAt: number }>();
 
-export function authRateLimit(request: Request, response: Response, next: NextFunction): void {
-  const now = Date.now();
-  const windowMs = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? 60_000);
-  const maximum = Number(process.env.AUTH_RATE_LIMIT_MAX ?? 10);
-  const key = `${request.ip}:${request.path}`;
-  const current = buckets.get(key);
-  const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + windowMs } : current;
-  bucket.count += 1;
-  buckets.set(key, bucket);
-  response.setHeader("RateLimit-Limit", maximum);
-  response.setHeader("RateLimit-Remaining", Math.max(0, maximum - bucket.count));
-  response.setHeader("RateLimit-Reset", Math.ceil(bucket.resetAt / 1_000));
-  if (bucket.count > maximum) {
-    response.status(429).json({ message: "Too many authentication attempts. Try again later." });
+function normalizedEmail(value: unknown): string {
+  return typeof value === "object" && value !== null && "email" in value && typeof value.email === "string"
+    ? value.email.trim().toLowerCase()
+    : "unknown";
+}
+
+export async function authRateLimit(request: Request, response: Response, next: NextFunction): Promise<void> {
+  if (!limiter) {
+    if (process.env.NODE_ENV !== "production") {
+      const key = `${request.ip}:${normalizedEmail(request.body)}:${request.path}`;
+      const now = Date.now(); const current = developmentBuckets.get(key);
+      const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + 60_000 } : current;
+      bucket.count += 1; developmentBuckets.set(key, bucket);
+      if (bucket.count > maximum) { response.status(429).json({ message: "Too many authentication attempts. Try again later." }); return; }
+      next(); return;
+    }
+    request.log.error("Authentication rate limiter is not configured.");
+    response.status(503).json({ message: "Authentication is temporarily unavailable." });
     return;
   }
-  next();
+
+  try {
+    const result = await limiter.limit(`${request.ip}:${normalizedEmail(request.body)}:${request.path}`);
+    response.setHeader("RateLimit-Limit", maximum);
+    response.setHeader("RateLimit-Remaining", Math.max(0, result.remaining));
+    response.setHeader("RateLimit-Reset", Math.ceil(result.reset / 1_000));
+    if (!result.success) {
+      response.status(429).json({ message: "Too many authentication attempts. Try again later." });
+      return;
+    }
+    next();
+  } catch (error) {
+    request.log.error({ error }, "Authentication rate limiter failed.");
+    response.status(503).json({ message: "Authentication is temporarily unavailable." });
+  }
 }

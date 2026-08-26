@@ -146,7 +146,40 @@ capabilityInventoryRouter.get("/:shopId/inventory-movements", async (request, re
       }),
       prisma.inventoryMovement.count({ where }),
     ]);
-    response.json({ movements, totalCount });
+    const allocationIds = movements
+      .filter((movement) => movement.sourceType === "OrderItemAllocation")
+      .map((movement) => movement.sourceId?.split(":")[0])
+      .filter((value): value is string => Boolean(value));
+    const allocations = allocationIds.length
+      ? await prisma.orderItemAllocation.findMany({ where: { id: { in: allocationIds } } })
+      : [];
+    const orderItems = allocations.length
+      ? await prisma.orderItem.findMany({
+          where: { id: { in: allocations.map((allocation) => allocation.orderItemId) } },
+          select: { id: true, orderId: true },
+        })
+      : [];
+    const orders = orderItems.length
+      ? await prisma.order.findMany({
+          where: { id: { in: orderItems.map((item) => item.orderId) } },
+          select: { id: true, orderNumber: true },
+        })
+      : [];
+    const orderIdByItemId = new Map(orderItems.map((item) => [item.id, item.orderId]));
+    const invoiceByOrderId = new Map(orders.map((order) => [order.id, order.orderNumber || order.id]));
+    const invoiceByAllocationId = new Map(allocations.map((allocation) => [
+      allocation.id,
+      invoiceByOrderId.get(orderIdByItemId.get(allocation.orderItemId) || ""),
+    ]));
+    response.json({
+      movements: movements.map((movement) => ({
+        ...movement,
+        invoiceNumber: movement.sourceType === "OrderItemAllocation" && movement.sourceId
+          ? invoiceByAllocationId.get(movement.sourceId.split(":")[0] ?? "") ?? null
+          : null,
+      })),
+      totalCount,
+    });
   } catch (error) { next(error); }
 });
 

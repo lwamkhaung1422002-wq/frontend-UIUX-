@@ -23,6 +23,12 @@ import { useNavigate } from "react-router";
 import { useDashboardQuery } from "../../hooks/usePosQueries";
 
 const setupStorageKey = "pos:dashboard-setup-dismissed";
+const greetingForHour = (hour) => {
+  if (hour >= 5 && hour < 12) return "Good Morning";
+  if (hour >= 12 && hour < 17) return "Good Afternoon";
+  if (hour >= 17 && hour < 21) return "Good Evening";
+  return "Good Night";
+};
 const formatKyat = (amount) =>
   `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 
@@ -97,6 +103,7 @@ export default function HomePage() {
   const [showSetup, setShowSetup] = useState(
     () => localStorage.getItem(setupStorageKey) !== "true",
   );
+  const [greeting, setGreeting] = useState(() => greetingForHour(new Date().getHours()));
   const summary = dashboard ? {
     todaySales: Number(dashboard.summary?.revenue || 0),
     todayExpense: Number(dashboard.summary?.operatingExpenses || 0),
@@ -121,6 +128,11 @@ export default function HomePage() {
     return () =>
       window.removeEventListener("dashboard-refresh", refreshDashboard);
   }, [refetch]);
+  useEffect(() => {
+    const updateGreeting = () => setGreeting(greetingForHour(new Date().getHours()));
+    const timer = window.setInterval(updateGreeting, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const dismissSetup = () => {
     localStorage.setItem(setupStorageKey, "true");
@@ -142,7 +154,7 @@ export default function HomePage() {
       }}
     >
       <Typography sx={{ color: "#7a7f87", fontSize: 16 }}>
-        Good Evening
+        {greeting}
       </Typography>
       {showSetup && (
         <Card

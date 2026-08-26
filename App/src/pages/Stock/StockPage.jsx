@@ -49,11 +49,18 @@ export default function StockPage() {
   const [barcodeGeneratorOpen, setBarcodeGeneratorOpen] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanNotice, setScanNotice] = useState(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
     const updateSort = (event) => setSort(event.detail);
     window.addEventListener("inventory-sort", updateSort);
     return () => window.removeEventListener("inventory-sort", updateSort);
+  }, []);
+
+  useEffect(() => {
+    const refreshInventory = () => setReloadVersion((value) => value + 1);
+    window.addEventListener("inventory-updated", refreshInventory);
+    return () => window.removeEventListener("inventory-updated", refreshInventory);
   }, []);
 
   useEffect(() => {
@@ -83,7 +90,9 @@ export default function StockPage() {
           barcodeValues: (product.barcodes || []).map((barcode) => barcode.value).filter(Boolean),
           category: product.category?.name || categoryNames.get(product.categoryId) || "Uncategorized",
           price: Number(product.price || 0),
-          stock: totals.get(product.id) || 0,
+          cost: Number(product.cost || 0),
+          stock: Number(product.currentStock ?? totals.get(product.id) ?? 0),
+          hasSaleHistory: Boolean(product.hasSaleHistory),
           icon: <Inventory2RoundedIcon />,
           color: "#1976d2",
         })));
@@ -91,7 +100,7 @@ export default function StockPage() {
       })
       .catch((error) => { if (active) setApiError(error); });
     return () => { active = false; };
-  }, [api]);
+  }, [api, reloadVersion]);
 
   const visibleProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -109,7 +118,7 @@ export default function StockPage() {
   const inventorySummary = useMemo(() => ({
     productCount: visibleProducts.length,
     quantity: visibleProducts.reduce((total, product) => total + product.stock, 0),
-    value: visibleProducts.reduce((total, product) => total + (product.price * product.stock), 0),
+    value: visibleProducts.reduce((total, product) => total + (product.cost * product.stock), 0),
   }), [visibleProducts]);
 
   const deleteProduct = async (id) => {
@@ -203,8 +212,8 @@ export default function StockPage() {
       </Stack>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
-        <MenuItem onClick={() => { navigate(`/stock/add?edit=${menuProduct?.id ?? ""}`); setMenuAnchor(null); }}><EditRoundedIcon sx={{ mr: 1.5 }} />Edit</MenuItem>
-        <MenuItem onClick={removeProduct} sx={{ color: "error.main" }}><DeleteOutlineRoundedIcon sx={{ mr: 1.5 }} />Delete</MenuItem>
+        <MenuItem disabled={menuProduct?.hasSaleHistory} onClick={() => { navigate(`/stock/add?edit=${menuProduct?.id ?? ""}`); setMenuAnchor(null); }}><EditRoundedIcon sx={{ mr: 1.5 }} />Edit</MenuItem>
+        <MenuItem disabled={menuProduct?.hasSaleHistory} onClick={removeProduct} sx={{ color: "error.main" }}><DeleteOutlineRoundedIcon sx={{ mr: 1.5 }} />Delete</MenuItem>
       </Menu>
 
       <Paper elevation={5} sx={{ position: "fixed", left: 0, right: 0, bottom: 72, px: 3, py: 2, borderTop: 1, borderColor: "divider", bgcolor: "background.paper", zIndex: 10 }}>
@@ -252,7 +261,7 @@ function DesktopInventoryPage({ products, search, setSearch, summary, lowStockOn
         </CardContent>
       </Card>)}
     </Box>
-    <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}><MenuItem onClick={() => { navigate(`/stock/add?edit=${menuProduct?.id ?? ""}`); setMenuAnchor(null); }}><EditRoundedIcon sx={{ mr: 1.25 }} />Edit</MenuItem><MenuItem onClick={() => { onDelete(menuProduct?.id); setMenuAnchor(null); }} sx={{ color: "error.main" }}><DeleteOutlineRoundedIcon sx={{ mr: 1.25 }} />Delete</MenuItem></Menu>
+    <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}><MenuItem disabled={menuProduct?.hasSaleHistory} onClick={() => { navigate(`/stock/add?edit=${menuProduct?.id ?? ""}`); setMenuAnchor(null); }}><EditRoundedIcon sx={{ mr: 1.25 }} />Edit</MenuItem><MenuItem disabled={menuProduct?.hasSaleHistory} onClick={() => { onDelete(menuProduct?.id); setMenuAnchor(null); }} sx={{ color: "error.main" }}><DeleteOutlineRoundedIcon sx={{ mr: 1.25 }} />Delete</MenuItem></Menu>
   </Box>;
 }
 

@@ -81,6 +81,8 @@ const router = createBrowserRouter([
       { path: "suppliers/add", element: <AddSupplier /> },
       { path: "suppliers/history", element: <SupplierHistory /> },
       { path: "suppliers/:supplierId/pay", element: <RecordSupplierPayment /> },
+      { path: "suppliers/delivery/:recordId/pay", element: <RecordSupplierPayment /> },
+      { path: "supplier-delivery/:recordId", element: <SupplierDetails /> },
       { path: "suppliers/:supplierId", element: <SupplierDetails /> },
       { path: "settings", element: <Settings /> },
       { path: "settings/categories", element: <CategoryManagement /> },

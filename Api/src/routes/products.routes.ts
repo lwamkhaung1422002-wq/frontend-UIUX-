@@ -8,6 +8,7 @@ import { prisma } from "../lib/prisma.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
 import { internalBarcodeCandidate, normalizeBarcode, validateBarcode } from "../lib/barcode.js";
+import { recordInventoryMovement } from "../lib/inventory-domain.js";
 
 export const productsRouter = Router();
 
@@ -62,7 +63,7 @@ const productSchema = z.object({
   description: z.string().trim().optional(),
   sku: z.string().trim().optional(),
   price: moneySchema,
-  cost: moneySchema.optional(),
+  cost: moneySchema.positive("Cost price is required and must be greater than zero."),
   categoryId: z.string().trim().optional(),
   optionTree: optionTreeSchema.optional(),
   isActive: z.boolean().optional(),
@@ -291,6 +292,7 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
         units: { include: { unit: true } },
         barcodes: { where: { status: "ACTIVE" }, orderBy: { createdAt: "desc" } },
         priceTiers: true,
+        _count: { select: { orderItems: { where: { order: { shopId, cancelledAt: null } } } } },
       },
       orderBy: { [query.sort]: query.direction },
       skip: (query.page - 1) * query.pageSize,
@@ -303,7 +305,11 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
     const stockByProductId = new Map(balances.map((balance) => [balance.productId, Number(balance._sum.onHand ?? 0)]));
 
     response.status(200).json({
-      products: products.map((product) => ({ ...product, currentStock: stockByProductId.get(product.id) ?? 0 })),
+      products: products.map(({ _count, ...product }) => ({
+        ...product,
+        currentStock: stockByProductId.get(product.id) ?? 0,
+        hasSaleHistory: _count.orderItems > 0,
+      })),
       totalCount: total,
       pagination: { page: query.page, pageSize: query.pageSize, total },
     });
@@ -322,12 +328,14 @@ productsRouter.get("/:shopId/products/:productId", async (request, response, nex
         category: true,
         variants: true,
         units: { include: { unit: true } },
+        balances: { select: { onHand: true } },
         barcodes: { orderBy: { createdAt: "desc" } },
         _count: { select: { orderItems: { where: { order: { shopId, cancelledAt: null } } } } },
       },
     });
     if (!product) throw notFound("Product not found.");
-    response.json({ product, activeBarcode: product.barcodes.find((barcode) => barcode.status === "ACTIVE" && barcode.isPrimary) ?? null, hasSaleHistory: product._count.orderItems > 0 });
+    const currentStock = product.balances.reduce((total, balance) => total + Number(balance.onHand ?? 0), 0);
+    response.json({ product: { ...product, currentStock }, activeBarcode: product.barcodes.find((barcode) => barcode.status === "ACTIVE" && barcode.isPrimary) ?? null, hasSaleHistory: product._count.orderItems > 0 });
   } catch (error) { next(error); }
 });
 
@@ -411,6 +419,7 @@ productsRouter.post("/:shopId/products", async (request, response, next) => {
 
     await assertUserOwnsShop(authUser.id, shopId);
     await assertCategoryBelongsToShop(input.categoryId, shopId);
+    if (input.price < input.cost) throw badRequest("Selling price cannot be lower than cost price.");
     if (input.trackingMode === "LOT") await assertCapability(prisma, shopId, "inventory.lots");
     if (input.trackingMode === "SERIAL") await assertCapability(prisma, shopId, "inventory.serials");
 
@@ -514,15 +523,13 @@ productsRouter.patch("/:shopId/products/:productId", async (request, response, n
     await assertUserOwnsShop(authUser.id, shopId);
     await assertProductBelongsToShop(productId, shopId);
     await assertCategoryBelongsToShop(input.categoryId, shopId);
+    const currentProduct = await prisma.product.findFirst({ where: { id: productId, shopId }, select: { cost: true, price: true } });
+    const nextCost = input.cost ?? currentProduct?.cost ?? 0;
+    const nextPrice = input.price ?? currentProduct?.price ?? 0;
+    if (nextPrice < nextCost) throw badRequest("Selling price cannot be lower than cost price.");
 
-    if (input.stockQuantity !== undefined) {
-      const activeSaleCount = await prisma.orderItem.count({
-        where: { productId, order: { shopId, cancelledAt: null } },
-      });
-      if (activeSaleCount > 0) {
-        throw badRequest("Stock quantity cannot be edited after this product has sale history.");
-      }
-    }
+    const activeSaleCount = await prisma.orderItem.count({ where: { productId, order: { shopId, cancelledAt: null } } });
+    if (activeSaleCount > 0) throw badRequest("Products with sale history cannot be edited.");
 
     const data: Prisma.ProductUncheckedUpdateInput = {
       ...(input.name !== undefined ? { name: input.name } : {}),
@@ -634,29 +641,24 @@ productsRouter.delete("/:shopId/products/:productId", async (request, response, 
     );
 
     const [saleHistoryCount, purchaseHistoryCount, stockMovementHistoryCount] = await Promise.all([
-      prisma.orderItem.count({ where: { productId, order: { shopId } } }),
+      prisma.orderItem.count({ where: { productId, order: { shopId, cancelledAt: null } } }),
       prisma.purchaseItem.count({ where: { productId, purchase: { shopId } } }),
       prisma.inventoryMovement.count({ where: { productId, shopId } }),
     ]);
-    const hasBusinessHistory = saleHistoryCount + purchaseHistoryCount + stockMovementHistoryCount > 0;
+    if (saleHistoryCount > 0) throw badRequest("Products with sale history cannot be deleted.");
 
     const removedProduct = await prisma.$transaction(async (tx) => {
-      if (!hasBusinessHistory) {
-        await tx.generatedBarcode.updateMany({
-          where: { shopId, assignedProductId: productId },
-          data: { status: "RETIRED", assignedProductId: null, retiredAt: new Date() },
-        });
-        await tx.product.delete({ where: { id: productId } });
-        await writeAuditLog(tx, {
-          shopId,
-          actorId: authUser.id,
-          action: "product.delete",
-          entity: "Product",
-          entityId: productId,
-          metadata: { saleHistoryCount, purchaseHistoryCount, stockMovementHistoryCount },
-        });
-        return { product: null, deleted: true, archived: false };
-      }
+      await recordInventoryMovement(tx, {
+        shopId,
+        productId,
+        type: "PRODUCT_DELETED",
+        direction: "OUT",
+        quantity: 0,
+        sourceType: "Product",
+        sourceId: productId,
+        idempotencyKey: `product.delete:${productId}`,
+        reason: "Product deleted",
+      });
 
       await tx.productVariant.updateMany({
         where: { productId },
@@ -678,7 +680,7 @@ productsRouter.delete("/:shopId/products/:productId", async (request, response, 
       await writeAuditLog(tx, {
         shopId,
         actorId: authUser.id,
-        action: "product.archive",
+        action: "product.delete",
         entity: "Product",
         entityId: productId,
         metadata: { availableQuantity, retainedInventory: availableQuantity > 0, saleHistoryCount, purchaseHistoryCount, stockMovementHistoryCount },

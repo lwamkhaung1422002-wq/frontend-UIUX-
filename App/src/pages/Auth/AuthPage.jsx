@@ -23,7 +23,7 @@ export default function AuthPage({ mode }) {
   const location = useLocation();
   const { login, register, continueAsGuest } = useAuth();
   const [form, setForm] = useState({ name: "", shopName: "", email: "", password: "" });
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => location.state?.sessionExpired ? "Your session has expired. Please sign in again." : "");
   const [submitting, setSubmitting] = useState(false);
 
   const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));

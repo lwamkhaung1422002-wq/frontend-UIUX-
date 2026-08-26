@@ -76,6 +76,10 @@ export const usePurchasesQuery = (query = {}) => {
   const api = usePosApi();
   return useShopQuery((shopId) => ["shops", shopId, "purchases", query], () => api.purchases.list(query));
 };
+export const useSupplierDeliveriesQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.supplierDeliveries(shopId, query), () => api.suppliers.deliveryRecords(query));
+};
 
 export function useShopMutation(mutationFn, invalidate = []) {
   const { shop } = useAuth();

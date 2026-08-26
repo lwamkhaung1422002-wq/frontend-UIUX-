@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router";
-import { Box, Button, Chip, Dialog, DialogContent, Divider, FormControl, FormControlLabel, IconButton, InputAdornment, InputLabel, MenuItem, Paper, Radio, RadioGroup, Select, Stack, TextField, Typography, useMediaQuery } from "@mui/material";
+import { useNavigate, useSearchParams } from "react-router";
+import { Alert, Box, Button, Chip, Dialog, DialogContent, Divider, FormControl, FormControlLabel, IconButton, InputAdornment, InputLabel, MenuItem, Paper, Radio, RadioGroup, Select, Stack, TextField, Typography, useMediaQuery } from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import StopCircleOutlinedIcon from "@mui/icons-material/StopCircleOutlined";
 import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
 import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded";
 import LocalOfferOutlinedIcon from "@mui/icons-material/LocalOfferOutlined";
@@ -23,18 +24,33 @@ const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျ
 export default function PricePage() {
   const mobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
-  const [tab, setTab] = useState("price");
+  const [searchParams] = useSearchParams();
+  const tab = searchParams.get("tab") === "promotion" ? "promotion" : "price";
+  const setTab = (nextTab) => navigate(`/price?tab=${nextTab}`);
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const [dateMode, setDateMode] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [desktopDialog, setDesktopDialog] = useState("");
+  const [endingPromotionId, setEndingPromotionId] = useState("");
+  const [promotionActionError, setPromotionActionError] = useState("");
+  const api = usePosApi();
+  const queryClient = useQueryClient();
   const { data: productResult } = useProductsQuery({ status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" });
   const { data: categoryResult } = useCategoriesQuery();
   const { data: campaignResult } = usePromotionCampaignsQuery();
   const catalog = useMemo(() => (productResult?.products || []).map((product) => ({ ...product, code: product.sku || product.barcodes?.[0]?.value || "", cost: Number(product.cost || 0), price: Number(product.price || 0), start: product.createdAt, icon: "box", color: "#eaf3ff" })), [productResult]);
-  const promotionRows = useMemo(() => (campaignResult?.campaigns || []).map((campaign) => { const sample = campaign.sampleProduct || {}; const first = campaign.promotions?.[0] || {}; return { id: campaign.id, name: campaign.name, code: sample.sku || "", cost: Number(sample.cost || 0), price: Number(sample.price || 0), promotion: true, start: first.startsAt, end: first.endsAt, reason: first.reason || "", icon: "box", color: "#e5f5e8" }; }), [campaignResult]);
+  const promotionRows = useMemo(() => (campaignResult?.campaigns || []).map((campaign) => { const sample = campaign.sampleProduct || {}; const first = campaign.promotions?.[0] || {}; const ended = ["ENDED", "CANCELLED"].includes(campaign.effectiveState) || campaign.state === "CANCELLED"; const value = Number(first.value || 0); const discountAmount = first.type === "FIXED_PRICE" ? Math.max(0, Number(sample.price || 0) - value) : Math.round(Number(sample.price || 0) * value / 100); const scopeLabel = campaign.scope === "PRODUCT" ? sample.name || first.product?.name || "Product" : campaign.scope === "CATEGORY" ? campaign.category?.name || "Category" : "All"; return { id: campaign.id, version: campaign.version, name: campaign.name, scopeLabel, code: sample.sku || "", cost: Number(sample.cost || 0), price: Number(sample.price || 0), promotion: true, ended, discountAmount, discountPercent: first.type === "PERCENTAGE" ? value : (Number(sample.price || 0) ? Math.round(discountAmount / Number(sample.price || 0) * 100) : 0), start: first.startsAt, end: first.endsAt, reason: first.reason || "", icon: "box", color: "#e5f5e8" }; }), [campaignResult]);
+  const endPromotion = async (campaign) => {
+    if (endingPromotionId || !window.confirm(`End promotion “${campaign.name}”?`)) return;
+    setEndingPromotionId(campaign.id); setPromotionActionError("");
+    try {
+      await api.pricing.updatePromotionCampaign(campaign.id, { expectedVersion: Number(campaign.version), state: "CANCELLED" });
+      await queryClient.invalidateQueries({ queryKey: ["shops"] });
+    } catch (error) { setPromotionActionError(error.message || "Promotion could not be ended. Please try again."); }
+    finally { setEndingPromotionId(""); }
+  };
   const sourceProducts = tab === "promotion" ? promotionRows : catalog;
   const visible = useMemo(() => sourceProducts.filter((product) => {
     const query = search.trim().toLowerCase();
@@ -46,15 +62,17 @@ export default function PricePage() {
       && (dateMode !== "custom" || ((!from || productDate >= from) && (!to || productDate <= to)));
   }), [dateMode, from, search, sourceProducts, tab, to]);
   const total = visible.reduce((sum, product) => sum + product.price, 0);
+  const activePromotionCount = (campaignResult?.campaigns || []).filter((campaign) => campaign.effectiveState === "RUNNING").length;
 
-  if (!mobile) return <DesktopPricePromotion tab={tab} setTab={setTab} search={search} setSearch={setSearch} products={visible} catalog={catalog} categories={categoryResult?.categories || []} total={total} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} dialog={desktopDialog} setDialog={setDesktopDialog} />;
+  if (!mobile) return <DesktopPricePromotion tab={tab} setTab={setTab} search={search} setSearch={setSearch} products={visible} catalog={catalog} categories={categoryResult?.categories || []} total={total} activePromotionCount={activePromotionCount} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} dialog={desktopDialog} setDialog={setDesktopDialog} onEnd={endPromotion} endingPromotionId={endingPromotionId} />;
   return <Box sx={{ minHeight: "100dvh", pb: "104px", bgcolor: "#fff", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <Box sx={barSx}><IconButton aria-label="Back to settings" onClick={() => navigate("/settings")} sx={barIconSx}><ArrowBackRoundedIcon sx={{ fontSize: 32 }} /></IconButton><Typography align="center" sx={{ fontSize: 22, fontWeight: 700 }}>Price &amp; Promotion</Typography><IconButton aria-label="Filter prices and promotions" onClick={() => setFilterOpen(true)} sx={barIconSx}><FilterAltOutlinedIcon sx={{ fontSize: 30 }} /></IconButton></Box>
     <Box sx={{ px: 2.5, pt: 2 }}>
       <TextField fullWidth value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search product by name or code" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon sx={{ color: "text.secondary", fontSize: 29 }} /></InputAdornment> } }} sx={searchSx} />
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mt: 1.5 }}><TabButton label="Price" active={tab === "price"} onClick={() => setTab("price")} tone="primary.main" /><TabButton label="Promotion" active={tab === "promotion"} onClick={() => setTab("promotion")} tone="success.main" /></Box>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2.25, mb: 1.75 }}><Typography sx={{ fontSize: 16, fontWeight: 500 }}>{visible.length} {tab === "price" ? "Products" : "Promotions"}</Typography><Typography sx={{ fontSize: 16, fontWeight: 700 }}>{money(total)}</Typography></Box>
-      <Stack spacing={1.75}>{visible.map((product) => <ProductCard key={product.id} product={product} promotion={tab === "promotion"} onEdit={() => navigate(tab === "price" ? `/price/add?edit=${product.id}` : `/price/promotion/add?edit=${product.id}`)} />)}</Stack>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2.25, mb: 1.75 }}><Typography sx={{ fontSize: 16, fontWeight: 500 }}>{visible.length} {tab === "price" ? "Products" : "Promotions"}</Typography><Typography sx={{ fontSize: 16, fontWeight: 700 }}>{tab === "promotion" ? `Active: ${activePromotionCount}` : money(total)}</Typography></Box>
+      {promotionActionError && <Alert severity="error" sx={{ mb: 1.5 }}>{promotionActionError}</Alert>}
+      <Stack spacing={1.75}>{visible.map((product) => <ProductCard key={product.id} product={product} promotion={tab === "promotion"} ending={endingPromotionId === product.id} onEdit={() => navigate(tab === "price" ? `/price/add?edit=${product.id}` : `/price/promotion/add?edit=${product.id}`)} onEnd={tab === "promotion" ? () => void endPromotion(product) : undefined} />)}</Stack>
     </Box>
     <Paper elevation={5} sx={footerSx}><Box sx={{ display: "grid", gridTemplateColumns: "1.65fr 0.9fr", gap: 1.5 }}><Button variant="contained" startIcon={<AddRoundedIcon />} onClick={() => navigate(tab === "price" ? "/price/add" : "/price/promotion/add")} sx={footerPrimarySx}>{tab === "price" ? "Add Price" : "Add Promotion"}</Button><Button variant="outlined" startIcon={<HistoryRoundedIcon />} onClick={() => navigate("/price/history")} sx={footerSecondarySx}>History</Button></Box></Paper>
     <Dialog open={filterOpen} onClose={() => setFilterOpen(false)} fullWidth slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } } }}><DialogContent sx={{ p: 2.5 }}><Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2.5 }}><Typography sx={{ fontSize: 20, fontWeight: 600 }}>Filter {tab === "price" ? "prices" : "promotions"}</Typography><IconButton onClick={() => setFilterOpen(false)}><CloseRoundedIcon /></IconButton></Box><Typography sx={{ fontSize: 14, fontWeight: 600, color: "text.secondary" }}>Date</Typography><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, mt: 1 }}>{[["all", "All"], ["today", "Today"], ["custom", "Custom"]].map(([value, label]) => <Button key={value} variant={dateMode === value ? "contained" : "outlined"} onClick={() => setDateMode(value)} sx={{ minHeight: 48, borderRadius: 1.5, textTransform: "none" }}>{label}</Button>)}</Box>{dateMode === "custom" && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 1.75 }}><TextField label="From" type="date" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="To" type="date" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /></Box>}<Button fullWidth variant="contained" onClick={() => setFilterOpen(false)} sx={{ mt: 2.5, minHeight: 54, borderRadius: 1.5, fontSize: 16, fontWeight: 600, textTransform: "none" }}>Apply filters</Button></DialogContent></Dialog>
@@ -62,21 +80,23 @@ export default function PricePage() {
 }
 
 function TabButton({ label, active, onClick, tone }) { return <Button onClick={onClick} startIcon={<LocalOfferOutlinedIcon />} sx={{ minHeight: 54, borderRadius: 1.25, border: "1px solid", borderColor: active ? tone : "#dfe3e8", bgcolor: active ? "#eaf3ff" : "background.paper", color: tone, fontSize: 16, fontWeight: 700, textTransform: "none" }}>{label}</Button>; }
-function ProductCard({ product, promotion, onEdit }) {
-  const period = product.start ? `${new Date(`${product.start}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}–${new Date(`${product.end}T00:00:00`).toLocaleDateString("en-US", { day: "numeric" })}` : "";
+function ProductCard({ product, promotion, onEdit, onEnd, ending }) {
+  const period = promotion ? formatPromotionPeriod(product.start, product.end) : "";
   return <Paper elevation={2} sx={{ p: { xs: 1.75, sm: 2.25 }, borderRadius: 1.75, boxShadow: "0 2px 8px rgba(15,23,42,0.12)" }}>
-    <Box sx={{ display: "grid", gridTemplateColumns: promotion ? "auto minmax(0, 1fr) auto auto" : "auto minmax(0, 1fr) auto", gap: { xs: 0.65, sm: 1 }, alignItems: "center" }}>
-      <Chip label={promotion ? "Promotion" : "Price"} size="small" sx={{ height: 28, bgcolor: promotion ? "#e3f5e6" : "#eaf3ff", color: promotion ? "#168437" : "primary.main", borderRadius: 1, fontSize: 12, fontWeight: 600, "& .MuiChip-label": { px: 0.8 } }} />
-      <Typography noWrap sx={{ minWidth: 0, fontSize: { xs: 16, sm: 17 }, fontWeight: 600 }}>{product.name}</Typography>
+    <Box sx={{ display: "grid", gridTemplateColumns: promotion ? "auto minmax(0, 1fr) auto auto auto" : "auto minmax(0, 1fr) auto", gap: { xs: 0.65, sm: 1 }, alignItems: "center" }}>
+      <Chip label={promotion ? (product.ended ? "End Promotion" : "Promotion") : "Price"} size="small" sx={{ height: 28, bgcolor: promotion ? (product.ended ? "#ffebee" : "#e3f5e6") : "#eaf3ff", color: promotion ? (product.ended ? "error.main" : "#168437") : "primary.main", borderRadius: 1, fontSize: 12, fontWeight: 600, "& .MuiChip-label": { px: 0.8 } }} />
+      <Typography noWrap sx={{ minWidth: 0, fontSize: { xs: 16, sm: 17 }, fontWeight: 600 }}>{product.name}{promotion && <Box component="span" sx={{ ml: 0.65, color: "text.secondary", fontSize: { xs: 12, sm: 13 }, fontWeight: 500 }}>({product.scopeLabel})</Box>}</Typography>
       {promotion && <Chip label={period} size="small" sx={{ maxWidth: { xs: 72, sm: 120 }, height: 26, borderRadius: 99, bgcolor: "#e3f5e6", color: "#168437", fontSize: 10, fontWeight: 700, "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis", px: 0.8 } }} />}
       <Button variant="outlined" startIcon={<EditOutlinedIcon />} onClick={onEdit} sx={{ minHeight: 42, px: { xs: 0.8, sm: 1.25 }, borderRadius: 1, fontSize: 13, fontWeight: 600, textTransform: "none", whiteSpace: "nowrap", "& .MuiButton-startIcon": { mr: { xs: 0.35, sm: 0.7 } } }}>{promotion ? "Edit" : "Edit Price"}</Button>
+      {promotion && !product.ended && <IconButton aria-label={`End ${product.name}`} disabled={ending} onClick={onEnd} color="error"><StopCircleOutlinedIcon /></IconButton>}
     </Box>
-    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", columnGap: 1.5, mt: 2 }}><Metric label="Cost Price" value={money(product.cost)} /><Box sx={{ bgcolor: "#d9dee5" }} /><Metric label="Sell Price" value={money(product.price)} /></Box>
+    <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", columnGap: 1.5, mt: 2 }}><Metric label="Cost Price" value={money(product.cost)} /><Box sx={{ bgcolor: "#d9dee5" }} /><Metric label="Sell Price" value={money(product.price)} caption={promotion && product.discountAmount ? `Discount ${money(product.discountAmount)} (${product.discountPercent}%)` : ""} /></Box>
   </Paper>;
 }
-function Metric({ label, value }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>{label}</Typography><Typography sx={{ mt: 0.5, fontSize: 17, fontWeight: 600 }}>{value}</Typography></Box>; }
+function formatPromotionPeriod(start, end) { const options = { timeZone: "Asia/Yangon", month: "short", day: "numeric" }; const startDate = new Date(start); const endDate = new Date(end); return Number.isNaN(startDate.valueOf()) || Number.isNaN(endDate.valueOf()) ? "—" : `${startDate.toLocaleDateString("en-US", options)}–${endDate.toLocaleDateString("en-US", options)}`; }
+function Metric({ label, value, caption }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>{label}</Typography><Typography sx={{ mt: 0.5, fontSize: 17, fontWeight: 600 }}>{value}</Typography>{caption && <Typography color="success.main" sx={{ mt: .35, fontSize: 11, fontWeight: 700 }}>{caption}</Typography>}</Box>; }
 
-function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visibleProducts, catalog, categories, total, dateMode, setDateMode, from, setFrom, to, setTo, dialog, setDialog }) {
+function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visibleProducts, catalog, categories, total, activePromotionCount, dateMode, setDateMode, from, setFrom, to, setTo, dialog, setDialog, onEnd, endingPromotionId }) {
   const tabLabel = tab === "price" ? "Products" : "Promotions";
   const closeDialog = () => setDialog("");
   return <Paper sx={desktopPricePageSx}>
@@ -93,11 +113,11 @@ function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visib
     </Stack>
     <Box sx={desktopPriceSummarySx}>
       <Typography sx={{ fontSize: 14, fontWeight: 700 }}>{visibleProducts.length} {tabLabel}</Typography>
-      <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 13 }}>Total Value</Typography><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{money(total)}</Typography></Box>
+      <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 13 }}>{tab === "promotion" ? "Active Promotions" : "Total Value"}</Typography><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{tab === "promotion" ? activePromotionCount : money(total)}</Typography></Box>
     </Box>
-    <Box sx={desktopProductGridSx}>{visibleProducts.map((product) => <DesktopProductCard key={product.id} product={product} promotion={tab === "promotion"} onEdit={() => setDialog(tab === "promotion" ? "promotion" : "price")} />)}</Box>
+    <Box sx={desktopProductGridSx}>{visibleProducts.map((product) => <DesktopProductCard key={product.id} product={product} promotion={tab === "promotion"} ending={endingPromotionId === product.id} onEnd={tab === "promotion" ? () => void onEnd(product) : undefined} onEdit={() => setDialog(tab === "promotion" ? "promotion" : "price")} />)}</Box>
     {!visibleProducts.length && <Typography align="center" color="text.secondary" sx={{ py: 8 }}>No {tabLabel.toLowerCase()} found.</Typography>}
-    <DesktopPriceDialog type={dialog} onClose={closeDialog} products={catalog} categories={categories} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} />
+    <DesktopPriceDialog type={dialog} onClose={closeDialog} onPromotionSaved={() => { closeDialog(); setTab("promotion"); }} products={catalog} categories={categories} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} />
   </Paper>;
 }
 
@@ -105,20 +125,21 @@ function DesktopPriceTab({ active, label, tone, onClick }) {
   return <Button variant="outlined" onClick={onClick} startIcon={<LocalOfferOutlinedIcon />} sx={{ minWidth: 148, minHeight: 42, borderRadius: 1.25, textTransform: "none", fontWeight: 700, borderColor: active ? tone : "divider", bgcolor: active ? "#f6faff" : "background.paper", color: tone, "&:hover": { borderColor: tone, bgcolor: active ? "#f1f7ff" : "action.hover" } }}>{label}</Button>;
 }
 
-function DesktopProductCard({ product, promotion, onEdit }) {
+function DesktopProductCard({ product, promotion, onEdit, onEnd, ending }) {
   return <Paper variant="outlined" sx={desktopProductCardSx}>
     <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 24 }}>
-      <Chip label={promotion ? "Promotion" : "Price"} size="small" sx={{ height: 22, borderRadius: 1, bgcolor: promotion ? "#e5f5e8" : "#edf5ff", color: promotion ? "#278a45" : "primary.main", fontSize: 11, fontWeight: 700, "& .MuiChip-label": { px: .75 } }} />
+      <Chip label={promotion ? (product.ended ? "End Promotion" : "Promotion") : "Price"} size="small" sx={{ height: 22, borderRadius: 1, bgcolor: promotion ? (product.ended ? "#ffebee" : "#e5f5e8") : "#edf5ff", color: promotion ? (product.ended ? "error.main" : "#278a45") : "primary.main", fontSize: 11, fontWeight: 700, "& .MuiChip-label": { px: .75 } }} />
       <IconButton aria-label={`Edit ${product.name}`} onClick={onEdit} size="small" sx={{ color: "text.secondary", mr: -0.75 }}><MoreVertRoundedIcon fontSize="small" /></IconButton>
     </Box>
     <ProductArtwork product={product} />
     <Typography noWrap align="center" sx={{ mt: .5, pb: 1, fontSize: 14, fontWeight: 700, borderBottom: "1px solid", borderColor: "divider" }}>{product.name}</Typography>
     <Box sx={{ display: "grid", gridTemplateColumns: promotion ? "minmax(0, .85fr) minmax(0, 1.15fr)" : "1fr 1fr", gap: 1.25, pt: 1.25 }}>
       <DesktopPriceMetric label="Cost Price" value={money(product.cost)} />
-      {promotion ? <Box sx={{ minWidth: 0, display: "flex", alignItems: "end", justifyContent: "space-between", gap: .45 }}><DesktopPriceMetric label="Sell Price" value={money(product.price)} /><Chip label="Aug 01–15" size="small" sx={{ mb: .1, height: 22, maxWidth: 78, borderRadius: 1, bgcolor: "#e5f5e8", color: "#278a45", fontSize: 9.5, fontWeight: 700, "& .MuiChip-label": { px: .55 } }} /></Box> : <DesktopPriceMetric label="Sell Price" value={money(product.price)} />}
+      {promotion ? <Box sx={{ minWidth: 0, display: "flex", alignItems: "end", justifyContent: "space-between", gap: .45 }}><DesktopPriceMetric label="Sell Price" value={money(product.price)} /><Chip label={product.discountAmount ? `-${money(product.discountAmount)} (${product.discountPercent}%)` : formatPromotionPeriod(product.start, product.end)} size="small" sx={{ mb: .1, height: 22, maxWidth: 108, borderRadius: 1, bgcolor: "#e5f5e8", color: "#278a45", fontSize: 9.5, fontWeight: 700, "& .MuiChip-label": { px: .55 } }} /></Box> : <DesktopPriceMetric label="Sell Price" value={money(product.price)} />}
     </Box>
-    <Typography noWrap color="text.secondary" sx={{ mt: 1.15, fontSize: 11.5 }}>{promotion ? "Name" : "Reason"}: {promotion ? "Anniversary" : product.reason}</Typography>
+    <Typography noWrap color="text.secondary" sx={{ mt: 1.15, fontSize: 11.5 }}>{promotion ? "Name" : "Reason"}: {promotion ? product.scopeLabel : product.reason}</Typography>
     <Button fullWidth variant="outlined" startIcon={<EditOutlinedIcon />} onClick={onEdit} sx={{ mt: 1.5, minHeight: 34, borderRadius: 1, textTransform: "none", fontWeight: 700, fontSize: 12 }}>Edit {promotion ? "Promotion" : "Price"}</Button>
+    {promotion && !product.ended && <IconButton aria-label={`End ${product.name}`} disabled={ending} onClick={onEnd} color="error" size="small"><StopCircleOutlinedIcon fontSize="small" /></IconButton>}
   </Paper>;
 }
 
@@ -129,21 +150,21 @@ function ProductArtwork({ product }) {
 
 function DesktopPriceMetric({ label, value }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 11.5, lineHeight: 1.2 }}>{label}</Typography><Typography sx={{ mt: .3, fontSize: 14, lineHeight: 1.25, fontWeight: 700 }}>{value}</Typography></Box>; }
 
-function DesktopPriceDialog({ type, onClose, products, categories, dateMode, setDateMode, from, setFrom, to, setTo }) {
+function DesktopPriceDialog({ type, onClose, onPromotionSaved, products, categories, dateMode, setDateMode, from, setFrom, to, setTo }) {
   const isDate = type === "date";
   const isHistory = type === "history";
   const isPromotion = type === "promotion";
   const isPrice = type === "price";
   return <Dialog open={Boolean(type)} onClose={onClose} fullWidth maxWidth={isHistory ? "md" : "sm"} slotProps={{ paper: { sx: { borderRadius: 2.5, m: 2.5, maxHeight: "calc(100vh - 40px)" } } }}>
     {isDate && <DialogContent sx={desktopDialogContentSx}><Box sx={desktopDialogTitleSx}><Typography sx={{ fontSize: 20, fontWeight: 700 }}>Date and time</Typography><IconButton aria-label="Close date filter" onClick={onClose}><CloseRoundedIcon /></IconButton></Box><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1.25 }}><DesktopDateChoice label="All" active={dateMode === "all"} onClick={() => setDateMode("all")} /><DesktopDateChoice label="Today" active={dateMode === "today"} onClick={() => setDateMode("today")} /><DesktopDateChoice label="Custom" active={dateMode === "custom"} onClick={() => setDateMode("custom")} /></Box>{dateMode === "custom" && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 2 }}><TextField label="From date" type="date" value={from} onChange={(event) => setFrom(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /><TextField label="To date" type="date" value={to} onChange={(event) => setTo(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} /></Box>}<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1.25, mt: 3 }}><Button onClick={() => { setDateMode("all"); setFrom(""); setTo(""); }} sx={desktopTextButtonSx}>Reset</Button><Button variant="contained" onClick={onClose} sx={desktopModalButtonSx}>Apply</Button></Box></DialogContent>}
-    {(isPrice || isPromotion) && <DesktopPriceForm products={products} categories={categories} promotion={isPromotion} onClose={onClose} />}
+    {(isPrice || isPromotion) && <DesktopPriceForm products={products} categories={categories} promotion={isPromotion} onClose={onClose} onPromotionSaved={onPromotionSaved} />}
     {isHistory && <DesktopPriceHistory onClose={onClose} />}
   </Dialog>;
 }
 
 function DesktopDateChoice({ label, active, onClick }) { return <Button onClick={onClick} variant={active ? "contained" : "outlined"} sx={{ minHeight: 48, borderRadius: 1.5, textTransform: "none", fontWeight: 700 }}>{label}</Button>; }
 
-function DesktopPriceForm({ products, categories, promotion, onClose }) {
+function DesktopPriceForm({ products, categories, promotion, onClose, onPromotionSaved }) {
   const api = usePosApi();
   const queryClient = useQueryClient();
   const [scope, setScope] = useState("all");
@@ -173,13 +194,14 @@ function DesktopPriceForm({ products, categories, promotion, onClose }) {
     setSaving(true); setSubmitError("");
     try {
       if (promotion) {
-        await api.pricing.createPromotionCampaign({ name: promotionName.trim(), scope: scope === "individual" ? "PRODUCT" : scope.toUpperCase(), ...(scope === "individual" ? { productId: selectedId } : scope === "category" ? { categoryId: category } : {}), type: "PERCENTAGE", value: Number(percentage), startsAt: start, endsAt: end, state: "SCHEDULED", reason: reason.trim(), timeZone: "Asia/Yangon" });
+        await api.pricing.createPromotionCampaign({ name: promotionName.trim(), scope: scope === "individual" ? "PRODUCT" : scope.toUpperCase(), ...(scope === "individual" ? { productId: selectedId } : scope === "category" ? { categoryId: category } : {}), type: "PERCENTAGE", value: Number(percentage), startsAt: new Date(`${start}T00:00:00+06:30`).toISOString(), endsAt: new Date(`${end}T23:59:59+06:30`).toISOString(), state: "SCHEDULED", reason: reason.trim(), timeZone: "Asia/Yangon" });
       } else if (scope === "individual") {
         await api.pricing.createPrice({ productId: selectedId, unitPrice: Number(shownPrice), effectiveFrom: new Date().toISOString(), reason: reason.trim() });
       } else {
         await api.pricing.bulkPrices({ scope: scope.toUpperCase(), ...(scope === "category" ? { categoryId: category } : {}), marginPercent: Number(percentage), reason: reason.trim() });
       }
-      await queryClient.invalidateQueries(); onClose();
+      await queryClient.invalidateQueries();
+      if (promotion) onPromotionSaved(); else onClose();
     } catch (error) { setSubmitError(error.message || "Unable to save pricing."); } finally { setSaving(false); }
   };
   return <DialogContent sx={desktopDialogContentSx}>

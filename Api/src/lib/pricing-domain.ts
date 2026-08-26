@@ -13,7 +13,37 @@ export function promotionTargetKey(input: {
   priceGroupId?: string | null | undefined;
   channel?: string | null | undefined;
 }): string {
-  return `${priceTargetKey(input.productId, input.variantId, input.productUnitId)}:${input.priceGroupId ?? "*"}:${input.channel ?? "ALL"}`;
+  return `${priceTargetKey(input.productId, input.variantId, input.productUnitId)}:${input.priceGroupId ?? "*"}:${(input.channel ?? "ALL").toUpperCase()}`;
+}
+
+/**
+ * Keys ordered from the most specific promotion target to the product-wide
+ * fallback.  Writes use `promotionTargetKey`; resolution uses this same
+ * shape, while retaining the old price-key format for records created before
+ * promotion targets gained price-group and channel segments.
+ */
+function promotionTargetKeys(input: {
+  productId: string;
+  variantId?: string | null | undefined;
+  productUnitId?: string | null | undefined;
+  priceGroupId?: string | null | undefined;
+  channel?: string | null | undefined;
+}): string[] {
+  const channels = [...new Set([input.channel ?? "ALL", "ALL"])];
+  const variants = [...new Set([input.variantId ?? null, null])];
+  const units = [...new Set([input.productUnitId ?? null, null])];
+  const priceGroups = [...new Set([input.priceGroupId ?? null, null])];
+  const current = variants.flatMap((variantId) =>
+    units.flatMap((productUnitId) =>
+      priceGroups.flatMap((priceGroupId) =>
+        channels.map((channel) => promotionTargetKey({ productId: input.productId, variantId, productUnitId, priceGroupId, channel })),
+      ),
+    ),
+  );
+  const legacy = variants.flatMap((variantId) =>
+    units.map((productUnitId) => priceTargetKey(input.productId, variantId, productUnitId)),
+  );
+  return [...new Set([...current, ...legacy])];
 }
 
 export function effectivePromotionState(promotion: { state: string; startsAt: Date; endsAt: Date }, at = new Date()): string {
@@ -116,14 +146,13 @@ export async function resolvePrice(
   const tierUnitPrice = tier?.unitPrice ?? null;
   const promotionBaseDefault = tierUnitPrice ?? regularUnitPrice;
   const channel = input.channel ?? "ALL";
-  const promotionKeys = [
-    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: input.priceGroupId, channel }),
-    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: null, channel }),
-    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: input.priceGroupId, channel: "ALL" }),
-    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: productUnit?.id, priceGroupId: null, channel: "ALL" }),
-    promotionTargetKey({ productId: product.id, variantId: variant?.id, productUnitId: null, priceGroupId: input.priceGroupId, channel: "ALL" }),
-    promotionTargetKey({ productId: product.id, variantId: null, productUnitId: null, priceGroupId: null, channel: "ALL" }),
-  ];
+  const promotionKeys = promotionTargetKeys({
+    productId: product.id,
+    variantId: variant?.id,
+    productUnitId: productUnit?.id,
+    priceGroupId: input.priceGroupId,
+    channel,
+  });
   const promotions = await tx.promotion.findMany({
     where: {
       shopId,

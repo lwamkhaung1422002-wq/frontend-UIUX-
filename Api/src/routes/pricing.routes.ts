@@ -50,7 +50,8 @@ const bulkPriceChangeInput = z.object({
   scope: z.enum(["ALL", "CATEGORY", "PRODUCT"]),
   categoryId: z.string().min(1).optional(),
   productId: z.string().min(1).optional(),
-  marginPercent: z.coerce.number().min(-100).max(1000),
+  // A price update must never turn a sale into a loss.
+  marginPercent: z.coerce.number().min(0).max(1000),
   reason: z.string().trim().min(3).max(500),
 }).superRefine((value, context) => {
   if (value.scope === "CATEGORY" && !value.categoryId) context.addIssue({ code: "custom", message: "Category is required." });
@@ -87,6 +88,9 @@ const resolveInput = priceTargetInput.extend({
 function badRequest(message: string) { return Object.assign(new Error(message), { name: "BadRequestError" }); }
 function conflict(message: string) { return Object.assign(new Error(message), { name: "ConflictError" }); }
 function notFound(message: string) { return Object.assign(new Error(message), { name: "NotFoundError" }); }
+function assertPriceAtOrAboveCost(price: number, cost: unknown) {
+  if (price < Number(cost ?? 0)) throw badRequest("Sell price cannot be lower than the product cost price.");
+}
 function assertValidBarcode(value: string, symbology: (typeof barcodeSymbologies)[number]) {
   const message = validateBarcode(value, symbology);
   if (message) throw badRequest(message);
@@ -381,7 +385,7 @@ pricingRouter.post("/:shopId/prices", async (request, response, next) => {
     const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const input = priceChangeInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
     if (input.effectiveTo && input.effectiveTo <= input.effectiveFrom) throw badRequest("Price end time must be after its start time.");
     const entry = await prisma.$transaction(async (tx) => {
-      const target = await assertPricingTarget(tx, shopId, input); const book = await ensureDefaultPriceBook(tx, shopId); const now = new Date();
+      const target = await assertPricingTarget(tx, shopId, input); assertPriceAtOrAboveCost(input.unitPrice, target.product.cost); const book = await ensureDefaultPriceBook(tx, shopId); const now = new Date();
       const targetKey = priceTargetKey(input.productId, input.variantId, input.productUnitId);
       if (input.effectiveFrom <= now) {
         await tx.priceEntry.updateMany({ where: { shopId, targetKey, status: "ACTIVE", OR: [{ effectiveTo: null }, { effectiveTo: { gt: input.effectiveFrom } }] }, data: { effectiveTo: input.effectiveFrom, status: "EXPIRED" } });
@@ -414,7 +418,8 @@ pricingRouter.post("/:shopId/prices/bulk", async (request, response, next) => {
       if (!products.length) throw notFound("No products matched this price setup.");
       const book = await ensureDefaultPriceBook(tx, shopId); const now = new Date(); const result = [];
       for (const product of products) {
-        const unitPrice = Math.max(0, Math.round(Number(product.cost ?? 0) * (1 + input.marginPercent / 100)));
+        const unitPrice = Math.round(Number(product.cost ?? 0) * (1 + input.marginPercent / 100));
+        assertPriceAtOrAboveCost(unitPrice, product.cost);
         const targetKey = priceTargetKey(product.id, null, null);
         await tx.priceEntry.updateMany({ where: { shopId, targetKey, status: "ACTIVE", OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }] }, data: { effectiveTo: now, status: "EXPIRED" } });
         const entry = await tx.priceEntry.create({ data: { shopId, priceBookId: book.id, productId: product.id, targetKey, unitPrice, currencyCode: book.currencyCode, effectiveFrom: now, status: "ACTIVE", reason: input.reason, actorId: auth.id } });
@@ -466,7 +471,7 @@ pricingRouter.post("/:shopId/promotion-campaigns", async (request, response, nex
       if (!products.length) throw badRequest("No active products match this promotion.");
       const created = await tx.promotionCampaign.create({ data: { shopId, name: input.name, scope: input.scope, state: input.state, ...(input.categoryId ? { categoryId: input.categoryId } : {}) } });
       for (const product of products) {
-        const targetKey = priceTargetKey(product.id);
+        const targetKey = promotionTargetKey({ productId: product.id, channel: input.channel.toUpperCase() });
         const overlap = await tx.promotion.findFirst({ where: { shopId, targetKey, state: { in: ["SCHEDULED", "RUNNING"] }, startsAt: { lt: input.endsAt }, endsAt: { gt: input.startsAt } } });
         if (overlap && input.state !== "DRAFT") throw conflict("Promotion overlaps another scheduled or running promotion for a selected product.");
         await tx.promotion.create({ data: { shopId, campaignId: created.id, name: input.name, productId: product.id, targetKey, channel: input.channel.toUpperCase(), type: input.type, value: String(input.value), minimumQuantity: String(input.minimumQuantity), discountBase: input.discountBase, startsAt: input.startsAt, endsAt: input.endsAt, timeZone: input.timeZone, state: input.state, priority: input.priority, actorId: auth.id, ...(input.note !== undefined ? { note: input.note } : {}), ...(input.reason !== undefined ? { reason: input.reason } : {}) } });
@@ -480,8 +485,24 @@ pricingRouter.post("/:shopId/promotion-campaigns", async (request, response, nex
 
 pricingRouter.patch("/:shopId/promotion-campaigns/:id", async (request, response, next) => {
   try {
-    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); const input = z.object({ expectedVersion: z.coerce.number().int().positive(), state: z.enum(["DRAFT", "SCHEDULED", "PAUSED", "CANCELLED"]).optional(), reason: z.string().trim().max(500).optional() }).parse(request.body); await assertUserOwnsShop(auth.id, shopId);
-    const campaign = await prisma.$transaction(async (tx) => { const existing = await tx.promotionCampaign.findFirst({ where: { id, shopId } }); if (!existing) throw notFound("Promotion campaign not found."); if (existing.version !== input.expectedVersion) throw conflict("Promotion campaign was changed by another request."); const state = input.state ?? existing.state; await tx.promotion.updateMany({ where: { campaignId: id }, data: { state, ...(input.reason ? { reason: input.reason } : {}), actorId: auth.id, version: { increment: 1 } } }); const updated = await tx.promotionCampaign.update({ where: { id }, data: { state, version: { increment: 1 } } }); await writeAuditLog(tx, { shopId, actorId: auth.id, action: `promotion.campaign.${state.toLowerCase()}`, entity: "PromotionCampaign", entityId: id }); return updated; }); response.json({ campaign });
+    const auth = getAuthUser(request); const { shopId, id } = idParams.parse(request.params); const input = promotionUpdateInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
+    if (input.endsAt && input.startsAt && input.endsAt <= input.startsAt) throw badRequest("Promotion end time must be after its start time.");
+    if (input.type === "PERCENTAGE" && input.value && input.value > 100) throw badRequest("Percentage promotion cannot exceed 100%.");
+    const campaign = await prisma.$transaction(async (tx) => {
+      const existing = await tx.promotionCampaign.findFirst({ where: { id, shopId }, include: { promotions: true } });
+      if (!existing) throw notFound("Promotion campaign not found."); if (existing.version !== input.expectedVersion) throw conflict("Promotion campaign was changed by another request.");
+      const state = input.state ?? existing.state;
+      const promotionData = { state, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}), ...(input.value !== undefined ? { value: String(input.value) } : {}), ...(input.minimumQuantity !== undefined ? { minimumQuantity: String(input.minimumQuantity) } : {}), ...(input.discountBase ? { discountBase: input.discountBase } : {}), ...(input.startsAt ? { startsAt: input.startsAt } : {}), ...(input.endsAt ? { endsAt: input.endsAt } : {}), ...(input.timeZone ? { timeZone: input.timeZone } : {}), ...(input.channel ? { channel: input.channel.toUpperCase() } : {}), ...(input.priority !== undefined ? { priority: input.priority } : {}), ...(input.note !== undefined ? { note: input.note } : {}), ...(input.reason ? { reason: input.reason } : {}), actorId: auth.id, version: { increment: 1 } };
+      await tx.promotion.updateMany({ where: { campaignId: id }, data: promotionData });
+      if (input.channel !== undefined) {
+        await Promise.all(existing.promotions.map((promotion) => tx.promotion.update({
+          where: { id: promotion.id },
+          data: { targetKey: promotionTargetKey({ ...promotion, channel: input.channel }) },
+        })));
+      }
+      const updated = await tx.promotionCampaign.update({ where: { id }, data: { state, ...(input.name ? { name: input.name } : {}), version: { increment: 1 } } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: `promotion.campaign.${state.toLowerCase()}`, entity: "PromotionCampaign", entityId: id }); return updated;
+    }); response.json({ campaign });
   } catch (error) { next(error); }
 });
 

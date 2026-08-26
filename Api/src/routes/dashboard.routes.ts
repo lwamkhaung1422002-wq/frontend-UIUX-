@@ -242,10 +242,15 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const recognitionRange = dateRange(query);
-    const expenseSpentAt = dateRange(query);
+    // The home screen is explicitly a *today* dashboard. Keep the date
+    // boundary on the server so every client gets the same Yangon business day
+    // and cannot accidentally receive all-time financial totals.
+    const todayKey = yangonDateKey(new Date());
+    const todayRange = { gte: yangonStart(todayKey), lte: yangonEnd(todayKey) };
+    const recognitionRange = dateRange(query) ?? todayRange;
+    const expenseSpentAt = dateRange(query) ?? todayRange;
 
-    const [orders, payments, expenses, customersCount, productsCount, categoriesCount, lowStockBatches, purchases, balances] = await Promise.all([
+    const [orders, payments, expenses, customersCount, productsCount, categoriesCount, purchases, balances] = await Promise.all([
       prisma.order.findMany({
         where: { shopId },
         include: {
@@ -264,13 +269,6 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
       prisma.customer.count({ where: { shopId } }),
       prisma.product.count({ where: { shopId, isActive: true } }),
       prisma.category.count({ where: { shopId } }),
-      prisma.inventoryBatch.findMany({
-        where: { shopId },
-        include: {
-          product: true,
-          variant: true,
-        },
-      }),
       prisma.purchase.findMany({
         where: { shopId },
         include: { payments: true, supplier: true },
@@ -280,10 +278,15 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     ]);
 
     const recognizedOrders = orders.filter((order) =>
-      isRecognizedSale(order) && (!recognitionRange || isInRange(recognizedAt(order), recognitionRange)),
+      isRecognizedSale(order) && isInRange(recognizedAt(order), recognitionRange),
     );
-    const periodPayments = payments.filter((payment) => !recognitionRange || isInRange(payment.paidAt, recognitionRange));
-    const refunds = periodPayments.filter((payment) => payment.type === "refund").reduce((sum, payment) => sum + payment.amount, 0);
+    const periodPayments = payments.filter((payment) => isInRange(payment.paidAt, recognitionRange));
+    // Refund payments are stored as negative cash movements. Dashboard totals
+    // expose refunds as a positive deduction so they reduce revenue/profit and
+    // increase cash out instead of being added back in.
+    const refunds = periodPayments
+      .filter((payment) => payment.type === "refund")
+      .reduce((sum, payment) => sum + Math.abs(payment.amount), 0);
     const revenue = recognizedOrders.reduce((sum, order) => sum + order.total, 0) - refunds;
     const costOfGoods = recognizedOrders.reduce(
       (sum, order) =>
@@ -304,7 +307,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
       .filter((payment) => payment.type === "payment" && payment.scope !== "cod-settlement-void")
       .reduce((sum, payment) => sum + payment.amount, 0);
     const purchasePayments = purchases.flatMap((purchase) => purchase.payments)
-      .filter((payment) => !payment.reversedAt && (!recognitionRange || isInRange(payment.paidAt, recognitionRange)))
+      .filter((payment) => !payment.reversedAt && isInRange(payment.paidAt, recognitionRange))
       .reduce((sum, payment) => sum + payment.amount, 0);
     const supplierPayable = purchases.reduce((sum, purchase) => sum + Math.max(0, purchase.total - purchase.paidAmount), 0);
     const inventoryValuation = balances.reduce((sum, balance) =>
@@ -313,17 +316,29 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     const cashOut = purchasePayments + operatingExpenses + refunds;
     const stockUnits = balances.reduce((sum, balance) => sum + Math.max(0, Number(balance.onHand)), 0);
 
-    const lowStock = lowStockBatches
-      .map((batch) => ({
-        inventoryBatchId: batch.id,
-        productId: batch.productId,
-        productCode: batch.product.sku,
-        productName: batch.product.name,
-        variantId: batch.variantId,
-        variantName: batch.variant?.name ?? null,
-        availableQuantity: batch.quantity - batch.reservedQuantity,
-      }))
-      .filter((batch) => batch.availableQuantity <= 5)
+    // A product can have several receipt batches and locations. Low-stock is a
+    // product-level decision, therefore aggregate its available stock first
+    // and use the product's configured minimum instead of a hard-coded 5 pcs.
+    const stockByProduct = new Map<string, {
+      productId: string;
+      productCode: string | null;
+      productName: string;
+      minimumStock: number;
+      availableQuantity: number;
+    }>();
+    for (const balance of balances) {
+      const current = stockByProduct.get(balance.productId) ?? {
+        productId: balance.productId,
+        productCode: balance.product.sku,
+        productName: balance.product.name,
+        minimumStock: balance.product.minimumStock,
+        availableQuantity: 0,
+      };
+      current.availableQuantity += Math.max(0, Number(balance.onHand) - Number(balance.reserved));
+      stockByProduct.set(balance.productId, current);
+    }
+    const lowStock = [...stockByProduct.values()]
+      .filter((product) => product.availableQuantity > 0 && product.availableQuantity <= product.minimumStock)
       .sort((a, b) => a.availableQuantity - b.availableQuantity);
 
     const paymentMethodForOrder = (orderId: string) => payments

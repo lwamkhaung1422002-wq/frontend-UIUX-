@@ -63,7 +63,7 @@ export default function StockHistoryPage() {
   const [search, setSearch] = useState("");
   const [sourceRecords, setSourceRecords] = useState([]);
   const [historyError, setHistoryError] = useState("");
-  useEffect(() => { let active = true; api.inventory.movements({ limit: 200 }).then(({ movements }) => { if (!active) return; setHistoryError(""); setSourceRecords((movements || []).map((movement) => { const kind = movement.direction === "OUT" ? "out" : "in"; const quantity = Number(movement.enteredQuantity || 0); const date = new Date(movement.occurredAt); return { id: movement.id, product: movement.product?.name || "Product", sku: movement.product?.sku || "", barcodes: movement.product?.barcodes?.map((barcode) => barcode.value) || [], type: kind === "out" ? "Stock Out" : "Stock In", kind, qty: `${kind === "out" ? "-" : "+"}${quantity} pcs`, amount: movement.unitCost ? `${new Intl.NumberFormat("en-US").format(Number(movement.unitCost))} ကျပ်` : "—", reference: movement.sourceId, reason: movement.reason || movement.type, staffName: movement.staffName || "", time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), date: date.toISOString().slice(0, 10), icon: <Inventory2RoundedIcon />, color: kind === "out" ? "#d14343" : "#1976d2" }; })); }).catch((error) => { if (active) { setSourceRecords([]); setHistoryError(error.message || "Unable to load stock history. Please try again."); } }); return () => { active = false; }; }, [api]);
+  useEffect(() => { let active = true; api.inventory.movements({ limit: 200 }).then(({ movements }) => { if (!active) return; setHistoryError(""); setSourceRecords((movements || []).map((movement) => { const kind = movement.direction === "OUT" ? "out" : "in"; const quantity = Number(movement.enteredQuantity || 0); const date = new Date(movement.occurredAt); const saleInvoice = movement.type === "SALE" ? movement.invoiceNumber : null; return { id: movement.id, product: movement.product?.name || "Product", sku: movement.product?.sku || "", barcodes: movement.product?.barcodes?.map((barcode) => barcode.value) || [], type: saleInvoice ? `SALE · ${saleInvoice}` : (kind === "out" ? "Stock Out" : "Stock In"), kind, qty: `${kind === "out" ? "-" : "+"}${quantity} pcs`, amount: movement.unitCost ? `${new Intl.NumberFormat("en-US").format(Number(movement.unitCost))} ကျပ်` : "—", reference: movement.sourceId, reason: movement.reason || movement.type, staffName: movement.staffName || "", time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), date: date.toISOString().slice(0, 10), icon: <Inventory2RoundedIcon />, color: kind === "out" ? "#d14343" : "#1976d2" }; })); }).catch((error) => { if (active) { setSourceRecords([]); setHistoryError(error.message || "Unable to load stock history. Please try again."); } }); return () => { active = false; }; }, [api]);
   const visibleRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
     return sourceRecords.filter((record) => {
@@ -157,8 +157,9 @@ const desktopHistoryHeaderSx = { display: "grid", gridTemplateColumns: desktopHi
 const desktopHistoryRowSx = { display: "grid", gridTemplateColumns: desktopHistoryGrid, columnGap: 2, alignItems: "center", minHeight: 74, px: 2.5, borderBottom: "1px solid", borderColor: "divider", "&:last-child": { borderBottom: 0 } };
 
 function HistoryCard({ record }) {
+  const isDeleted = record.reason === "Product deleted";
   const isIn = record.kind === "in";
-  const statusColor = isIn ? "success.main" : "error.main";
+  const statusColor = isDeleted ? "error.main" : isIn ? "success.main" : "error.main";
 
   return (
     <Card sx={{ borderRadius: 3, bgcolor: "background.paper", boxShadow: "0 4px 12px rgba(15,23,42,0.14)" }}>
@@ -171,14 +172,14 @@ function HistoryCard({ record }) {
             <Typography color="text.primary" sx={{ fontSize: 22, fontWeight: 700, lineHeight: 1.25 }}>{record.product}</Typography>
             <Box sx={{ display: "flex", alignItems: "center", gap: 3.25, mt: 2.5 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, color: statusColor }}>
-                {isIn ? <ArrowDownwardRoundedIcon sx={{ fontSize: 24 }} /> : <ArrowUpwardRoundedIcon sx={{ fontSize: 24 }} />}
-                <Typography color={statusColor} sx={{ fontSize: 19, fontWeight: 700 }}>{record.qty}</Typography>
+                {!isDeleted && (isIn ? <ArrowDownwardRoundedIcon sx={{ fontSize: 24 }} /> : <ArrowUpwardRoundedIcon sx={{ fontSize: 24 }} />)}
+                <Typography color={statusColor} sx={{ fontSize: 19, fontWeight: 700 }}>{isDeleted ? "Product deleted" : record.qty}</Typography>
               </Box>
               <Typography color="text.primary" sx={{ fontSize: 19, fontWeight: 500, whiteSpace: "nowrap" }}>{record.amount}</Typography>
             </Box>
             <Typography color="text.secondary" sx={{ mt: 3, fontSize: 18, lineHeight: 1.35 }}>{record.reason}{record.staffName ? ` • Staff: ${record.staffName}` : ""}</Typography>
           </Box>
-          <Chip label={record.type} variant="outlined" sx={{ mt: 0.25, height: 42, borderRadius: 999, borderColor: statusColor, color: statusColor, bgcolor: "background.paper", fontWeight: 700, "& .MuiChip-label": { px: 1.5, fontSize: 16 } }} />
+          <Chip label={isDeleted ? "Product Deleted" : record.type} variant="outlined" sx={{ mt: 0.25, height: 42, borderRadius: 999, borderColor: statusColor, color: statusColor, bgcolor: "background.paper", fontWeight: 700, "& .MuiChip-label": { px: 1.5, fontSize: 16 } }} />
         </Box>
 
         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1.5, mt: 3.5, color: "text.secondary" }}>

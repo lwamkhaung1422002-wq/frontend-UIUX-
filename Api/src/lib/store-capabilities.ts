@@ -66,6 +66,7 @@ export async function applyTemplateDefaults(
   prisma: PrismaClient | Prisma.TransactionClient,
   shopId: string,
   templateKey: StoreTemplateKey,
+  options: { includeCategories?: boolean } = {},
 ): Promise<void> {
   const template = STORE_TEMPLATES[templateKey];
   for (const [name, symbol, precision] of template.units) {
@@ -75,12 +76,14 @@ export async function applyTemplateDefaults(
       create: { shopId, name, symbol, precision },
     });
   }
-  for (const name of template.categories) {
-    await prisma.category.upsert({
-      where: { shopId_name: { shopId, name } },
-      update: {},
-      create: { shopId, name },
-    });
+  if (options.includeCategories !== false) {
+    for (const name of template.categories) {
+      await prisma.category.upsert({
+        where: { shopId_name: { shopId, name } },
+        update: {},
+        create: { shopId, name },
+      });
+    }
   }
   await prisma.inventoryLocation.upsert({
     where: { shopId_name: { shopId, name: "Main" } },

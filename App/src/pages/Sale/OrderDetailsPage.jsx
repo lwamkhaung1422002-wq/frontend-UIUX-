@@ -5,18 +5,20 @@ import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import PrintRoundedIcon from "@mui/icons-material/PrintRounded";
 import ShareRoundedIcon from "@mui/icons-material/ShareRounded";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { useTheme } from "@mui/material/styles";
-import { jsPDF } from "jspdf";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useOrderQuery } from "../../hooks/usePosQueries";
 
 const formatKyat = (amount) => `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 
 export default function OrderDetailsPage() {
   const { orderId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const api = usePosApi();
-  const [record, setRecord] = useState(null);
+  const { data: orderResult, error: orderError, isLoading: orderLoading, refetch: refetchOrder } = useOrderQuery(orderId);
+  const record = orderResult?.order || null;
   const [shop, setShop] = useState(null);
   const [loadError, setLoadError] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -27,11 +29,6 @@ export default function OrderDetailsPage() {
     ? { page: "#101010", card: "#1e1e1e", text: "#fff", muted: "#a7a7a7", divider: "rgba(255,255,255,.55)", doneBg: "#153c27", doneBorder: "#317c4a", doneText: "#7be29f" }
     : { page: theme.palette.background.default, card: theme.palette.background.paper, text: theme.palette.text.primary, muted: theme.palette.text.secondary, divider: theme.palette.divider, doneBg: "#e8f6ec", doneBorder: "#b8e3c4", doneText: "#278a45" };
   const cardSx = { bgcolor: colors.card, color: colors.text, borderRadius: 3, border: "1px solid", borderColor: colors.divider, boxShadow: "0 5px 16px rgba(0,0,0,.12)" };
-  useEffect(() => {
-    let active = true;
-    api.orders.get(orderId).then(({ order }) => { if (active) setRecord(order); }).catch((error) => { if (active) setLoadError(error.message || "Order details could not be loaded."); });
-    return () => { active = false; };
-  }, [api, orderId]);
   useEffect(() => {
     let active = true;
     api.shop.get().then(({ shop: shopRecord }) => { if (active) setShop(shopRecord); }).catch(() => {});
@@ -49,6 +46,7 @@ export default function OrderDetailsPage() {
       date: createdAt.toLocaleDateString(),
       time: createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       paymentStatus: String(record.paymentStatus || "unpaid").replace(/^./, (letter) => letter.toUpperCase()),
+      status: record.fulfillmentStatus === "cancelled" ? "Cancel" : "Done",
       paymentMethod: (() => {
         const payment = [...(record.payments || [])]
           .filter((entry) => Number(entry.amount || 0) > 0)
@@ -57,10 +55,29 @@ export default function OrderDetailsPage() {
       })(),
     };
   }, [record]);
-  if (!order) return <Box sx={{ minHeight: "100vh", bgcolor: colors.page, p: 3 }}><Alert severity={loadError ? "error" : "info"}>{loadError || "Loading order details"}</Alert></Box>;
+  if (!order) return <Box sx={{ minHeight: "100vh", bgcolor: colors.page, p: 3 }}><Alert severity={loadError || orderError ? "error" : "info"} action={!orderLoading && (loadError || orderError) ? <Button color="inherit" size="small" onClick={() => void refetchOrder()}>Retry</Button> : undefined}>{loadError || orderError?.message || "Loading order details"}</Alert></Box>;
 
-  const subtotal = order.subtotal;
-  const discount = order.discount;
+  const orderItems = (record.items || []).map((item) => {
+    const quantity = Number(item.quantity || 0);
+    const sellUnitPrice = Number(item.regularUnitPrice ?? item.unitPrice ?? 0);
+    return {
+      ...item,
+      sellUnitPrice,
+      sellLineTotal: sellUnitPrice * quantity,
+      appliedDiscount: Math.max(0, sellUnitPrice * quantity - Number(item.lineTotal || 0)),
+    };
+  });
+  const subtotal = orderItems.reduce((sum, item) => sum + item.sellLineTotal, 0) || order.subtotal;
+  const discount = order.discount + orderItems.reduce((sum, item) => sum + item.appliedDiscount, 0);
+  const promotionNames = [...new Set(orderItems.map((item) => item.pricingSnapshot?.promotionName).filter(Boolean))];
+  const discountLabel = promotionNames.length ? `Discount (${promotionNames.join(", ")})` : "Discount";
+  const paymentRecords = [...(record.payments || [])]
+    .filter((payment) => Number(payment.amount || 0) > 0)
+    .sort((left, right) => new Date(left.paidAt || left.createdAt) - new Date(right.paidAt || right.createdAt));
+  const paidAmount = paymentRecords.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const activePaymentRecordCount = paymentRecords.filter((payment) => !(record.payments || []).some((reversal) => Number(reversal.amount || 0) < 0 && reversal.originalPaymentId === payment.id)).length;
+  const remainingAmount = Math.max(0, Number(record.total || 0) - paidAmount);
+  const showPaymentSummary = paymentRecords.length > 0 || ["unpaid", "partial"].includes(String(record.paymentStatus || "unpaid").toLowerCase());
   const legacyPrintOrder = () => {
     const popup = window.open("", "_blank", "width=420,height=720");
     if (!popup) { setLoadError("Allow pop-ups to print this receipt."); return; }
@@ -74,6 +91,7 @@ export default function OrderDetailsPage() {
     else await navigator.clipboard?.writeText(text);
   };
   const legacyShareInvoice = async () => {
+    const { jsPDF } = await import("jspdf");
     const invoice = new jsPDF({ unit: "mm", format: "a4" });
     const pageWidth = invoice.internal.pageSize.getWidth();
     let y = 18;
@@ -97,6 +115,7 @@ export default function OrderDetailsPage() {
     popup.document.close();
   };
   const shareInvoice = async () => {
+    const { jsPDF } = await import("jspdf");
     const invoice = new jsPDF({ unit: "mm", format: "a5", orientation: "portrait" });
     const pageWidth = invoice.internal.pageSize.getWidth();
     const margin = 10;
@@ -126,10 +145,10 @@ export default function OrderDetailsPage() {
   void shareOrder;
   const deleteOrder = async () => {
     if (!record || deleting) return;
-    if (!window.confirm("Cancel this order? Paid orders will be refunded and stock will be restored.")) return;
+    if (!window.confirm("Cancel this order? The order record will be kept.")) return;
     setDeleting(true);
     try {
-      if (record.fulfillmentStatus !== "cancelled") await api.orders.cancel(record.id, { reason: "Order cancelled" });
+      if (record.fulfillmentStatus !== "cancelled") await api.orders.cancel(record.id, { reason: "Order deleted" });
       navigate("/sale");
     }
     catch (error) { setLoadError(error.message || "This order cannot be deleted."); }
@@ -139,21 +158,22 @@ export default function OrderDetailsPage() {
   return <Box sx={{ minHeight: isMobile ? "100vh" : "calc(100vh - 120px)", bgcolor: colors.page, color: colors.text, py: isMobile ? 0 : 3, px: isMobile ? 0 : 3 }}>
     <Box sx={{ maxWidth: isMobile ? "none" : 880, mx: "auto" }}>
       <Box sx={{ minHeight: isMobile ? 64 : 72, px: isMobile ? 1.5 : 0, mx: isMobile ? 2.5 : 0, mt: isMobile ? 1.25 : 0, borderRadius: isMobile ? 2.5 : 0, display: "grid", gridTemplateColumns: "42px minmax(0,1fr) 42px", alignItems: "center", bgcolor: isMobile ? "primary.main" : "transparent", color: isMobile ? "common.white" : colors.text }}>
-        <IconButton aria-label="Back to orders" onClick={() => navigate("/sale")} sx={{ color: isMobile ? "common.white" : colors.text, justifySelf: "start" }}><ArrowBackRoundedIcon sx={{ fontSize: 31 }} /></IconButton>
+        <IconButton aria-label="Back to orders" onClick={() => navigate(location.state?.from || "/sale")} sx={{ color: isMobile ? "common.white" : colors.text, justifySelf: "start" }}><ArrowBackRoundedIcon sx={{ fontSize: 31 }} /></IconButton>
         <Typography noWrap sx={{ textAlign: "center", fontSize: isMobile ? 20 : 24, fontWeight: 700 }}>{order.id}</Typography>
         <Box />
       </Box>
       <Box sx={{ px: isMobile ? 2.5 : 0, pt: isMobile ? 1.5 : 0, pb: 4 }}>
         <Card sx={cardSx}><CardContent sx={{ p: isMobile ? 2.5 : 3, "&:last-child": { pb: isMobile ? 2.5 : 3 } }}>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}><Typography sx={{ fontSize: isMobile ? 24 : 25, fontWeight: 700 }}>Order Details</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 0.75, px: 1.25, py: 0.7, borderRadius: 99, bgcolor: colors.doneBg, color: colors.doneText, border: "1px solid", borderColor: colors.doneBorder }}><CheckCircleRoundedIcon sx={{ fontSize: 18 }} /><Typography sx={{ fontWeight: 700 }}>Done</Typography></Box></Box>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}><Typography sx={{ fontSize: isMobile ? 24 : 25, fontWeight: 700 }}>Order Details</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 0.75, px: 1.25, py: 0.7, borderRadius: 99, bgcolor: order.status === "Cancel" ? "#fff1f0" : colors.doneBg, color: order.status === "Cancel" ? "#d14343" : colors.doneText, border: "1px solid", borderColor: order.status === "Cancel" ? "#f0b8b8" : colors.doneBorder }}><CheckCircleRoundedIcon sx={{ fontSize: 18 }} /><Typography sx={{ fontWeight: 700 }}>{order.status}</Typography></Box></Box>
           <Divider sx={{ my: 2.25, borderColor: colors.divider }} />
-          <Stack spacing={1.25}><DetailRow label="Order Number" value={order.id} /><DetailRow label="Order Date" value={`${order.date} ${order.time}`} /><DetailRow label="Payment Status" value={order.paymentStatus} tone={order.paymentStatus === "Paid" ? "#278a45" : "#d14343"} /><DetailRow label="Payment Method" value={order.paymentMethod} /><DetailRow label="Total Amount" value={formatKyat(order.amount)} tone="#1976d2" /></Stack>
+          <Stack spacing={1.25}><DetailRow label="Order Number" value={order.id} /><DetailRow label="Order Date" value={`${order.date} ${order.time}`} /><DetailRow label="Order Status" value={order.status} tone={order.status === "Cancel" ? "#d14343" : "#278a45"} /><DetailRow label="Payment Status" value={order.paymentStatus} tone={order.paymentStatus === "Paid" ? "#278a45" : "#d14343"} /><DetailRow label="Payment Method" value={order.paymentMethod} /><DetailRow label="Total Amount" value={formatKyat(order.amount)} tone="#1976d2" /></Stack>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mt: 3 }}><Button variant="contained" startIcon={<PrintRoundedIcon />} onClick={printOrder} sx={detailPrimaryButtonSx}>Print Invoice</Button><Button variant="contained" startIcon={<ShareRoundedIcon />} onClick={() => void shareInvoice()} sx={detailPrimaryButtonSx}>Share Invoice</Button></Box>
-          <Button fullWidth startIcon={<DeleteOutlineRoundedIcon />} disabled={deleting} onClick={() => void deleteOrder()} color="error" sx={{ mt: 2.25, minHeight: 46, textTransform: "none", fontSize: 16, fontWeight: 700 }}>{deleting ? "Deleting…" : "Delete Order"}</Button>
+          <Button fullWidth startIcon={<DeleteOutlineRoundedIcon />} disabled={deleting || record.fulfillmentStatus === "cancelled" || activePaymentRecordCount > 1} onClick={() => void deleteOrder()} color="error" sx={{ mt: 2.25, minHeight: 46, textTransform: "none", fontSize: 16, fontWeight: 700 }}>{deleting ? "Cancelling…" : "Cancel Order"}</Button>
         </CardContent></Card>
         <Typography sx={{ fontSize: isMobile ? 21 : 22, fontWeight: 700, mt: 2, mb: 1 }}>Order Items ({order.quantity})</Typography>
-        <Card sx={cardSx}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Stack spacing={1.5}>{record.items.map((item) => <Box key={item.id} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}><Box><Typography sx={{ fontSize: 18, fontWeight: 700 }}>{item.productName || item.product?.name}</Typography><Typography sx={{ color: colors.muted, mt: 0.6 }}>{Number(item.quantity)} × {formatKyat(Number(item.unitPrice || 0))}</Typography></Box><Typography sx={{ fontSize: 20, fontWeight: 800 }}>{formatKyat(Number(item.lineTotal || 0))}</Typography></Box>)}</Stack></CardContent></Card>
-        <Card sx={{ ...cardSx, mt: 2 }}><CardContent sx={{ p: isMobile ? 2.5 : 3, "&:last-child": { pb: isMobile ? 2.5 : 3 } }}><Typography sx={{ fontSize: isMobile ? 24 : 25, fontWeight: 700 }}>Order Summary</Typography><Divider sx={{ my: 2.25, borderColor: colors.divider }} /><Stack spacing={1.25}><DetailRow label="Subtotal" value={formatKyat(subtotal)} /><DetailRow label="Discount" value={discount > 0 ? `- ${formatKyat(discount)}` : formatKyat(0)} tone={discount > 0 ? "#d14343" : "inherit"} /></Stack><Divider sx={{ my: 2.25, borderColor: colors.divider }} /><DetailRow label="Total" value={formatKyat(order.amount)} tone="#1976d2" strong /></CardContent></Card>
+        <Card sx={cardSx}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Stack spacing={1.5}>{orderItems.map((item) => <Box key={item.id} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}><Box><Typography sx={{ fontSize: 18, fontWeight: 700 }}>{item.productName || item.product?.name}</Typography><Typography sx={{ color: colors.muted, mt: 0.6 }}>{Number(item.quantity)} × {formatKyat(item.sellUnitPrice)}</Typography></Box><Typography sx={{ fontSize: 20, fontWeight: 800 }}>{formatKyat(item.sellLineTotal)}</Typography></Box>)}</Stack></CardContent></Card>
+        <Card sx={{ ...cardSx, mt: 2 }}><CardContent sx={{ p: isMobile ? 2.5 : 3, "&:last-child": { pb: isMobile ? 2.5 : 3 } }}><Typography sx={{ fontSize: isMobile ? 24 : 25, fontWeight: 700 }}>Order Summary</Typography><Divider sx={{ my: 2.25, borderColor: colors.divider }} /><Stack spacing={1.25}><DetailRow label="Subtotal" value={formatKyat(subtotal)} /><DetailRow label={discountLabel} value={discount > 0 ? `- ${formatKyat(discount)}` : formatKyat(0)} tone={discount > 0 ? "#d14343" : "inherit"} /></Stack><Divider sx={{ my: 2.25, borderColor: colors.divider }} /><DetailRow label="Total" value={formatKyat(order.amount)} tone="#1976d2" strong /></CardContent></Card>
+        {showPaymentSummary && <Card sx={{ ...cardSx, mt: 2 }}><CardContent sx={{ p: isMobile ? 2.5 : 3, "&:last-child": { pb: isMobile ? 2.5 : 3 } }}><Typography sx={{ fontSize: isMobile ? 22 : 23, fontWeight: 700 }}>Payment Summary</Typography><Divider sx={{ my: 2, borderColor: colors.divider }} /><Stack spacing={1.25}><DetailRow label="Buyer Name" value={record.customer?.name || "—"} /><DetailRow label="Payment Status" value={order.paymentStatus} tone={order.paymentStatus === "Partial" ? "#e47616" : "#d14343"} /><DetailRow label="Paid Amount" value={formatKyat(paidAmount)} tone="#278a45" /><DetailRow label="Remaining Amount" value={formatKyat(remainingAmount)} tone="#d14343" /></Stack>{paymentRecords.length > 0 && <><Divider sx={{ my: 2, borderColor: colors.divider }} /><Typography sx={{ fontWeight: 700, mb: 1.25 }}>Payment Records</Typography><Stack spacing={1.25}>{paymentRecords.map((payment) => <Box key={payment.id} sx={{ p: 1.25, borderRadius: 1.5, bgcolor: isDark ? "rgba(255,255,255,.05)" : "#f7f9fc" }}><DetailRow label={payment.method || "Cash"} value={formatKyat(Number(payment.amount || 0))} tone="#278a45" /><Typography sx={{ mt: .5, color: colors.muted, fontSize: 13, textAlign: "right" }}>{new Date(payment.paidAt || payment.createdAt).toLocaleDateString()}</Typography></Box>)}</Stack></>}</CardContent></Card>}
       </Box>
     </Box>
   </Box>;

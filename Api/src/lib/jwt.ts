@@ -16,7 +16,7 @@ if (process.env.NODE_ENV === "production" && jwtSecret.length < 32) {
 }
 
 export function signAccessToken(payload: JwtPayload): string {
-  return jwt.sign(payload, jwtSecret, { expiresIn: "7d" });
+  return jwt.sign(payload, jwtSecret, { expiresIn: "15m" });
 }
 
 export function verifyAccessToken(token: string): JwtPayload {

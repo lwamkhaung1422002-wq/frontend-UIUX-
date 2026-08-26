@@ -356,7 +356,7 @@ export default function AddProductPage() {
           : "Product saved successfully.",
       });
       await invalidateProductData(queryClient, shop?.id);
-      window.setTimeout(() => navigate(`/stock/${result.product.id}`), 900);
+      window.setTimeout(() => navigate("/stock"), 900);
     } catch (error) {
       setMessage({
         severity: "error",

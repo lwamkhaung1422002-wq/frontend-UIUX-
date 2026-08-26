@@ -69,7 +69,7 @@ async function main(): Promise<void> {
         password: "Password123!",
       },
     });
-    const token = registered.token;
+    const token = registered.accessToken;
     const shopId = registered.shop.id;
     assert.ok(token);
     assert.ok(shopId);
@@ -252,6 +252,15 @@ async function main(): Promise<void> {
       (balance: Json) => balance.locationId === locations.locations[0].id,
     );
     assert.equal(decimalMainAfterSale.onHand, "0.5");
+    const saleMovements = await request(
+      baseUrl,
+      `/shops/${shopId}/inventory-movements?productId=${decimalProduct.product.id}`,
+      { token },
+    );
+    const decimalSaleMovement = saleMovements.movements.find(
+      (movement: Json) => movement.type === "SALE",
+    );
+    assert.equal(decimalSaleMovement.invoiceNumber, decimalOrder.order.orderNumber);
     const decimalReturn = await request(
       baseUrl,
       `/shops/${shopId}/orders/${decimalOrder.order.id}/product-returns`,
@@ -540,8 +549,100 @@ async function main(): Promise<void> {
     assert.equal(cancelled.order.fulfillmentStatus, "cancelled");
     await request(baseUrl, `/shops/${shopId}/orders/${cancelOrderId}`, { method: "DELETE", token });
 
+    const dashboardBeforeHistoricalEntries = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
+    assert.ok(dashboardBeforeHistoricalEntries.summary);
+    await prisma.order.create({
+      data: {
+        shopId,
+        orderNumber: `HIST-${stamp}`,
+        fulfillmentStatus: "completed",
+        paymentStatus: "paid",
+        subtotal: 999_999,
+        total: 999_999,
+        completedAt: new Date(Date.now() - 2 * 86_400_000),
+        items: {
+          create: {
+            productId,
+            productName: "Historical dashboard test item",
+            quantity: 1,
+            unitPrice: 999_999,
+            unitCost: 1,
+            lineTotal: 999_999,
+          },
+        },
+      },
+    });
+    await prisma.expense.create({
+      data: {
+        shopId,
+        title: "Historical dashboard test expense",
+        amount: 888_888,
+        spentAt: new Date(Date.now() - 2 * 86_400_000),
+      },
+    });
     const dashboard = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
-    assert.ok(dashboard.summary);
+    assert.equal(dashboard.summary.revenue, dashboardBeforeHistoricalEntries.summary.revenue);
+    assert.equal(dashboard.summary.operatingExpenses, dashboardBeforeHistoricalEntries.summary.operatingExpenses);
+    assert.equal(dashboard.summary.netProfit, dashboardBeforeHistoricalEntries.summary.netProfit);
+
+    const dashboardBeforeRefund = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
+    const refundTestOrder = await prisma.order.create({
+      data: {
+        shopId,
+        orderNumber: `REFUND-${stamp}`,
+        fulfillmentStatus: "completed",
+        paymentStatus: "refunded",
+        subtotal: 1_000,
+        total: 1_000,
+        completedAt: new Date(),
+        items: {
+          create: {
+            productId,
+            productName: "Refund dashboard test item",
+            quantity: 1,
+            unitPrice: 1_000,
+            unitCost: 400,
+            lineTotal: 1_000,
+          },
+        },
+      },
+    });
+    await prisma.payment.create({
+      data: {
+        shopId,
+        orderId: refundTestOrder.id,
+        type: "refund",
+        scope: "refund",
+        method: "Cash",
+        amount: -250,
+        paidAt: new Date(),
+      },
+    });
+    const dashboardWithRefund = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
+    assert.equal(dashboardWithRefund.summary.revenue, dashboardBeforeRefund.summary.revenue + 750);
+    assert.equal(dashboardWithRefund.summary.costOfGoods, dashboardBeforeRefund.summary.costOfGoods + 400);
+    assert.equal(dashboardWithRefund.summary.netProfit, dashboardBeforeRefund.summary.netProfit + 350);
+
+    const lowProduct = await prisma.product.create({
+      data: { shopId, name: `Dashboard Low Stock ${stamp}`, sku: `DLOW-${stamp}`, price: 2_000, cost: 1_000, minimumStock: 10 },
+    });
+    const safeProduct = await prisma.product.create({
+      data: { shopId, name: `Dashboard Safe Stock ${stamp}`, sku: `DSAFE-${stamp}`, price: 2_000, cost: 1_000, minimumStock: 10 },
+    });
+    await prisma.inventoryBalance.createMany({
+      data: [
+        { shopId, productId: lowProduct.id, locationId: serialLocation.id, onHand: 7, reserved: 0 },
+        { shopId, productId: safeProduct.id, locationId: serialLocation.id, onHand: 20, reserved: 0 },
+      ],
+    });
+    // A low receipt batch must not incorrectly mark a product low when its
+    // total available balance is above its configured minimum.
+    await prisma.inventoryBatch.create({
+      data: { shopId, productId: safeProduct.id, quantity: 2, reservedQuantity: 0, unitCost: 1_000 },
+    });
+    const dashboardWithStockChecks = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
+    assert.ok(dashboardWithStockChecks.lowStock.some((item: Json) => item.productId === lowProduct.id));
+    assert.ok(!dashboardWithStockChecks.lowStock.some((item: Json) => item.productId === safeProduct.id));
 
     const supplierResult = await request(baseUrl, `/shops/${shopId}/suppliers`, {
       method: "POST", token, body: { name: `API Supplier ${stamp}` },
@@ -618,6 +719,9 @@ async function main(): Promise<void> {
       method: "POST", token, body: { amount: 900, method: "Cash", reference: "API-PAY", notes: "Integration test" },
     });
     assert.equal(payment.purchase.paidAmount, 900);
+    await assert.rejects(request(baseUrl, `/shops/${shopId}/purchases/${purchaseId}/payments`, {
+      method: "POST", token, body: { amount: 1, method: "KBZPay" },
+    }), /transaction id is required/i);
     const reversed = await request(baseUrl, `/shops/${shopId}/purchases/${purchaseId}/payments/${payment.purchase.payments[0].id}/reverse`, {
       method: "POST", token, body: { reason: "Integration test reversal" },
     });
@@ -649,7 +753,7 @@ async function main(): Promise<void> {
         password: "Password123!",
       },
     });
-    const restaurantToken = restaurantOwner.token;
+    const restaurantToken = restaurantOwner.accessToken;
     const restaurantShopId = restaurantOwner.shop.id;
     await prisma.shop.update({
       where: { id: restaurantShopId },
@@ -797,6 +901,16 @@ async function main(): Promise<void> {
       method: "POST", token,
       body: { name: `Overlapping API promotion ${stamp}`, productId, type: "PERCENTAGE", value: 10, startsAt: promotionStart.toISOString(), endsAt: promotionEnd.toISOString(), state: "SCHEDULED" },
     }), /overlaps/i);
+    const campaignPromotion = await request(baseUrl, `/shops/${shopId}/promotion-campaigns`, {
+      method: "POST", token,
+      body: { name: `Campaign promotion ${stamp}`, scope: "PRODUCT", productId: decimalProduct.product.id, type: "PERCENTAGE", value: 10, startsAt: promotionStart.toISOString(), endsAt: promotionEnd.toISOString(), state: "SCHEDULED", reason: "Campaign resolver test" },
+    });
+    assert.ok(campaignPromotion.campaign.id);
+    const campaignResolvedPrice = await request(baseUrl, `/shops/${shopId}/pricing/resolve`, {
+      method: "POST", token, body: { productId: decimalProduct.product.id, quantity: 1, channel: "ALL" },
+    });
+    assert.equal(campaignResolvedPrice.pricing.promotionName, `Campaign promotion ${stamp}`);
+    assert.equal(campaignResolvedPrice.pricing.promotionDiscount, 300);
 
     const attacker = await request(baseUrl, "/auth/register", {
       method: "POST",
@@ -807,7 +921,7 @@ async function main(): Promise<void> {
         password: "Password123!",
       },
     });
-    const attackerToken = attacker.token;
+    const attackerToken = attacker.accessToken;
     const attackerShopId = attacker.shop.id;
     const denied = /failed (403|404)/i;
     await assert.rejects(request(baseUrl, `/shops/${shopId}/products`, { token: attackerToken }), denied);
@@ -836,7 +950,7 @@ async function main(): Promise<void> {
     assert.equal(wrongMissing.status, 401);
     assert.equal(wrongExisting.data.message, wrongMissing.data.message);
     let rateLimitedStatus = 0;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    for (let attempt = 0; attempt <= Number(process.env.AUTH_RATE_LIMIT_MAX ?? 10); attempt += 1) {
       rateLimitedStatus = (await rawRequest(baseUrl, "/auth/login", {
         method: "POST",
         body: { email: `bruteforce-${stamp}@example.local`, password: "DefinitelyWrong123!" },

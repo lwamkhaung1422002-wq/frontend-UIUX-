@@ -54,7 +54,7 @@ shopsRouter.post("/", async (request, response, next) => {
         },
         include: { setting: true },
       });
-      await applyTemplateDefaults(tx, created.id, "GENERAL_STORE");
+      await applyTemplateDefaults(tx, created.id, "GENERAL_STORE", { includeCategories: false });
       return created;
     });
 

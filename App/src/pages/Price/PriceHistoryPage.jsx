@@ -27,22 +27,26 @@ export default function PriceHistoryPage() {
       const at = new Date(entry.effectiveFrom || entry.createdAt);
       return { type: "Price", name: entry.product?.name || "Product", oldPrice: Number(entry.product?.price || 0), newPrice: Number(entry.unitPrice || 0), date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: entry.reason || "" };
     });
-    const promotions = (campaignResult?.campaigns || []).map((campaign) => {
-      const first = campaign.promotions?.[0] || {}; const at = new Date(campaign.updatedAt || campaign.createdAt);
-      return { type: "Promotion", name: campaign.sampleProduct?.name || campaign.name, promotionName: campaign.name, action: `${first.type === "FIXED_PRICE" ? "Promotion price" : "Promotion set"}: ${first.value || 0}${first.type === "PERCENTAGE" ? "% off" : ""}`, period: first.startsAt && first.endsAt ? `${new Date(first.startsAt).toLocaleDateString("en-GB")} - ${new Date(first.endsAt).toLocaleDateString("en-GB")}` : "", date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: first.reason || "" };
+    const promotions = (campaignResult?.campaigns || []).flatMap((campaign) => {
+      const first = campaign.promotions?.[0] || {}; const ended = ["ENDED", "CANCELLED"].includes(campaign.effectiveState) || campaign.state === "CANCELLED"; const period = first.startsAt && first.endsAt ? `${new Date(first.startsAt).toLocaleDateString("en-GB")} - ${new Date(first.endsAt).toLocaleDateString("en-GB")}` : ""; const createAt = new Date(campaign.createdAt);
+      const created = { type: "Promotion", promotionStatus: "created", name: campaign.sampleProduct?.name || campaign.name, promotionName: campaign.name, action: `Promotion created: ${first.value || 0}${first.type === "PERCENTAGE" ? "% off" : ""}`, period, date: createAt.toLocaleDateString("en-GB"), time: createAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: first.reason || "", timestamp: createAt.valueOf() };
+      if (!ended) return [created];
+      const endAt = new Date(first.endsAt || campaign.updatedAt || campaign.createdAt);
+      return [created, { ...created, promotionStatus: "ended", action: campaign.effectiveState === "ENDED" ? "Promotion ended automatically" : "Promotion ended", date: endAt.toLocaleDateString("en-GB"), time: endAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), timestamp: endAt.valueOf() }];
     });
-    return [...prices, ...promotions].sort((left, right) => `${right.date} ${right.time}`.localeCompare(`${left.date} ${left.time}`));
+    return [...prices, ...promotions].sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0));
   }, [campaignResult, priceResult]);
   return <Box sx={{ minHeight: "100dvh", bgcolor: "#f8fafc", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: "primary.main" }}><Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}><IconButton aria-label="Back to price and promotion" onClick={() => navigate("/price")} sx={{ justifySelf: "start", color: "common.white" }}><ArrowBackRoundedIcon /></IconButton><Typography fontWeight={700}>Price History</Typography><Box /></Toolbar></AppBar>
-    <Box sx={{ p: { xs: 2, sm: 2.5 }, maxWidth: 720, mx: "auto" }}><Typography color="text.secondary" sx={{ mb: 2, fontSize: 14 }}>{filter} price and promotion activity</Typography><Stack spacing={1.75}>{records.map((record) => <HistoryCard key={record.name} record={record} />)}</Stack></Box>
+    <Box sx={{ p: { xs: 2, sm: 2.5 }, maxWidth: 720, mx: "auto" }}><Typography color="text.secondary" sx={{ mb: 2, fontSize: 14 }}>{filter} price and promotion activity</Typography><Stack spacing={1.75}>{records.map((record) => <HistoryCard key={`${record.type}-${record.name}-${record.timestamp || record.date}`} record={record} />)}</Stack></Box>
   </Box>;
 }
 
 function HistoryCard({ record }) {
   const promotion = record.type === "Promotion";
+  const promotionEnded = record.promotionStatus === "ended";
   return <Paper elevation={1} sx={{ p: { xs: 1.75, sm: 2.25 }, borderRadius: 2.25, boxShadow: "0 2px 9px rgba(15,23,42,0.11)" }}>
-    <Chip label={record.type} size="small" sx={{ height: 30, mb: 1.25, borderRadius: 1.1, bgcolor: promotion ? "#168437" : "#2459d6", color: "common.white", fontSize: 13, fontWeight: 700 }} />
+    <Chip label={promotion ? (promotionEnded ? "Promotion Ended" : "Promotion Created") : "Price"} size="small" sx={{ height: 30, mb: 1.25, borderRadius: 1.1, bgcolor: promotion ? (promotionEnded ? "#d14343" : "#168437") : "#2459d6", color: "common.white", fontSize: 13, fontWeight: 700 }} />
     <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.45fr) 1px minmax(104px, 0.78fr)", columnGap: { xs: 1.5, sm: 2.5 }, alignItems: "stretch" }}>
       <Box sx={{ minWidth: 0 }}><Typography noWrap sx={{ fontSize: { xs: 17, sm: 19 }, fontWeight: 700 }}>{record.name}</Typography>{promotion ? <PromotionDetail record={record} /> : <PriceDetail record={record} />}</Box>
       <Box sx={{ bgcolor: "#e4e7ec" }} />
@@ -52,5 +56,5 @@ function HistoryCard({ record }) {
 }
 
 function PriceDetail({ record }) { return <Box sx={{ mt: 2 }}><Typography color="text.secondary" sx={{ fontSize: { xs: 14, sm: 16 } }}>Selling price changed</Typography><Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.45, sm: 1.5 }, mt: 1.5, whiteSpace: "nowrap" }}><Typography sx={{ fontSize: { xs: 16, sm: 20 }, fontWeight: 700 }}>{money(record.oldPrice)}</Typography><TrendingUpRoundedIcon sx={{ color: "#168437", fontSize: { xs: 24, sm: 34 } }} /><Typography sx={{ fontSize: { xs: 16, sm: 20 }, fontWeight: 700 }}>{money(record.newPrice)}</Typography></Box></Box>; }
-function PromotionDetail({ record }) { return <Paper elevation={0} sx={{ mt: 1.5, p: { xs: 1.1, sm: 1.4 }, borderRadius: 1.5, bgcolor: "#f0f8f2", display: "flex", gap: 1, alignItems: "flex-start" }}><LocalOfferRoundedIcon sx={{ mt: 0.2, color: "#168437", fontSize: 22, flexShrink: 0 }} /><Box><Typography sx={{ fontSize: { xs: 14, sm: 16 }, lineHeight: 1.35 }}>{record.action}</Typography>{record.emphasis && <Typography sx={{ mt: 0.2, color: "#168437", fontSize: { xs: 15, sm: 17 }, fontWeight: 700 }}>{record.emphasis}</Typography>}{record.period && <Typography sx={{ mt: 0.3, fontSize: { xs: 13, sm: 15 }, lineHeight: 1.35 }}>{record.period}</Typography>}</Box></Paper>; }
+function PromotionDetail({ record }) { const ended = record.promotionStatus === "ended"; const tone = ended ? "#d14343" : "#168437"; return <Paper elevation={0} sx={{ mt: 1.5, p: { xs: 1.1, sm: 1.4 }, borderRadius: 1.5, bgcolor: ended ? "#fff1f0" : "#f0f8f2", display: "flex", gap: 1, alignItems: "flex-start" }}><LocalOfferRoundedIcon sx={{ mt: 0.2, color: tone, fontSize: 22, flexShrink: 0 }} /><Box><Typography sx={{ fontSize: { xs: 14, sm: 16 }, lineHeight: 1.35 }}>{record.action}</Typography>{record.emphasis && <Typography sx={{ mt: 0.2, color: tone, fontSize: { xs: 15, sm: 17 }, fontWeight: 700 }}>{record.emphasis}</Typography>}{record.period && <Typography sx={{ mt: 0.3, fontSize: { xs: 13, sm: 15 }, lineHeight: 1.35 }}>{record.period}</Typography>}</Box></Paper>; }
 function Meta({ icon, text, compact }) { return <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0, color: "#2459d6" }}><Box sx={{ pt: 0.1, display: "flex" }}>{icon}</Box><Typography sx={{ minWidth: 0, color: "text.primary", fontSize: compact ? { xs: 12, sm: 14 } : { xs: 13, sm: 16 }, lineHeight: 1.35, overflowWrap: "anywhere" }}>{text}</Typography></Box>; }

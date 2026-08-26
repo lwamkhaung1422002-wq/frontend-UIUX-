@@ -1,4 +1,4 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:3108").replace(/\/$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 
 export class ApiError extends Error {
   constructor(message, { status, payload } = {}) {
@@ -13,6 +13,7 @@ export async function apiRequest(path, { token, method = "GET", body, signal, re
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     signal,
+    credentials: "include",
     headers: {
       Accept: "application/json",
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),

@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import { Router } from "express";
 import { z } from "zod";
 
+import { clearRefreshCookie, createRefreshToken, hashRefreshToken, readCookie, refreshCookieName, refreshExpiresAt, setRefreshCookie } from "../lib/auth-session.js";
 import { signAccessToken } from "../lib/jwt.js";
 import { prisma } from "../lib/prisma.js";
 import { applyTemplateDefaults } from "../lib/store-capabilities.js";
@@ -21,6 +22,28 @@ const loginSchema = z.object({
   email: z.email().trim().toLowerCase(),
   password: z.string().min(1, "Password is required."),
 });
+
+function issueSession(user: { id: string; email: string }, response: Parameters<typeof setRefreshCookie>[0]) {
+  const refreshToken = createRefreshToken();
+  const accessToken = signAccessToken({ userId: user.id, email: user.email });
+  return prisma.authSession.create({
+    data: { userId: user.id, tokenHash: hashRefreshToken(refreshToken), expiresAt: refreshExpiresAt() },
+  }).then(() => {
+    setRefreshCookie(response, refreshToken);
+    return accessToken;
+  });
+}
+
+function rejectCrossOrigin(request: Parameters<typeof authRateLimit>[0], response: Parameters<typeof setRefreshCookie>[0]): boolean {
+  const origin = request.headers.origin;
+  const expectedOrigins = (process.env.CORS_ORIGIN ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  const local = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin ?? "");
+  if (origin && !local && !expectedOrigins.includes(origin)) {
+    response.status(403).json({ message: "Request origin is not allowed." });
+    return true;
+  }
+  return false;
+}
 
 authRouter.post("/register", authRateLimit, async (request, response, next) => {
   try {
@@ -66,7 +89,7 @@ authRouter.post("/register", authRateLimit, async (request, response, next) => {
         },
         include: { setting: true },
       });
-      await applyTemplateDefaults(transaction, createdShop.id, "GENERAL_STORE");
+      await applyTemplateDefaults(transaction, createdShop.id, "GENERAL_STORE", { includeCategories: false });
 
       return { user: createdUser, shop: createdShop };
     }, {
@@ -77,9 +100,9 @@ authRouter.post("/register", authRateLimit, async (request, response, next) => {
       timeout: 20_000,
     });
 
-    const token = signAccessToken({ userId: user.id, email: user.email });
+    const accessToken = await issueSession(user, response);
 
-    response.status(201).json({ user: { ...user, shops: [shop] }, shop, token });
+    response.status(201).json({ user: { ...user, shops: [shop] }, shop, accessToken });
   } catch (error) {
     next(error);
   }
@@ -105,7 +128,7 @@ authRouter.post("/login", authRateLimit, async (request, response, next) => {
       return;
     }
 
-    const token = signAccessToken({ userId: user.id, email: user.email });
+    const accessToken = await issueSession(user, response);
 
     const shops = await prisma.shop.findMany({
       where: { ownerId: user.id },
@@ -122,8 +145,57 @@ authRouter.post("/login", authRateLimit, async (request, response, next) => {
         updatedAt: user.updatedAt,
         shops,
       },
-      token,
+      accessToken,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRouter.post("/refresh", async (request, response, next) => {
+  try {
+    if (rejectCrossOrigin(request, response)) return;
+    const rawToken = readCookie(request.headers.cookie, refreshCookieName);
+    if (!rawToken) {
+      response.status(401).json({ message: "Refresh session is required." });
+      return;
+    }
+
+    const session = await prisma.authSession.findUnique({ where: { tokenHash: hashRefreshToken(rawToken) }, include: { user: true } });
+    if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+      clearRefreshCookie(response);
+      response.status(401).json({ message: "Refresh session is invalid or expired." });
+      return;
+    }
+
+    const nextRawToken = createRefreshToken();
+    const nextSession = await prisma.$transaction(async (transaction) => {
+      const replacement = await transaction.authSession.create({
+        data: { userId: session.userId, tokenHash: hashRefreshToken(nextRawToken), expiresAt: refreshExpiresAt() },
+      });
+      const revoked = await transaction.authSession.updateMany({
+        where: { id: session.id, revokedAt: null, replacedById: null },
+        data: { revokedAt: new Date(), replacedById: replacement.id },
+      });
+      if (revoked.count !== 1) throw new Error("Refresh session has already been used.");
+      return replacement;
+    });
+    void nextSession;
+    setRefreshCookie(response, nextRawToken);
+    response.status(200).json({ accessToken: signAccessToken({ userId: session.user.id, email: session.user.email }) });
+  } catch (error) {
+    clearRefreshCookie(response);
+    next(error);
+  }
+});
+
+authRouter.post("/logout", async (request, response, next) => {
+  try {
+    if (rejectCrossOrigin(request, response)) return;
+    const rawToken = readCookie(request.headers.cookie, refreshCookieName);
+    if (rawToken) await prisma.authSession.updateMany({ where: { tokenHash: hashRefreshToken(rawToken), revokedAt: null }, data: { revokedAt: new Date() } });
+    clearRefreshCookie(response);
+    response.status(204).end();
   } catch (error) {
     next(error);
   }

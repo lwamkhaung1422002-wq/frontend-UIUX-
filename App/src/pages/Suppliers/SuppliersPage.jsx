@@ -35,9 +35,14 @@ import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
-import { useNavigate } from "react-router";
-import { usePurchasesQuery } from "../../hooks/usePosQueries";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
+import { useLocation, useNavigate } from "react-router";
+import { usePurchasesQuery, useSupplierDeliveriesQuery } from "../../hooks/usePosQueries";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../context/AuthContext";
+import { queryKeys } from "../../lib/queryKeys";
+import { SupplierDetailsCards } from "./SupplierDetailsPage";
 
 const supplierRecords = [
   {
@@ -173,7 +178,7 @@ async function loadSupplierRecords(api) {
     const paid = Number(purchase.paidAmount || 0) >= Number(purchase.total || 0);
     const payment = [...(purchase.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
     const date = supplierDate(paid ? payment?.paidAt || purchase.updatedAt : purchase.expectedAt || purchase.createdAt);
-    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "" };
+    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "", hasPaymentRecord: (purchase.payments || []).length > 0 };
   });
 }
 void loadSupplierRecords;
@@ -192,13 +197,16 @@ export default function SuppliersPage() {
   const [archiveError, setArchiveError] = useState("");
   const [archiving, setArchiving] = useState(false);
   const api = usePosApi();
+  const queryClient = useQueryClient();
+  const { shop } = useAuth();
   const { data: purchasesResult } = usePurchasesQuery({ pageSize: 100 });
-  const apiRecords = useMemo(() => (purchasesResult?.purchases || []).map((purchase) => {
+  const { data: deliveriesResult } = useSupplierDeliveriesQuery({ page: 1, pageSize: 100 });
+  const apiRecords = useMemo(() => { const purchases = (purchasesResult?.purchases || []).map((purchase) => {
     const paid = Number(purchase.paidAmount || 0) >= Number(purchase.total || 0);
     const payment = [...(purchase.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
     const date = supplierDate(paid ? payment?.paidAt || purchase.updatedAt : purchase.expectedAt || purchase.createdAt);
-    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "" };
-  }), [purchasesResult]);
+    return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "", hasPaymentRecord: (purchase.payments || []).length > 0 };
+  }); const purchaseSupplierIds = new Set(purchases.map((record) => record.supplierId)); const deliveries = (deliveriesResult?.records || []).filter((record) => !record.supplierId || !purchaseSupplierIds.has(record.supplierId)).map((record) => { const paid = (record.payments || []).filter((payment) => !payment.reversedAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0); const amount = Number(record.amount || 0); return { id: record.invoiceNumber || record.id, apiId: record.id, supplierId: record.supplierId, name: record.supplierName || record.supplier?.name || "Supplier", amount: Math.max(0, amount - paid), status: paid >= amount ? "Paid" : "Credit", receiveDate: supplierDate(record.receivedAt), dateLabel: paid >= amount ? "Paid" : "Due", date: supplierDate(paid >= amount ? (record.payments || []).at(-1)?.paidAt : record.dueAt || record.receivedAt), method: (record.payments || []).at(-1)?.method || "", deliveryOnly: true, deliveryRecord: record, hasPaymentRecord: paid > 0, sortAt: new Date(record.createdAt || record.receivedAt).getTime() }; }); return [...purchases, ...deliveries].sort((left, right) => (right.sortAt || new Date(right.date || 0).getTime()) - (left.sortAt || new Date(left.date || 0).getTime())); }, [deliveriesResult, purchasesResult]);
 
   useEffect(() => {
     const openFilter = () => setFilterOpen(true);
@@ -231,12 +239,28 @@ export default function SuppliersPage() {
     setArchiving(true);
     setArchiveError("");
     try {
-      await api.suppliers.remove(archiveTarget.supplierId);
+      if (archiveTarget.deliveryOnly) await api.suppliers.removeDeliveryRecord(archiveTarget.apiId); else await api.suppliers.remove(archiveTarget.supplierId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "suppliers"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "purchases"] }),
+      ]);
       setArchiveTarget(null);
     } catch (error) {
-      setArchiveError(error.message || "Unable to archive supplier.");
+      setArchiveError(error.message || "Unable to delete supplier.");
     } finally {
       setArchiving(false);
+    }
+  };
+  const openPayment = async (record) => {
+    try {
+      if (record.deliveryOnly) { navigate(`/suppliers/delivery/${record.apiId}/pay`); return; }
+      const purchase = record.deliveryOnly
+        ? (await api.suppliers.openBalance(record.apiId)).purchase
+        : (purchasesResult?.purchases || []).find((item) => item.id === record.apiId);
+      navigate(`/suppliers/${record.supplierId}/pay`, { state: { purchaseId: purchase?.id || record.apiId, purchase } });
+    } catch (error) {
+      setArchiveError(error.message || "Unable to open supplier payment.");
     }
   };
   const today = () => {
@@ -246,7 +270,7 @@ export default function SuppliersPage() {
   };
 
   if (!isMobile)
-    return <DesktopSuppliers key={apiRecords.map((record) => record.id).join("|")} initialRecords={apiRecords} />;
+    return <DesktopSuppliers key={apiRecords.map((record) => `${record.id}:${record.status}:${record.amount}`).join("|")} initialRecords={apiRecords} />;
 
   return (
     <Box
@@ -362,7 +386,7 @@ export default function SuppliersPage() {
             <SupplierCard
               key={record.id}
               record={record}
-              onClick={() => navigate(`/suppliers/${record.apiId || record.id}`)}
+              onClick={() => navigate(record.deliveryOnly ? `/supplier-delivery/${record.apiId}` : `/suppliers/${record.supplierId}`, { state: { purchaseId: record.deliveryOnly ? undefined : record.apiId } })}
               onMenu={(event) => {
                 event.stopPropagation();
                 setMenuAnchor(event.currentTarget);
@@ -521,10 +545,10 @@ export default function SuppliersPage() {
           },
         }}
       >
-        {menuRecord?.status !== "Paid" && (
+        {menuRecord?.status === "Credit" && (
           <MenuItem
             onClick={() => {
-              navigate(`/suppliers/${menuRecord?.apiId || menuRecord?.id}/pay`);
+              openPayment(menuRecord);
               setMenuAnchor(null);
               setMenuRecord(null);
             }}
@@ -536,9 +560,19 @@ export default function SuppliersPage() {
             Pay
           </MenuItem>
         )}
-        <MenuItem
+        {menuRecord?.status === "Paid" ? <MenuItem
           onClick={() => {
-            navigate(`/suppliers/add?edit=${menuRecord?.apiId || menuRecord?.id}`);
+            navigate(`/suppliers/${menuRecord?.supplierId}`, { state: { purchaseId: menuRecord?.apiId } });
+            setMenuAnchor(null);
+            setMenuRecord(null);
+          }}
+          sx={menuItemSx}
+        >
+          <VisibilityOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />
+          Details
+        </MenuItem> : menuRecord?.status !== "Cancel" && <MenuItem
+          onClick={() => {
+            navigate(`/suppliers/add?edit=${menuRecord?.deliveryOnly ? menuRecord.apiId : menuRecord?.supplierId}`);
             setMenuAnchor(null);
             setMenuRecord(null);
           }}
@@ -546,8 +580,8 @@ export default function SuppliersPage() {
         >
           <EditOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />
           Edit
-        </MenuItem>
-        <MenuItem
+        </MenuItem>}
+        {menuRecord?.status !== "Cancel" && <MenuItem
           onClick={() => { setArchiveTarget(menuRecord); setMenuAnchor(null); setMenuRecord(null); }}
           sx={{ ...menuItemSx, color: "error.main" }}
         >
@@ -555,12 +589,12 @@ export default function SuppliersPage() {
             sx={{ fontSize: 15, color: "error.main" }}
           />
           Delete
-        </MenuItem>
+        </MenuItem>}
       </Menu>
       <Dialog open={Boolean(archiveTarget)} onClose={archiving ? undefined : () => { setArchiveTarget(null); setArchiveError(""); }} fullWidth slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } } }}>
-        <DialogTitle>Archive Supplier</DialogTitle>
-        <DialogContent><Typography color="text.secondary">Archive <strong>{archiveTarget?.name}</strong>? Purchase history will be retained.</Typography>{archiveError && <Typography color="error" sx={{ mt: 1 }}>{archiveError}</Typography>}</DialogContent>
-        <DialogActions><Button onClick={() => { setArchiveTarget(null); setArchiveError(""); }} disabled={archiving}>Cancel</Button><Button color="error" variant="contained" onClick={archiveSupplier} disabled={archiving}>{archiving ? "Archiving…" : "Archive"}</Button></DialogActions>
+        <DialogTitle>Delete Supplier</DialogTitle>
+        <DialogContent><Typography color="text.secondary">Delete <strong>{archiveTarget?.name}</strong>? This is only available when there are no payment records.</Typography>{archiveError && <Typography color="error" sx={{ mt: 1 }}>{archiveError}</Typography>}</DialogContent>
+        <DialogActions><Button onClick={() => { setArchiveTarget(null); setArchiveError(""); }} disabled={archiving}>Cancel</Button><Button color="error" variant="contained" onClick={archiveSupplier} disabled={archiving}>{archiving ? "Deleting…" : "Delete"}</Button></DialogActions>
       </Dialog>
     </Box>
   );
@@ -568,7 +602,9 @@ export default function SuppliersPage() {
 
 function DesktopSuppliers({ initialRecords }) {
   const api = usePosApi();
-  const [records] = useState(initialRecords);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [records, setRecords] = useState(initialRecords);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const [dialog, setDialog] = useState(null);
@@ -576,6 +612,13 @@ function DesktopSuppliers({ initialRecords }) {
   const [dateRange, setDateRange] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  useEffect(() => {
+    const recordId = location.state?.openPaymentRecordId;
+    if (!recordId) return;
+    const record = records.find((item) => item.apiId === recordId && item.deliveryOnly);
+    if (record) setDialog({ mode: "pay", record });
+    window.history.replaceState({}, "", "/suppliers");
+  }, [location.state?.openPaymentRecordId, records]);
   const visibleRecords = records.filter((record) => {
     const query = search.trim().toLowerCase();
     return (
@@ -592,9 +635,18 @@ function DesktopSuppliers({ initialRecords }) {
   const open = (mode, record = null) => setDialog({ mode, record });
   const close = () => setDialog(null);
   const handleDelete = async (record) => {
-    if (!record.supplierId) return;
-    await api.suppliers.remove(record.supplierId);
+    if (record.deliveryOnly) {
+      await api.suppliers.removeDeliveryRecord(record.apiId);
+      setRecords((current) => current.filter((item) => item.apiId !== record.apiId));
+    } else {
+      if (!record.supplierId) return;
+      await api.suppliers.remove(record.supplierId);
+      setRecords((current) => current.filter((item) => item.supplierId !== record.supplierId));
+    }
     close();
+  };
+  const openPayment = async (record) => {
+    open("pay", record);
   };
   const chooseRange = (range) => {
     setDateRange(range);
@@ -649,7 +701,7 @@ function DesktopSuppliers({ initialRecords }) {
           <Button
             variant="contained"
             startIcon={<AddRoundedIcon />}
-            onClick={() => open("add")}
+            onClick={() => navigate("/suppliers/add")}
             sx={desktopSupplierAddSx}
           >
             Add Supplier
@@ -805,37 +857,35 @@ function DesktopSuppliers({ initialRecords }) {
               justifyContent="flex-end"
               onClick={(event) => event.stopPropagation()}
             >
-              {record.status === "Paid" ? (
-                <IconButton
-                  aria-label={`Paid ${record.name}`}
-                  disabled
-                  sx={desktopPaidIconSx}
-                >
-                  <CheckCircleOutlineRoundedIcon fontSize="small" />
-                </IconButton>
-              ) : (
-                <IconButton
+              {record.status === "Paid" ? <><IconButton
+                aria-label={`Details for ${record.name}`}
+                onClick={() => open("details", record)}
+                sx={desktopActionIconSx}
+              ><VisibilityOutlinedIcon fontSize="small" /></IconButton><IconButton
+                aria-label={`Delete ${record.name}`}
+                onClick={() => open("delete", record)}
+                sx={{ ...desktopActionIconSx, color: "error.main" }}
+              ><DeleteOutlineRoundedIcon fontSize="small" /></IconButton></> : (
+                <><IconButton
                   aria-label={`Pay ${record.name}`}
-                  onClick={() => open("pay", record)}
+                  onClick={() => openPayment(record)}
                   sx={desktopPayIconSx}
                 >
                   <PaymentsOutlinedIcon fontSize="small" />
-                </IconButton>
-              )}
-              <IconButton
+                </IconButton><IconButton
                 aria-label={`Edit ${record.name}`}
-                onClick={() => open("edit", record)}
+                onClick={() => navigate(`/suppliers/add?edit=${record.deliveryOnly ? record.apiId : record.supplierId}`)}
                 sx={desktopActionIconSx}
               >
                 <EditOutlinedIcon fontSize="small" />
-              </IconButton>
-              <IconButton
+              </IconButton><IconButton
                 aria-label={`Delete ${record.name}`}
                 onClick={() => open("delete", record)}
                 sx={{ ...desktopActionIconSx, color: "error.main" }}
               >
                 <DeleteOutlineRoundedIcon fontSize="small" />
-              </IconButton>
+              </IconButton></>
+              )}
             </Stack>
           </Box>
         ))}
@@ -932,12 +982,13 @@ function DesktopSuppliers({ initialRecords }) {
         dialog={dialog}
         onClose={close}
         onDelete={handleDelete}
+        onOpenPayment={(record) => open("pay", record)}
       />
     </Box>
   );
 }
 
-function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
+function DesktopSupplierDialog({ dialog, onClose, onDelete, onOpenPayment }) {
   if (!dialog) return null;
   const { mode, record } = dialog;
   const title =
@@ -965,37 +1016,14 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
       <DialogContent dividers sx={{ p: mode === "history" ? 2 : 2.5 }}>
         {mode === "delete" ? (
           <Typography color="text.secondary">
-            Archive <strong>{record.name}</strong>? Purchase history will be retained.
+            Delete <strong>{record.name}</strong>? This is only available when there are no payment records.
           </Typography>
         ) : mode === "history" ? (
           <DesktopSupplierHistory />
         ) : mode === "details" ? (
-          <Stack spacing={0}>
-            <DesktopDetail label="Supplier Name" value={record.name} />
-            <DesktopDetail label="Phone" value="09 123 456 789" />
-            <DesktopDetail label="Invoice Number" value={record.id} />
-            <DesktopDetail label="Delivery Name" value="Ko Aung" />
-            <DesktopDetail label="Delivery Phone" value="09 987 654 321" />
-            <DesktopDetail label="Receiver Name" value="Store Manager" />
-            <DesktopDetail
-              label="Receive Date"
-              value={record.receiveDate.split("-").reverse().join("/")}
-            />
-            <DesktopDetail label="Total Amount" value={money(record.amount)} />
-            <DesktopDetail
-              label={
-                record.dateLabel ? `${record.dateLabel} Date` : "Payment Status"
-              }
-              value={
-                record.date
-                  ? record.date.split("-").reverse().join("/")
-                : "Cancelled"
-              }
-            />
-            {record.status === "Paid" && record.settlement && <><Divider sx={{ my: 1.25 }} /><Typography sx={{ pt: 0.25, fontWeight: 800 }}>Payment record</Typography><DesktopDetail label="Paid Date" value={record.settlement.paidDate.split("-").reverse().join("/")} /><DesktopDetail label="Payment Method" value={record.method} />{record.method === "Cash" ? <><DesktopDetail label="Receiver Name" value={record.settlement.receiver} /><DesktopDetail label="Receiver Signature" value={record.settlement.signature} /></> : <><DesktopDetail label="User Name" value={record.settlement.username} /><DesktopDetail label="Account Number" value={record.settlement.account} /><DesktopDetail label="Transaction ID" value={record.settlement.transactionId} /></>}</>}
-          </Stack>
+          <DesktopSupplierDetailsContent record={record} onOpenPayment={onOpenPayment} />
         ) : mode === "pay" ? (
-          <DesktopPaymentFields record={record} />
+          <DesktopPaymentFields record={record} onSaved={onClose} />
         ) : (
           <DesktopSupplierFields record={record} />
         )}
@@ -1011,11 +1039,11 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
             onClick={() => onDelete(record)}
             sx={{ textTransform: "none" }}
           >
-            Archive
+            Delete
           </Button>
         ) : (
           !isHistory &&
-          mode !== "details" && (
+          mode !== "details" && mode !== "pay" && (
             <Button
               variant="contained"
               onClick={onClose}
@@ -1032,6 +1060,37 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete }) {
       </DialogActions>
     </Dialog>
   );
+}
+
+function DesktopSupplierDetailsContent({ record, onOpenPayment }) {
+  const api = usePosApi();
+  const [details, setDetails] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    if (record.deliveryRecord && !record.supplierId) {
+      Promise.resolve().then(() => {
+        if (!active) return;
+        setDetails({ supplier: { name: record.deliveryRecord.supplierName, phone: record.deliveryRecord.supplierPhone }, delivery: record.deliveryRecord, payments: (record.deliveryRecord.payments || []).filter((payment) => !payment.reversedAt) });
+      });
+      return () => { active = false; };
+    }
+    Promise.all([api.suppliers.list({ page: 1, pageSize: 100 }), api.purchases.list({ page: 1, pageSize: 100 })]).then(([supplierResult, purchaseResult]) => {
+      if (!active) return;
+      const supplier = (supplierResult.suppliers || []).find((item) => item.id === record.supplierId);
+      if (!supplier) throw new Error("Supplier not found.");
+      const purchases = (purchaseResult.purchases || []).filter((item) => item.supplierId === record.supplierId && item.status !== "cancelled");
+      const purchase = purchases.find((item) => item.id === record.apiId) || [...purchases].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))[0] || null;
+      const delivery = record.deliveryRecord || (supplier.deliveryRecords || []).find((item) => item.invoiceNumber === record.id) || supplier.deliveryRecords?.[0] || null;
+      setDetails({ supplier, delivery, payments: [...(purchase?.payments || [])].filter((payment) => !payment.reversedAt).sort((a, b) => new Date(a.paidAt) - new Date(b.paidAt)) });
+    }).catch((nextError) => { if (active) setError(nextError.message || "Supplier details could not be loaded."); });
+    return () => { active = false; };
+  }, [api, record.apiId, record.deliveryRecord, record.id, record.supplierId]);
+  if (error) return <Typography color="error.main">{error}</Typography>;
+  if (!details || !details.delivery) return <Typography color="text.secondary">Loading supplier details…</Typography>;
+  const { supplier, delivery, payments } = details;
+  const paidAmount = payments.filter((payment) => !payment.reversedAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  return <Box sx={{ maxWidth: 520, mx: "auto" }}><SupplierDetailsCards supplier={supplier} delivery={delivery} payments={payments} />{paidAmount < Number(delivery.amount || 0) && record.deliveryOnly && <Button fullWidth variant="contained" startIcon={<PaymentsOutlinedIcon />} onClick={() => onOpenPayment(record)} sx={{ mt: 2.5, minHeight: 56, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 600 }}>Add Payment</Button>}</Box>;
 }
 
 function DesktopSupplierFields({ record }) {
@@ -1107,10 +1166,35 @@ function DesktopSupplierFields({ record }) {
     </Box>
   );
 }
-function DesktopPaymentFields({ record }) {
+function DesktopPaymentFields({ record, onSaved }) {
+  const api = usePosApi();
+  const queryClient = useQueryClient();
+  const { shop } = useAuth();
   const [method, setMethod] = useState("cash");
+  const [amount, setAmount] = useState(String(record.amount || ""));
+  const [cashName, setCashName] = useState("");
+  const [cashPhone, setCashPhone] = useState("");
+  const [mobileName, setMobileName] = useState("");
+  const [mobileNumber, setMobileNumber] = useState("");
+  const [transactionId, setTransactionId] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [paymentMethods, setPaymentMethods] = useState([{ id: "cash", name: "Cash" }]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [signature, setSignature] = useState(false);
   const signatureRef = useRef(null);
+  useEffect(() => {
+    let active = true;
+    api.shop.getSettings().then(({ settings }) => {
+      if (!active) return;
+      const configured = (settings.paymentMethods || []).filter((item) => item.active !== false);
+      setPaymentMethods([
+        { id: "cash", name: "Cash" },
+        ...configured.filter((item) => item.id !== "cash" && item.name?.trim().toLowerCase() !== "cash"),
+      ]);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [api]);
   const fieldSx = {
     "& .MuiOutlinedInput-root": {
       minHeight: 50,
@@ -1144,6 +1228,29 @@ function DesktopPaymentFields({ record }) {
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     setSignature(false);
   };
+  const save = async () => {
+    const numericAmount = Number(amount) || 0;
+    const isCash = method === "cash";
+    const dueRequired = numericAmount > 0 && numericAmount < Number(record.amount || 0);
+    if (numericAmount <= 0 || numericAmount > Number(record.amount || 0)) { setError("Enter a valid payment amount."); return; }
+    if ((!isCash && !transactionId.trim()) || (isCash ? !cashName.trim() || !cashPhone.trim() || !signature : !mobileName.trim() || !mobileNumber.trim()) || (dueRequired && !dueDate)) { setError(!isCash && !transactionId.trim() ? "Transaction ID is required for non-cash payments." : "Please complete the required payment details."); return; }
+    setSaving(true); setError("");
+    try {
+      const configuredMethod = paymentMethods.find((item) => item.id === method);
+      const paymentBody = { amount: numericAmount, method: configuredMethod?.name || "Cash", payerName: isCash ? cashName.trim() : mobileName.trim(), payerPhone: isCash ? cashPhone.trim() : mobileNumber.trim(), mobileAccountName: isCash ? undefined : mobileName.trim(), reference: isCash ? undefined : transactionId.trim(), signatureDataUrl: isCash ? signatureRef.current?.toDataURL() : undefined, notes: dueDate ? `Due date: ${dueDate}` : undefined };
+      if (record.deliveryOnly) await api.suppliers.payDeliveryRecord(record.apiId, paymentBody);
+      else await api.purchases.pay(record.apiId, paymentBody);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "purchases"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "payments"] }),
+      ]);
+      onSaved();
+    } catch (nextError) { setError(nextError.message || "Unable to record payment."); } finally { setSaving(false); }
+  };
+  const numericAmount = Number(amount) || 0;
+  const dueRequired = numericAmount > 0 && numericAmount < Number(record.amount || 0);
+  const isCash = method === "cash";
   return (
     <Stack spacing={1.5}>
       <Paper
@@ -1172,18 +1279,19 @@ function DesktopPaymentFields({ record }) {
           fullWidth
           sx={fieldSx}
         >
-          <MenuItem value="cash">Cash</MenuItem>
-          <MenuItem value="mobile">Mobile Payment</MenuItem>
+          {paymentMethods.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
         </TextField>
         <TextField
           label="Amount *"
           type="number"
-          defaultValue={record.amount}
+          value={amount}
+          onChange={(event) => setAmount(event.target.value)}
           fullWidth
           sx={fieldSx}
         />
       </Box>
-      {method === "cash" ? (
+      {dueRequired && <TextField label="Due Date *" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} fullWidth slotProps={{ inputLabel: { shrink: true } }} sx={fieldSx} />}
+      {isCash ? (
         <Stack spacing={1.5}>
           <Box
             sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}
@@ -1191,12 +1299,16 @@ function DesktopPaymentFields({ record }) {
             <TextField
               label="Receiver Name *"
               placeholder="Enter receiver name"
+              value={cashName}
+              onChange={(event) => setCashName(event.target.value)}
               fullWidth
               sx={fieldSx}
             />
             <TextField
               label="Receiver Phone *"
               placeholder="Enter receiver phone"
+              value={cashPhone}
+              onChange={(event) => setCashPhone(event.target.value)}
               fullWidth
               sx={fieldSx}
             />
@@ -1248,28 +1360,22 @@ function DesktopPaymentFields({ record }) {
         </Stack>
       ) : (
         <Stack spacing={1.5}>
-          <TextField
-            select
-            label="Mobile Payment *"
-            defaultValue="KBZPay"
-            fullWidth
-            sx={fieldSx}
-          >
-            <MenuItem value="KBZPay">KBZPay</MenuItem>
-            <MenuItem value="Wave">Wave</MenuItem>
-          </TextField>
           <Box
             sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}
           >
             <TextField
               label="Receiver Mobile Payment User Name *"
               placeholder="Enter user name"
+              value={mobileName}
+              onChange={(event) => setMobileName(event.target.value)}
               fullWidth
               sx={fieldSx}
             />
             <TextField
               label="Receiver Mobile Payment Number *"
               placeholder="Enter mobile number"
+              value={mobileNumber}
+              onChange={(event) => setMobileNumber(event.target.value)}
               fullWidth
               sx={fieldSx}
             />
@@ -1277,11 +1383,15 @@ function DesktopPaymentFields({ record }) {
           <TextField
             label="Transaction ID *"
             placeholder="Enter transaction ID"
+            value={transactionId}
+            onChange={(event) => setTransactionId(event.target.value)}
             fullWidth
             sx={fieldSx}
           />
         </Stack>
       )}
+      {error && <Typography color="error" sx={{ fontSize: 14 }}>{error}</Typography>}
+      <Button variant="contained" onClick={save} disabled={saving} sx={{ minHeight: 50, textTransform: "none", fontWeight: 700 }}>{saving ? "Saving…" : "Add Payment"}</Button>
     </Stack>
   );
 }
@@ -1452,18 +1562,6 @@ const desktopPayIconSx = {
   borderColor: "primary.light",
   borderRadius: 1.1,
   color: "primary.main",
-};
-const desktopPaidIconSx = {
-  width: 34,
-  height: 34,
-  border: "1px solid",
-  borderColor: "success.light",
-  borderRadius: 1.1,
-  "&.Mui-disabled": {
-    color: "success.main",
-    borderColor: "success.light",
-    opacity: 1,
-  },
 };
 const desktopStatusSx = (status) => ({
   justifySelf: "start",

@@ -76,6 +76,7 @@ const createOrderSchema = z.object({
   deliveryFee: moneySchema.optional(),
   source: z.string().trim().optional(),
   note: z.string().trim().optional(),
+  paymentTracking: z.boolean().default(false),
   items: z.array(orderItemSchema).min(1, "At least one order item is required."),
 });
 
@@ -614,6 +615,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           total,
           fulfillmentStatus: input.fulfillmentStatus,
           paymentStatus: "unpaid",
+          paymentTracking: input.paymentTracking,
           ...(customerId !== undefined ? { customerId } : {}),
           orderNumber: input.orderNumber || generatedOrderNumber,
           ...(input.source !== undefined ? { source: input.source } : {}),
@@ -1018,30 +1020,13 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
       if (existingOrder.fulfillmentStatus === "cancelled") {
         throw badRequest("Order is already cancelled.");
       }
-      const paidAmount = existingOrder.payments.reduce((sum, payment) => sum + payment.amount, 0);
-      if (existingOrder.paymentStatus === "paid" && paidAmount > 0) {
-        const refund = await tx.payment.create({
-          data: {
-            shopId,
-            orderId,
-            type: "refund",
-            scope: "refund",
-            method: existingOrder.payments.find((payment) => payment.amount > 0)?.method ?? "Cash",
-            amount: -Math.abs(paidAmount),
-            reason: input.reason ?? "Order cancelled",
-            note: input.reason ?? "Order cancelled",
-          },
-        });
-        await writeAuditLog(tx, {
-          shopId,
-          actorId: authUser.id,
-          action: "payment.refund",
-          entity: "Payment",
-          entityId: refund.id,
-          metadata: { orderId, amount: paidAmount, reason: input.reason ?? null },
-        });
-      } else if (paidAmount > 0) {
-        throw badRequest("Refund or void received payments before cancelling a partial order.");
+      const activePaymentRecords = existingOrder.payments.filter((payment) =>
+        payment.amount > 0 && !existingOrder.payments.some((reversal) =>
+          reversal.amount < 0 && reversal.originalPaymentId === payment.id,
+        ),
+      );
+      if (activePaymentRecords.length > 1) {
+        throw badRequest("Cancel later payment records before cancelling this order.");
       }
 
       for (const item of existingOrder.items) {
@@ -1115,7 +1100,6 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
           fulfillmentStatus: "cancelled",
           cancelledAt: new Date(),
           note: input.reason ?? existingOrder.note,
-          ...(existingOrder.paymentStatus === "paid" ? { paymentStatus: "refunded" } : {}),
         },
         include: {
           customer: true,
@@ -1297,8 +1281,8 @@ ordersRouter.delete("/:shopId/orders/:orderId", async (request, response, next) 
     if (existingOrder.fulfillmentStatus !== "cancelled") {
       throw badRequest("Only cancelled orders can be deleted.");
     }
-    if (existingOrder.paymentStatus !== "unpaid" || existingOrder.payments.length > 0) {
-      throw badRequest("Orders with payment records must stay in the audit history.");
+    if (!["unpaid", "partial"].includes(existingOrder.paymentStatus) || existingOrder.payments.length > 0) {
+      throw badRequest("Only unpaid or partial orders without payment records can be deleted.");
     }
 
     await prisma.$transaction(async (tx) => {

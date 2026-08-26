@@ -11,13 +11,27 @@ const queryString = (query = {}) => {
 
 const shopPath = (shopId, path) => `/shops/${shopId}${path}`;
 
-export function createPosApi({ token, shopId, onUnauthorized, isGuest = false }) {
+export function createPosApi({ token, shopId, onUnauthorized, refreshAccessToken, isGuest = false }) {
   const request = async (path, options) => {
     if (isGuest) throw new Error("Create an account to sync business data.");
     try {
       return await apiRequest(path, { token, ...options });
     } catch (error) {
-      if (error.status === 401) onUnauthorized?.();
+      if (error.status !== 401) throw error;
+
+      // An access token may expire while a user is working. Refresh once and
+      // retry the original request before ending the session.
+      if (refreshAccessToken) {
+        try {
+          const refreshedToken = await refreshAccessToken();
+          return await apiRequest(path, { ...options, token: refreshedToken });
+        } catch (retryError) {
+          if (retryError?.status === 401) onUnauthorized?.();
+          throw retryError;
+        }
+      }
+
+      onUnauthorized?.();
       throw error;
     }
   };
@@ -62,9 +76,17 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
     },
     suppliers: {
       list: (query) => shopRequest(`/suppliers${queryString(query)}`),
+      deliveryRecords: (query) => shopRequest(`/supplier-delivery-records${queryString(query)}`),
       create: (body) => shopRequest("/suppliers", { method: "POST", body }),
+      deliveryRecord: (id) => shopRequest(`/supplier-delivery-records/${id}`),
+      updateDeliveryRecord: (id, body) => shopRequest(`/supplier-delivery-records/${id}`, { method: "PATCH", body }),
+      removeDeliveryRecord: (id) => shopRequest(`/supplier-delivery-records/${id}`, { method: "DELETE" }),
+      cancelDeliveryRecord: (id, body) => shopRequest(`/supplier-delivery-records/${id}/cancel`, { method: "POST", body }),
+      payDeliveryRecord: (id, body) => shopRequest(`/supplier-delivery-records/${id}/payments`, { method: "POST", body }),
+      reverseDeliveryPayment: (recordId, paymentId, body) => shopRequest(`/supplier-delivery-records/${recordId}/payments/${paymentId}/reverse`, { method: "POST", body }),
       update: (id, body) => shopRequest(`/suppliers/${id}`, { method: "PATCH", body }),
       remove: (id) => shopRequest(`/suppliers/${id}`, { method: "DELETE" }),
+      openBalance: (deliveryRecordId) => shopRequest(`/supplier-delivery-records/${deliveryRecordId}/payable-purchase`, { method: "POST" }),
     },
     purchases: {
       list: (query) => shopRequest(`/purchases${queryString(query)}`),
@@ -73,6 +95,7 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
       reversePayment: (purchaseId, paymentId, body) => shopRequest(`/purchases/${purchaseId}/payments/${paymentId}/reverse`, { method: "POST", body }),
     },
     payments: {
+      history: () => shopRequest("/payment-history"),
       list: (query) => shopRequest(`/payments${queryString(query)}`),
       addToOrder: (orderId, body) => shopRequest(`/orders/${orderId}/payments`, { method: "POST", body }),
       refundOrder: (orderId, body) => shopRequest(`/orders/${orderId}/refunds`, { method: "POST", body }),
@@ -97,6 +120,7 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
     },
     pricing: {
       overview: (query) => shopRequest(`/pricing/overview${queryString(query)}`),
+      resolve: (body) => shopRequest("/pricing/resolve", { method: "POST", body }),
       prices: (query) => shopRequest(`/prices${queryString(query)}`),
       createPrice: (body) => shopRequest("/prices", { method: "POST", body }),
       bulkPrices: (body) => shopRequest("/prices/bulk", { method: "POST", body }),
@@ -123,5 +147,9 @@ export function createPosApi({ token, shopId, onUnauthorized, isGuest = false })
       reservationLabel: (id) => shopRequest(`/barcode-reservations/${id}/label.svg`, { responseType: "text" }),
     },
     audit: (query) => shopRequest(`/audit-logs${queryString(query)}`),
+    notifications: {
+      list: () => shopRequest("/notifications"),
+      markRead: (id) => shopRequest(`/notifications/${id}/read`, { method: "PATCH" }),
+    },
   };
 }

@@ -36,6 +36,9 @@ import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import { usePosApi } from "../../hooks/useApiResource";
 import { useOrderCancelMutation, useOrdersQuery } from "../../hooks/usePosQueries";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../context/AuthContext";
+import { queryKeys } from "../../lib/queryKeys";
 
 const initialFilters = {
   range: "all",
@@ -94,6 +97,8 @@ export default function SalePage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
+  const queryClient = useQueryClient();
+  const { shop } = useAuth();
   const { data: orderResponse } = useOrdersQuery({ pageSize: 100 });
   const cancelOrderMutation = useOrderCancelMutation();
   const [search, setSearch] = useState(() => window.sessionStorage.getItem(ordersSearchStorageKey) || "");
@@ -102,6 +107,10 @@ export default function SalePage() {
   const [draftFilters, setDraftFilters] = useState(initialFilters);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuOrder, setMenuOrder] = useState(null);
+  const openOrder = (id) => {
+    queryClient.prefetchQuery({ queryKey: queryKeys.order(shop?.id, id), queryFn: () => api.orders.get(id), staleTime: 30_000 });
+    navigate(`/sale/${id}`);
+  };
 
   useEffect(() => {
     const openFilters = () => {
@@ -117,7 +126,7 @@ export default function SalePage() {
     else window.sessionStorage.removeItem(ordersSearchStorageKey);
   }, [search]);
 
-  const orders = useMemo(() => (orderResponse?.orders || []).filter((order) => order.fulfillmentStatus !== "cancelled").map((order) => {
+  const orders = useMemo(() => (orderResponse?.orders || []).map((order) => {
         const createdAt = new Date(order.createdAt);
         const paymentStatus = String(order.paymentStatus || "unpaid").replace(/^./, (letter) => letter.toUpperCase());
         const payment = [...(order.payments || [])]
@@ -132,10 +141,12 @@ export default function SalePage() {
           date: createdAt.toISOString().slice(0, 10),
           status: order.fulfillmentStatus === "cancelled" ? "Cancel" : "Done",
           paymentStatus,
-          paymentMethod: payment?.method === "KBZ Pay" ? "KPay" : payment?.method || (paymentStatus === "Unpaid" ? "Unpaid" : "Cash"),
+          paymentMethod: payment?.method || (paymentStatus === "Unpaid" ? "Unpaid" : "Cash"),
           subtotal: Number(order.subtotal || order.total || 0),
           discount: Number(order.discount || 0),
           items: order.items || [],
+          hasPaymentRecord: (order.payments || []).length > 0,
+          activePaymentRecordCount: (order.payments || []).filter((payment) => Number(payment.amount || 0) > 0 && !(order.payments || []).some((reversal) => Number(reversal.amount || 0) < 0 && reversal.originalPaymentId === payment.id)).length,
         };
       }), [orderResponse]);
 
@@ -190,10 +201,12 @@ export default function SalePage() {
   };
 
   const deleteOrder = async (id) => {
-    if (!window.confirm("Cancel this order? Paid orders will be refunded and stock will be restored.")) return;
+    if (cancelOrderMutation.isPending) return;
     try {
       const { order } = await api.orders.get(id);
+      if (!window.confirm("Cancel this order? The order record will be kept.")) return;
       if (order.fulfillmentStatus !== "cancelled") await cancelOrderMutation.mutateAsync({ id, reason: "Order cancelled" });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.orders(shop?.id) });
     } catch (error) {
       window.alert(error.message || "This order cannot be deleted.");
       throw error;
@@ -243,7 +256,7 @@ export default function SalePage() {
         {filteredOrders.map((order) => (
           <Card
             key={order.id}
-            onClick={() => navigate(`/sale/${order.id}`)}
+            onClick={() => openOrder(order.id)}
             sx={{ borderRadius: 2.5, boxShadow: "0 3px 9px rgba(15, 23, 42, 0.16)" }}
           >
             <CardContent sx={{ position: "relative", px: 2, py: 1.5, "&:last-child": { pb: 1.5 } }}>
@@ -258,30 +271,30 @@ export default function SalePage() {
                 </Box>
                 <Stack direction="row" alignItems="center" spacing={1} sx={{ pr: 4 }}>
                   <Chip
-                    label="Done"
+                    label={order.status}
                     size="small"
                     sx={{
                       height: 25,
-                      bgcolor: "#e8f6ec",
-                      color: "#38924e",
+                      bgcolor: order.status === "Cancel" ? "#fff1f0" : "#e8f6ec",
+                      color: order.status === "Cancel" ? "#d14343" : "#38924e",
                       fontSize: 13,
                       fontWeight: 600,
                       "& .MuiChip-label": { px: 1.1 },
                     }}
                   />
                   <Chip
-                    label={order.paymentMethod}
+                    label={order.paymentStatus === "Paid" ? order.paymentMethod : order.paymentStatus}
                     size="small"
                     icon={<CreditCardRoundedIcon />}
                     variant="outlined"
                     sx={{
                       height: 25,
-                      borderColor: "#38924e",
-                      bgcolor: "#e8f6ec",
-                      color: "#38924e",
+                      borderColor: order.paymentStatus === "Paid" ? "#38924e" : order.paymentStatus === "Partial" ? "#e47616" : "#d14343",
+                      bgcolor: order.paymentStatus === "Paid" ? "#e8f6ec" : order.paymentStatus === "Partial" ? "#fff5e6" : "#fff1f0",
+                      color: order.paymentStatus === "Paid" ? "#38924e" : order.paymentStatus === "Partial" ? "#e47616" : "#d14343",
                       fontSize: 13,
                       fontWeight: 500,
-                      "& .MuiChip-icon": { color: "#38924e", fontSize: 16 },
+                      "& .MuiChip-icon": { color: order.paymentStatus === "Paid" ? "#38924e" : order.paymentStatus === "Partial" ? "#e47616" : "#d14343", fontSize: 16 },
                       "& .MuiChip-label": { px: 1 },
                     }}
                   />
@@ -314,11 +327,11 @@ export default function SalePage() {
       </Fab>
 
       <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
-        <MenuItem onClick={() => { navigate(`/sale/${menuOrder?.id}`); setMenuAnchor(null); }}>
+        <MenuItem onClick={() => { openOrder(menuOrder?.id); setMenuAnchor(null); }}>
           <VisibilityRoundedIcon sx={{ mr: 1.5 }} />View Details
         </MenuItem>
-        <MenuItem onClick={removeOrder} sx={{ color: "error.main" }}>
-          <DeleteOutlineRoundedIcon sx={{ mr: 1.5 }} />Delete
+        <MenuItem onClick={removeOrder} disabled={cancelOrderMutation.isPending || menuOrder?.status === "Cancel" || Number(menuOrder?.activePaymentRecordCount || 0) > 1} sx={{ color: "error.main" }}>
+          <DeleteOutlineRoundedIcon sx={{ mr: 1.5 }} />{cancelOrderMutation.isPending ? "Deleting…" : "Delete"}
         </MenuItem>
       </Menu>
 
@@ -427,7 +440,7 @@ function DesktopOrdersPage({ orders, search, setSearch, totalAmount, filters, se
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mt: 2.25, mb: 1.75, px: 1, py: 1.25, borderBottom: "1px solid", borderColor: "divider" }}><Typography sx={{ fontSize: 16, fontWeight: 700 }}>Qty {orders.length} orders</Typography><Typography sx={{ fontSize: 16, fontWeight: 800 }}>Total Amount&nbsp;&nbsp;{formatKyat(totalAmount)}</Typography></Box>
       <Box sx={desktopTableHeaderSx}><TableHeader>NO.</TableHeader><TableHeader>ORDER</TableHeader><TableHeader>DATE & TIME</TableHeader><TableHeader>STATUS</TableHeader><TableHeader>PAYMENT</TableHeader><TableHeader align="right" sx={desktopAmountSx}>AMOUNT</TableHeader><TableHeader align="right">ACTIONS</TableHeader></Box>
       <Divider />
-      <Box>{orders.map((order, index) => <Box key={order.id} sx={desktopTableRowSx}><Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600 }}>{index + 1}</Typography><Typography noWrap sx={{ fontSize: 14, fontWeight: 700 }}>{order.displayId || order.id}</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 1.25, whiteSpace: "nowrap" }}><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><CalendarMonthRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.date.split("-").reverse().join("/")}</Typography></Stack><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><AccessTimeRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.time}</Typography></Stack></Box><Chip label={order.status} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...orderStatusTone(order.status) }} /><Chip label={order.paymentMethod} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...paymentTone(order.paymentStatus) }} /><Typography noWrap sx={{ ...desktopAmountSx, fontSize: 14, fontWeight: 700, textAlign: "right", justifySelf: "end", whiteSpace: "nowrap" }}>{formatKyat(order.amount)}</Typography><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}><IconButton aria-label={`View ${order.displayId || order.id} details`} onClick={() => setDetailOrder(order)} color="primary" size="small" sx={desktopOrderActionSx}><VisibilityRoundedIcon fontSize="small" /></IconButton><IconButton aria-label={`Delete ${order.displayId || order.id}`} onClick={() => onDelete(order.id)} color="error" size="small" sx={desktopOrderActionSx}><DeleteOutlineRoundedIcon fontSize="small" /></IconButton></Box></Box>)}</Box>
+      <Box>{orders.map((order, index) => <Box key={order.id} sx={desktopTableRowSx}><Typography color="text.secondary" sx={{ fontSize: 14, fontWeight: 600 }}>{index + 1}</Typography><Typography noWrap sx={{ fontSize: 14, fontWeight: 700 }}>{order.displayId || order.id}</Typography><Box sx={{ display: "flex", alignItems: "center", gap: 1.25, whiteSpace: "nowrap" }}><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><CalendarMonthRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.date.split("-").reverse().join("/")}</Typography></Stack><Stack direction="row" alignItems="center" spacing={0.65} color="text.secondary"><AccessTimeRoundedIcon sx={{ fontSize: 17 }} /><Typography sx={{ fontSize: 13 }}>{order.time}</Typography></Stack></Box><Chip label={order.status} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...orderStatusTone(order.status) }} /><Chip label={order.paymentMethod} size="small" sx={{ justifySelf: "start", height: 28, fontWeight: 700, ...paymentTone(order.paymentStatus) }} /><Typography noWrap sx={{ ...desktopAmountSx, fontSize: 14, fontWeight: 700, textAlign: "right", justifySelf: "end", whiteSpace: "nowrap" }}>{formatKyat(order.amount)}</Typography><Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}><IconButton aria-label={`View ${order.displayId || order.id} details`} onClick={() => setDetailOrder(order)} color="primary" size="small" sx={desktopOrderActionSx}><VisibilityRoundedIcon fontSize="small" /></IconButton><IconButton aria-label={`Delete ${order.displayId || order.id}`} onClick={() => onDelete(order.id)} disabled={!["Unpaid", "Partial"].includes(order.paymentStatus) || order.hasPaymentRecord} color="error" size="small" sx={desktopOrderActionSx}><DeleteOutlineRoundedIcon fontSize="small" /></IconButton></Box></Box>)}</Box>
     </CardContent></Card>
     <Popover open={Boolean(dateFilterAnchor)} anchorEl={dateFilterAnchor} onClose={() => setDateFilterAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "left" }} transformOrigin={{ vertical: "top", horizontal: "left" }} slotProps={{ paper: { sx: { width: 360, p: 2, borderRadius: 2 } } }}>
       <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Date and time</Typography>
@@ -471,10 +484,10 @@ function DesktopOrderDetailsModal({ order, onClose, onDelete }) {
   if (!order) return null;
   const items = order.items || [];
   return <Dialog open={Boolean(order)} onClose={onClose} fullWidth maxWidth="md" PaperProps={{ sx: { borderRadius: 3, maxWidth: 860 } }}>
-    <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>Order Details</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 14 }}>{order.displayId || order.id}</Typography></Box><Chip label="Done" icon={<CheckRoundedIcon />} sx={{ bgcolor: "#e8f6ec", color: "#278a45", fontWeight: 700 }} /></Stack></DialogTitle>
+    <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid", borderColor: "divider" }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography sx={{ fontSize: 21, fontWeight: 800 }}>Order Details</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 14 }}>{order.displayId || order.id}</Typography></Box><Chip label={order.status} icon={<CheckRoundedIcon />} sx={{ bgcolor: order.status === "Cancel" ? "#fff1f0" : "#e8f6ec", color: order.status === "Cancel" ? "#d14343" : "#278a45", fontWeight: 700 }} /></Stack></DialogTitle>
     <DialogContent sx={{ p: 3 }}><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(270px, .78fr)", gap: 2.5 }}>
       <Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}><Typography sx={{ fontWeight: 800, fontSize: 17 }}>Order items ({order.quantity})</Typography><Divider sx={{ my: 1.75 }} /><Stack spacing={1.25}>{items.map((item) => <Box key={item.id} sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2 }}><Box><Typography sx={{ fontWeight: 700 }}>{item.productName || item.product?.name || "Item"}</Typography><Typography color="text.secondary" sx={{ mt: .5, fontSize: 14 }}>{Number(item.quantity || 0)} x {formatKyat(Number(item.unitPrice || 0))}</Typography></Box><Typography sx={{ fontWeight: 800, fontSize: 18 }}>{formatKyat(Number(item.lineTotal || 0))}</Typography></Box>)}</Stack></CardContent></Card>
-      <Stack spacing={2}><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order information</Typography><Stack spacing={1.1}><DesktopDetailRow label="Order date" value={`${order.date.split("-").reverse().join("/")} · ${order.time}`} /><DesktopDetailRow label="Payment status" value={order.paymentStatus} tone="#278a45" /><DesktopDetailRow label="Payment method" value={order.paymentMethod} /></Stack></CardContent></Card><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order summary</Typography><Stack spacing={1.1}><DesktopDetailRow label="Subtotal" value={formatKyat(order.subtotal)} /><DesktopDetailRow label="Discount" value={order.discount > 0 ? `- ${formatKyat(order.discount)}` : formatKyat(0)} /><Divider /><DesktopDetailRow label="Total" value={formatKyat(order.amount)} tone="primary.main" strong /></Stack></CardContent></Card></Stack>
+      <Stack spacing={2}><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order information</Typography><Stack spacing={1.1}><DesktopDetailRow label="Order date" value={`${order.date.split("-").reverse().join("/")} · ${order.time}`} /><DesktopDetailRow label="Order status" value={order.status} tone={order.status === "Cancel" ? "#d14343" : "#278a45"} /><DesktopDetailRow label="Payment status" value={order.paymentStatus} tone="#278a45" /><DesktopDetailRow label="Payment method" value={order.paymentMethod} /></Stack></CardContent></Card><Card variant="outlined" sx={{ borderRadius: 2 }}><CardContent sx={{ p: 2.25, "&:last-child": { pb: 2.25 } }}><Typography sx={{ fontWeight: 800, mb: 1.25 }}>Order summary</Typography><Stack spacing={1.1}><DesktopDetailRow label="Subtotal" value={formatKyat(order.subtotal)} /><DesktopDetailRow label="Discount" value={order.discount > 0 ? `- ${formatKyat(order.discount)}` : formatKyat(0)} /><Divider /><DesktopDetailRow label="Total" value={formatKyat(order.amount)} tone="primary.main" strong /></Stack></CardContent></Card></Stack>
     </Box></DialogContent>
     <DialogActions sx={{ px: 3, py: 2, borderTop: "1px solid", borderColor: "divider", justifyContent: "space-between" }}><Button color="error" startIcon={<DeleteOutlineRoundedIcon />} onClick={onDelete} sx={{ textTransform: "none", fontWeight: 700 }}>Delete order</Button><Stack direction="row" spacing={1}><Button onClick={onClose} sx={{ textTransform: "none" }}>Close</Button><Button variant="contained" startIcon={<CheckRoundedIcon />} onClick={() => window.print()} sx={{ textTransform: "none" }}>Print receipt</Button></Stack></DialogActions>
   </Dialog>;
