@@ -172,8 +172,8 @@ function HistoryCard({ record }) {
             <Typography color="text.primary" sx={{ fontSize: 22, fontWeight: 700, lineHeight: 1.25 }}>{record.product}</Typography>
             <Box sx={{ display: "flex", alignItems: "center", gap: 3.25, mt: 2.5 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, color: statusColor }}>
-                {!isDeleted && (isIn ? <ArrowDownwardRoundedIcon sx={{ fontSize: 24 }} /> : <ArrowUpwardRoundedIcon sx={{ fontSize: 24 }} />)}
-                <Typography color={statusColor} sx={{ fontSize: 19, fontWeight: 700 }}>{isDeleted ? "Product deleted" : record.qty}</Typography>
+                {(isIn ? <ArrowDownwardRoundedIcon sx={{ fontSize: 24 }} /> : <ArrowUpwardRoundedIcon sx={{ fontSize: 24 }} />)}
+                <Typography color={statusColor} sx={{ fontSize: 19, fontWeight: 700 }}>{record.qty}</Typography>
               </Box>
               <Typography color="text.primary" sx={{ fontSize: 19, fontWeight: 500, whiteSpace: "nowrap" }}>{record.amount}</Typography>
             </Box>

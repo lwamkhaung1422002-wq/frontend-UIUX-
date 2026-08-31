@@ -67,6 +67,12 @@ const embeddedCustomerSchema = z.object({
   notes: z.string().trim().optional(),
 });
 
+const initialPaymentSchema = z.object({
+  method: z.string().trim().min(1, "Payment method is required."),
+  amount: z.coerce.number().int().positive("Initial payment must be greater than 0."),
+  note: z.string().trim().optional(),
+});
+
 const createOrderSchema = z.object({
   customerId: z.string().trim().optional(),
   customer: embeddedCustomerSchema.optional(),
@@ -76,7 +82,7 @@ const createOrderSchema = z.object({
   deliveryFee: moneySchema.optional(),
   source: z.string().trim().optional(),
   note: z.string().trim().optional(),
-  paymentTracking: z.boolean().default(false),
+  initialPayment: initialPaymentSchema.optional(),
   items: z.array(orderItemSchema).min(1, "At least one order item is required."),
 });
 
@@ -85,7 +91,7 @@ const updateStatusSchema = z.object({
 });
 
 const cancelOrderSchema = z.object({
-  reason: z.string().trim().optional(),
+  reason: z.string().trim().min(1, "Cancel reason is required."),
 });
 const productReturnSchema = z.object({
   items: z.array(z.object({
@@ -599,6 +605,15 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       const orderDiscount = Math.min(input.discount ?? 0, subtotal);
       const deliveryFee = input.deliveryFee ?? 0;
       const total = Math.max(0, subtotal - orderDiscount + deliveryFee);
+      const initialPaymentAmount = input.initialPayment?.amount ?? 0;
+      if (initialPaymentAmount > total) {
+        throw badRequest("Initial payment cannot exceed the order total.");
+      }
+      const paymentStatus = initialPaymentAmount >= total
+        ? "paid"
+        : initialPaymentAmount > 0
+          ? "partial"
+          : "unpaid";
       const nextSequence = await tx.shop.update({
         where: { id: shopId },
         data: { saleSequence: { increment: 1 } },
@@ -614,8 +629,10 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
           deliveryFee,
           total,
           fulfillmentStatus: input.fulfillmentStatus,
-          paymentStatus: "unpaid",
-          paymentTracking: input.paymentTracking,
+          paymentStatus,
+          // This is an immutable lifecycle flag: it records whether the order
+          // had an outstanding balance when it was created.
+          paymentTracking: initialPaymentAmount < total,
           ...(customerId !== undefined ? { customerId } : {}),
           orderNumber: input.orderNumber || generatedOrderNumber,
           ...(input.source !== undefined ? { source: input.source } : {}),
@@ -766,6 +783,28 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
         }
       }
 
+      if (input.initialPayment) {
+        const payment = await tx.payment.create({
+          data: {
+            shopId,
+            orderId: createdOrder.id,
+            type: "payment",
+            scope: "order-payment",
+            method: input.initialPayment.method,
+            amount: initialPaymentAmount,
+            ...(input.initialPayment.note !== undefined ? { note: input.initialPayment.note } : {}),
+          },
+        });
+        await writeAuditLog(tx, {
+          shopId,
+          actorId: authUser.id,
+          action: "payment.receive",
+          entity: "Payment",
+          entityId: payment.id,
+          metadata: { orderId: createdOrder.id, amount: initialPaymentAmount, method: input.initialPayment.method, initialPayment: true },
+        });
+      }
+
       const fullOrder = await tx.order.findUniqueOrThrow({
         where: { id: createdOrder.id },
         include: {
@@ -792,6 +831,8 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
         entityId: fullOrder.id,
         metadata: {
           total,
+          initialPaymentAmount,
+          paymentTracking: initialPaymentAmount < total,
           fulfillmentStatus: input.fulfillmentStatus,
           source: input.source ?? null,
           itemCount: preparedItems.length,
@@ -1076,7 +1117,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
                 type: "SALE_REVERSAL", direction: "IN", quantity: quantity.toString(), unitCost: saleMovement.unitCost ?? allocation.unitCost,
                 sourceType: "OrderCancellation", sourceId: `${orderId}:${allocation.id}:${movementIndex}`,
                 idempotencyKey: `order.cancel:${orderId}:${allocation.id}:${movementIndex}`,
-                reason: input.reason ?? "Order cancelled",
+                reason: input.reason,
               });
             }
           }
@@ -1099,7 +1140,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
         data: {
           fulfillmentStatus: "cancelled",
           cancelledAt: new Date(),
-          note: input.reason ?? existingOrder.note,
+          cancelReason: input.reason,
         },
         include: {
           customer: true,
@@ -1114,7 +1155,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
         action: "order.cancel",
         entity: "Order",
         entityId: orderId,
-        metadata: { reason: input.reason ?? null },
+        metadata: { reason: input.reason },
       });
 
       return cancelledOrder;
@@ -1278,27 +1319,7 @@ ordersRouter.delete("/:shopId/orders/:orderId", async (request, response, next) 
     });
 
     if (!existingOrder) throw notFound("Order not found.");
-    if (existingOrder.fulfillmentStatus !== "cancelled") {
-      throw badRequest("Only cancelled orders can be deleted.");
-    }
-    if (!["unpaid", "partial"].includes(existingOrder.paymentStatus) || existingOrder.payments.length > 0) {
-      throw badRequest("Only unpaid or partial orders without payment records can be deleted.");
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await tx.order.delete({
-        where: { id: orderId },
-      });
-      await writeAuditLog(tx, {
-        shopId,
-        actorId: authUser.id,
-        action: "order.delete",
-        entity: "Order",
-        entityId: orderId,
-      });
-    });
-
-    response.status(204).send();
+    throw badRequest("Sale records are retained for history and cannot be deleted. Cancel the sale with a reason instead.");
   } catch (error) {
     next(error);
   }

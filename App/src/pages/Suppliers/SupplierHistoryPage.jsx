@@ -81,6 +81,27 @@ const relativePaymentTime = (value) => {
   return `${Math.floor(seconds / 86400)} days ago`;
 };
 
+const historyDateKey = (value) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Yangon",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(new Date(value))
+    .replace(/\//g, "-");
+const historyDateTime = (value) =>
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Yangon",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+
 function DetailRow({ icon, label, value }) {
   return (
     <Box
@@ -124,7 +145,23 @@ function DetailRow({ icon, label, value }) {
 }
 
 function PaymentCard({ record }) {
-  const showSignature = Boolean(record.signature || record.signatureDataUrl);
+  const cancelled = record.status === "Cancelled";
+  const methodLabel = cancelled ? "Cancelled" : record.method;
+  const showSignature =
+    !cancelled &&
+    record.sourceKind?.startsWith("supplier") &&
+    String(record.method || "").trim().toLowerCase() === "cash" &&
+    Boolean(record.signatureDataUrl);
+  const eventLabel =
+    record.sourceKind === "expense"
+      ? "Expense"
+      : record.sourceKind === "income"
+        ? "Income"
+        : record.sourceKind?.startsWith("supplier")
+          ? "Supplier Payment"
+          : record.sourceKind?.startsWith("sale")
+            ? "Sale Payment"
+            : "Payment";
   return (
     <Paper
       elevation={0}
@@ -147,16 +184,16 @@ function PaymentCard({ record }) {
         }}
       >
         <Chip
-          label="Paid"
+          label={record.status || "Paid"}
           variant="outlined"
           sx={{
             mt: 0.1,
             height: 40,
             minWidth: 72,
             borderRadius: 1.25,
-            color: "#168437",
-            borderColor: "#36a55a",
-            bgcolor: "#f6fff8",
+            color: cancelled ? "#d14343" : "#168437",
+            borderColor: cancelled ? "#efb0b0" : "#36a55a",
+            bgcolor: cancelled ? "#fff1f0" : "#f6fff8",
             "& .MuiChip-label": { px: 1.4, fontSize: 14, fontWeight: 600 },
           }}
         />
@@ -181,45 +218,54 @@ function PaymentCard({ record }) {
             </Typography>
           )}
         </Box>
-        <Stack
-          direction="row"
-          spacing={0.75}
-          alignItems="center"
-          justifyContent="flex-end"
-          sx={{ whiteSpace: "nowrap" }}
-        >
-          <Typography
-            sx={{
-              color: record.method === "Cash" ? "#d87816" : "#238a3a",
-              fontSize: 18,
-              lineHeight: 1.28,
-              fontWeight: 600,
-            }}
-          >
-            {record.method}
-          </Typography>
-          <Typography
-            noWrap
-            sx={{ fontSize: 18, lineHeight: 1.28, fontWeight: 600 }}
-          >
-            {money(record.amount)}
+        <Stack alignItems="flex-end" spacing={0.25} sx={{ whiteSpace: "nowrap" }}>
+          <Stack direction="row" spacing={0.75} alignItems="center">
+            <Typography
+              sx={{
+                color: cancelled ? "#d14343" : record.method === "Cash" ? "#d87816" : "#238a3a",
+                fontSize: 18,
+                lineHeight: 1.28,
+                fontWeight: 600,
+              }}
+            >
+              {methodLabel}
+            </Typography>
+            <Typography
+              noWrap
+              sx={{ fontSize: 18, lineHeight: 1.28, fontWeight: 600 }}
+            >
+              {money(record.amount)}
+            </Typography>
+          </Stack>
+          <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600 }}>
+            {eventLabel}
           </Typography>
         </Stack>
       </Box>
       <Divider sx={{ mx: 2.25 }} />
       <Stack spacing={0.85} sx={{ px: 2.25, py: 1.75 }}>
-        {record.kind === "mobile" && (
+        {!cancelled &&
+          record.sourceKind?.startsWith("supplier") &&
+          record.kind === "mobile" &&
+          record.transactionId && (
           <DetailRow
             icon={<DescriptionOutlinedIcon />}
             label="Transaction ID"
-            value={record.transactionId || record.id}
+            value={record.transactionId}
           />
         )}
         <DetailRow
           icon={<CalendarTodayOutlinedIcon />}
-          label="Payment Date"
+          label={cancelled ? "Cancelled At" : "Payment Date"}
           value={record.paymentDate}
         />
+        {cancelled && (
+          <DetailRow
+            icon={<DescriptionOutlinedIcon />}
+            label="Reason"
+            value={record.reason || "â€”"}
+          />
+        )}
       </Stack>
       {showSignature && (
         <>
@@ -307,24 +353,123 @@ export default function SupplierHistoryPage() {
   const [canonicalRecords, setCanonicalRecords] = useState([]);
   const { data } = usePurchasesQuery({ page: 1, pageSize: 100 });
   const api = usePosApi();
-  useEffect(() => { let active = true; api.payments.history().then(({ records = [] }) => { if (active) setCanonicalRecords(records.map((record) => { const paidAt = new Date(record.occurredAt); const method = record.method || "Cash"; return { id: record.apiId || record.id, transactionId: record.id, supplier: record.name || "Supplier", invoice: record.id || "", amount: Number(record.amount || 0), method, kind: method.toLowerCase() === "cash" ? "cash" : "mobile", paidAtMs: paidAt.getTime(), isoDate: paidAt.toISOString().slice(0, 10), paymentDate: paidAt.toLocaleDateString(), relativeTime: relativePaymentTime(paidAt), timestamp: paidAt.toLocaleString(), sourceKind: record.kind, status: record.status }; })); }).catch(() => { if (active) setCanonicalRecords([]); }); return () => { active = false; }; }, [api]);
-  useEffect(() => { let active = true; api.shop.getSettings().then(({ settings }) => { if (active) setConfiguredMethods((settings.paymentMethods || []).filter((item) => item.active !== false).map((item) => item.name)); }).catch(() => {}).finally(() => {}); return () => { active = false; }; }, [api]);
+  useEffect(() => {
+    let active = true;
+    api.payments
+      .history({ view: "history" })
+      .then(({ records = [] }) => {
+        if (active)
+          setCanonicalRecords(
+            records.map((record) => {
+              const paidAt = new Date(record.occurredAt);
+              const method = record.method || "Cash";
+              return {
+                id: record.paymentId || record.id,
+                transactionId: record.transactionId || "",
+                signatureDataUrl: record.signatureDataUrl || "",
+                signature: record.signature || "",
+                supplier: record.name || "Payment",
+                invoice: record.invoice || "",
+                amount: Number(record.amount || 0),
+                method,
+                kind: method.toLowerCase() === "cash" ? "cash" : "mobile",
+                paidAtMs: paidAt.getTime(),
+                isoDate: historyDateKey(paidAt),
+                paymentDate: historyDateTime(paidAt),
+                relativeTime: relativePaymentTime(paidAt),
+                timestamp: historyDateTime(paidAt),
+                sourceKind: record.kind,
+                status: record.status,
+                reason: record.reason || "",
+              };
+            }),
+          );
+      })
+      .catch(() => {
+        if (active) setCanonicalRecords([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [api]);
+  useEffect(() => {
+    let active = true;
+    api.shop
+      .getSettings()
+      .then(({ settings }) => {
+        if (active)
+          setConfiguredMethods(
+            (settings.paymentMethods || [])
+              .filter((item) => item.active !== false)
+              .map((item) => item.name),
+          );
+      })
+      .catch(() => {})
+      .finally(() => {});
+    return () => {
+      active = false;
+    };
+  }, [api]);
   useEffect(() => {
     if (!pathname.startsWith("/payment")) return undefined;
     let active = true;
-    Promise.all([api.orders.list({ pageSize: 100 }), api.expenses.list()]).then(([ordersResult, expensesResult]) => {
-      if (!active) return;
-      const sales = (ordersResult.orders || [])
-        .flatMap((order) => (order.payments || [])
-          .filter((payment) => Number(payment.amount || 0) > 0 && (payment.scope === "credit-settlement" || ["unpaid", "partial"].includes(String(order.paymentStatus || "unpaid").toLowerCase())))
-          .map((payment) => ({ payment, name: "Sale", invoice: order.orderNumber || order.id })));
-      const expenses = (expensesResult.expenses || []).map((expense) => ({ payment: { id: expense.id, amount: expense.amount, method: expense.method, paidAt: expense.spentAt || expense.createdAt }, name: expense.category === "income" ? "Income" : "Expense", invoice: expense.title || "" }));
-      setPaymentPageRecords([...sales, ...expenses].map(({ payment, name, invoice }) => {
-        const paidAt = new Date(payment.paidAt || payment.createdAt);
-        return { id: payment.id, transactionId: payment.transactionId || payment.id, supplier: name, invoice, amount: Number(payment.amount || 0), method: payment.method || "Cash", kind: payment.method === "Cash" ? "cash" : "mobile", paidAtMs: paidAt.getTime(), isoDate: paidAt.toISOString().slice(0, 10), paymentDate: paidAt.toLocaleDateString(), relativeTime: relativePaymentTime(paidAt), timestamp: paidAt.toLocaleString() };
-      }).sort((left, right) => right.paidAtMs - left.paidAtMs));
-    }).catch(() => { if (active) setPaymentPageRecords([]); });
-    return () => { active = false; };
+    Promise.all([api.orders.list({ pageSize: 100 }), api.expenses.list()])
+      .then(([ordersResult, expensesResult]) => {
+        if (!active) return;
+        const sales = (ordersResult.orders || []).flatMap((order) =>
+          (order.payments || [])
+            .filter(
+              (payment) =>
+                Number(payment.amount || 0) > 0 &&
+                (payment.scope === "credit-settlement" ||
+                  ["unpaid", "partial"].includes(
+                    String(order.paymentStatus || "unpaid").toLowerCase(),
+                  )),
+            )
+            .map((payment) => ({
+              payment,
+              name: "Sale",
+              invoice: order.orderNumber || order.id,
+            })),
+        );
+        const expenses = (expensesResult.expenses || []).map((expense) => ({
+          payment: {
+            id: expense.id,
+            amount: expense.amount,
+            method: expense.method,
+            paidAt: expense.spentAt || expense.createdAt,
+          },
+          name: expense.category === "income" ? "Income" : "Expense",
+          invoice: expense.title || "",
+        }));
+        setPaymentPageRecords(
+          [...sales, ...expenses]
+            .map(({ payment, name, invoice }) => {
+              const paidAt = new Date(payment.paidAt || payment.createdAt);
+              return {
+                id: payment.id,
+                transactionId: payment.transactionId || payment.id,
+                supplier: name,
+                invoice,
+                amount: Number(payment.amount || 0),
+                method: payment.method || "Cash",
+                kind: payment.method === "Cash" ? "cash" : "mobile",
+                paidAtMs: paidAt.getTime(),
+                isoDate: historyDateKey(paidAt),
+                paymentDate: historyDateTime(paidAt),
+                relativeTime: relativePaymentTime(paidAt),
+                timestamp: historyDateTime(paidAt),
+              };
+            })
+            .sort((left, right) => right.paidAtMs - left.paidAtMs),
+        );
+      })
+      .catch(() => {
+        if (active) setPaymentPageRecords([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [api, pathname]);
   const supplierPaymentRecords = useMemo(
     () =>
@@ -348,10 +493,10 @@ export default function SupplierHistoryPage() {
                 kind: method === "Cash" ? "cash" : "mobile",
                 signatureDataUrl: payment.signatureDataUrl,
                 paidAtMs: paidAt.getTime(),
-                isoDate: paidAt.toISOString().slice(0, 10),
-                paymentDate: paidAt.toLocaleDateString(),
+                isoDate: historyDateKey(paidAt),
+                paymentDate: historyDateTime(paidAt),
                 relativeTime: relativePaymentTime(paidAt),
-                timestamp: paidAt.toLocaleString(),
+                timestamp: historyDateTime(paidAt),
               };
             }),
         )
@@ -362,7 +507,7 @@ export default function SupplierHistoryPage() {
 
   const visibleRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = historyDateKey(new Date());
     return paymentRecords.filter(
       (record) =>
         (!query ||

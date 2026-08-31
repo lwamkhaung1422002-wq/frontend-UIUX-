@@ -226,9 +226,6 @@ paymentsRouter.post("/:shopId/orders/:orderId/payments", async (request, respons
       if (order.fulfillmentStatus === "cancelled") {
         throw badRequest("Cancelled orders cannot receive payment.");
       }
-      if (order.paymentStatus === "refunded") {
-        throw badRequest("Refunded orders cannot receive another payment yet.");
-      }
 
       await assertUniquePaymentReference(
         tx,
@@ -245,8 +242,11 @@ paymentsRouter.post("/:shopId/orders/:orderId/payments", async (request, respons
       if (remainingAmount <= 0) {
         throw badRequest("Payment has already been received.");
       }
-      if (amount > remainingAmount) {
-        throw badRequest("Payment amount cannot exceed the remaining order balance.");
+      // Only an existing-credit settlement is all-or-nothing. Initial order
+      // creation may record a partial collection and must not be compared to a
+      // non-existent prior remaining balance.
+      if (input.scope !== "order-payment" && amount !== remainingAmount) {
+        throw badRequest("Payment amount must equal the remaining order balance.");
       }
 
       const payment = await tx.payment.create({
@@ -497,18 +497,10 @@ paymentsRouter.post("/:shopId/orders/:orderId/refunds", async (request, response
         },
       });
 
-      const updatedOrder = await tx.order.update({
-        where: { id: order.id },
-        data: {
-          paymentStatus: refundAmount >= paidAmount ? "refunded" : "partial",
-          refundId: refund.id,
-        },
-        include: {
-          customer: true,
-          items: { include: { product: true, variant: true, allocations: true } },
-          payments: true,
-        },
-      });
+      await tx.order.update({ where: { id: order.id }, data: { refundId: refund.id } });
+      // A cancelled payment restores the outstanding balance. It is not a
+      // terminal order state: the customer may pay again with a new payment.
+      const updatedOrder = await updateOrderPaymentStatus(tx, shopId, order.id);
 
       await writeAuditLog(tx, {
         shopId,

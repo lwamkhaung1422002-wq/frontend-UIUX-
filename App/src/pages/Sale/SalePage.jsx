@@ -185,7 +185,7 @@ export default function SalePage() {
     });
   }, [filters, orders, search]);
 
-  const totalAmount = filteredOrders.reduce((total, order) => total + order.amount, 0);
+  const totalAmount = filteredOrders.filter((order) => order.status !== "Cancel").reduce((total, order) => total + order.amount, 0);
 
   const updateDraft = (field, value) =>
     setDraftFilters((current) => ({ ...current, [field]: value }));
@@ -204,8 +204,10 @@ export default function SalePage() {
     if (cancelOrderMutation.isPending) return;
     try {
       const { order } = await api.orders.get(id);
+      const reason = window.prompt("Cancel reason (required):");
+      if (!reason?.trim()) return;
       if (!window.confirm("Cancel this order? The order record will be kept.")) return;
-      if (order.fulfillmentStatus !== "cancelled") await cancelOrderMutation.mutateAsync({ id, reason: "Order cancelled" });
+      if (order.fulfillmentStatus !== "cancelled") await cancelOrderMutation.mutateAsync({ id, reason: reason.trim() });
       await queryClient.invalidateQueries({ queryKey: queryKeys.orders(shop?.id) });
     } catch (error) {
       window.alert(error.message || "This order cannot be deleted.");

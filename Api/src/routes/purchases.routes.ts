@@ -148,6 +148,38 @@ function compatibilityQuantity(value: Prisma.Decimal) {
 function moneyFromDecimal(value: Prisma.Decimal) {
   return value.toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toNumber();
 }
+/** The delivery record is the supplier invoice.  Keep its financial projection
+ * in one place so list, details and payment consumers cannot disagree. */
+type SupplierInvoicePayment = {
+  amount: number;
+  reversedAt: Date | null;
+  reversal?: { id: string; reason: string; reversedAt: Date } | null;
+};
+function isActiveSupplierInvoicePayment(payment: SupplierInvoicePayment) {
+  // reversedAt is retained only for records created before reversal events.
+  return !payment.reversedAt && !payment.reversal;
+}
+function serializeSupplierInvoice<T extends { amount: number; status: string; payments: SupplierInvoicePayment[] }>(record: T) {
+  const activePaid = record.payments
+    .filter(isActiveSupplierInvoicePayment)
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  const remaining = Math.max(0, record.amount - activePaid);
+  const invoiceStatus = record.status === "cancelled" ? "Cancelled" : remaining === 0 ? "Paid" : "Credit";
+  const activePaymentCount = record.payments.filter(isActiveSupplierInvoicePayment).length;
+  return {
+    ...record,
+    activePaid,
+    remaining,
+    activePaymentCount,
+    invoiceStatus,
+    allowedActions: {
+      pay: invoiceStatus === "Credit" && remaining > 0,
+      edit: invoiceStatus === "Credit" && activePaymentCount === 0,
+      cancelInvoice: invoiceStatus === "Credit" && activePaymentCount === 0,
+      cancelPayment: invoiceStatus !== "Cancelled" && activePaymentCount > 0,
+    },
+  };
+}
 function purchaseItemBaseQuantity(line: {
   quantity: number;
   baseQuantity?: unknown;
@@ -258,17 +290,17 @@ purchasesRouter.get("/:shopId/supplier-delivery-records", async (request, respon
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
     const query = listQuery.parse(request.query);
     const where = { shopId, ...(query.search ? { OR: [{ invoiceNumber: { contains: query.search, mode: "insensitive" as const } }, { supplierName: { contains: query.search, mode: "insensitive" as const } }, { supplier: { name: { contains: query.search, mode: "insensitive" as const } } }, { deliveryName: { contains: query.search, mode: "insensitive" as const } }] } : {}) };
-    const [records, total] = await prisma.$transaction([prisma.supplierDeliveryRecord.findMany({ where, include: { supplier: true, payments: { orderBy: { paidAt: "asc" } } }, orderBy: { receivedAt: "desc" }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }), prisma.supplierDeliveryRecord.count({ where })]);
-    response.json({ records, totalCount: total, pagination: { page: query.page, pageSize: query.pageSize, total } });
+    const [records, total] = await prisma.$transaction([prisma.supplierDeliveryRecord.findMany({ where, include: { supplier: true, payments: { include: { reversal: true }, orderBy: { paidAt: "asc" } } }, orderBy: { receivedAt: "desc" }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }), prisma.supplierDeliveryRecord.count({ where })]);
+    response.json({ records: records.map(serializeSupplierInvoice), totalCount: total, pagination: { page: query.page, pageSize: query.pageSize, total } });
   } catch (error) { next(error); }
 });
 
 purchasesRouter.get("/:shopId/supplier-delivery-records/:recordId", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
-    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { supplier: true, payments: { orderBy: { paidAt: "asc" } } } });
+    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { supplier: true, payments: { include: { reversal: true }, orderBy: { paidAt: "asc" } } } });
     if (!record) throw notFound("Supplier delivery record not found.");
-    response.json({ record });
+    response.json({ record: serializeSupplierInvoice(record) });
   } catch (error) { next(error); }
 });
 
@@ -276,11 +308,12 @@ purchasesRouter.patch("/:shopId/supplier-delivery-records/:recordId", async (req
   try {
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); const input = supplierWithDeliveryInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
     if (!input.phone || !input.deliveryRecord) throw badRequest("Supplier phone and delivery record are required.");
-    const existing = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { where: { reversedAt: null } } } });
+    const existing = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { include: { reversal: true } } } });
     if (!existing) throw notFound("Supplier delivery record not found.");
     if (existing.status === "cancelled") throw badRequest("Cancelled supplier records cannot be edited.");
-    if (existing.payments.length) throw badRequest("Supplier records with active payments cannot be edited.");
-    const paidAmount = existing.payments.reduce((sum, payment) => sum + payment.amount, 0);
+    const activePayments = existing.payments.filter(isActiveSupplierInvoicePayment);
+    if (activePayments.length) throw badRequest("Supplier records with active payments cannot be edited.");
+    const paidAmount = activePayments.reduce((sum, payment) => sum + payment.amount, 0);
     if (input.deliveryRecord.amount < paidAmount) throw badRequest("Amount cannot be reduced below the paid amount.");
     const duplicate = await prisma.supplierDeliveryRecord.findFirst({ where: { shopId, invoiceNumber: input.deliveryRecord.invoiceNumber, NOT: { id: existing.id } }, select: { id: true } });
     if (duplicate) throw conflict("This invoice number already exists.");
@@ -292,11 +325,13 @@ purchasesRouter.patch("/:shopId/supplier-delivery-records/:recordId", async (req
 purchasesRouter.post("/:shopId/supplier-delivery-records/:recordId/payments", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); const input = paymentInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
-    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { where: { reversedAt: null } } } });
+    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { include: { reversal: true } } } });
     if (!record) throw notFound("Supplier delivery record not found.");
     if (record.status === "cancelled") throw badRequest("Cancelled supplier records cannot receive payment.");
-    const paidAmount = record.payments.reduce((sum, payment) => sum + payment.amount, 0);
-    if (input.amount > record.amount - paidAmount) throw badRequest("Payment amount cannot exceed outstanding balance.");
+    const paidAmount = record.payments.filter(isActiveSupplierInvoicePayment).reduce((sum, payment) => sum + payment.amount, 0);
+    const remaining = Math.max(0, record.amount - paidAmount);
+    if (remaining <= 0) throw badRequest("This supplier invoice is already paid.");
+    if (input.amount > remaining) throw badRequest("Payment amount cannot exceed outstanding balance.");
     const payment = await prisma.supplierDeliveryPayment.create({ data: { shopId, deliveryRecordId: record.id, amount: input.amount, method: input.method, ...(input.reference !== undefined ? { reference: input.reference } : {}), ...(input.notes !== undefined ? { notes: input.notes } : {}), ...(input.paidAt !== undefined ? { paidAt: input.paidAt } : {}), ...(input.payerName !== undefined ? { payerName: input.payerName } : {}), ...(input.payerPhone !== undefined ? { payerPhone: input.payerPhone } : {}), ...(input.signatureDataUrl !== undefined ? { signatureDataUrl: input.signatureDataUrl } : {}), ...(input.mobileAccountName !== undefined ? { mobileAccountName: input.mobileAccountName } : {}) } });
     response.status(201).json({ payment });
   } catch (error) { next(error); }
@@ -305,9 +340,9 @@ purchasesRouter.post("/:shopId/supplier-delivery-records/:recordId/payments", as
 purchasesRouter.post("/:shopId/supplier-delivery-records/:recordId/cancel", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); const input = reversalInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
-    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { where: { reversedAt: null } } } });
+    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { include: { reversal: true } } } });
     if (!record) throw notFound("Supplier delivery record not found.");
-    if (record.payments.length) throw badRequest("Cancel active supplier payments before cancelling this record.");
+    if (record.payments.some(isActiveSupplierInvoicePayment)) throw badRequest("Cancel active supplier payments before cancelling this record.");
     const cancelled = await prisma.supplierDeliveryRecord.update({ where: { id: record.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelReason: input.reason } });
     await writeAuditLog(prisma, { shopId, actorId: auth.id, action: "supplier.delivery.cancel", entity: "SupplierDeliveryRecord", entityId: record.id, metadata: { reason: input.reason } });
     response.json({ record: cancelled, cancelled: true });
@@ -319,26 +354,31 @@ purchasesRouter.post("/:shopId/supplier-delivery-records/:recordId/payments/:pay
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); const input = reversalInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
     const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId } });
     if (!record) throw notFound("Supplier delivery record not found.");
-    const payment = await prisma.supplierDeliveryPayment.findFirst({ where: { id: request.params.paymentId, deliveryRecordId: record.id, shopId } });
+    if (record.status === "cancelled") throw badRequest("Cancelled supplier records cannot change payments.");
+    const payment = await prisma.supplierDeliveryPayment.findFirst({ where: { id: request.params.paymentId, deliveryRecordId: record.id, shopId }, include: { reversal: true } });
     if (!payment) throw notFound("Supplier payment not found.");
-    if (payment.reversedAt) throw badRequest("Supplier payment has already been cancelled.");
+    if (payment.reversedAt || payment.reversal) throw badRequest("Supplier payment has already been cancelled.");
     const reversed = await prisma.$transaction(async (tx) => {
-      const updated = await tx.supplierDeliveryPayment.update({ where: { id: payment.id }, data: { reversedAt: new Date(), reversalReason: input.reason } });
-      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "supplier.delivery.payment.reverse", entity: "SupplierDeliveryPayment", entityId: payment.id, metadata: { deliveryRecordId: record.id, amount: payment.amount, reason: input.reason } });
-      return updated;
+      const event = await tx.supplierDeliveryPaymentReversal.create({ data: { shopId, originalPaymentId: payment.id, reason: input.reason, actorId: auth.id } });
+      await writeAuditLog(tx, { shopId, actorId: auth.id, action: "supplier.delivery.payment.reverse", entity: "SupplierDeliveryPaymentReversal", entityId: event.id, metadata: { deliveryRecordId: record.id, originalPaymentId: payment.id, amount: payment.amount, reason: input.reason } });
+      const updatedRecord = await tx.supplierDeliveryRecord.findUniqueOrThrow({
+        where: { id: record.id },
+        include: { supplier: true, payments: { include: { reversal: true }, orderBy: { paidAt: "asc" } } },
+      });
+      return { event, record: serializeSupplierInvoice(updatedRecord) };
     });
-    response.json({ payment: reversed });
+    response.json({ reversal: reversed.event, record: reversed.record });
   } catch (error) { next(error); }
 });
 
 purchasesRouter.delete("/:shopId/supplier-delivery-records/:recordId", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = params.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
-    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { where: { reversedAt: null } } } });
+    const record = await prisma.supplierDeliveryRecord.findFirst({ where: { id: request.params.recordId, shopId }, include: { payments: { include: { reversal: true } } } });
     if (!record) throw notFound("Supplier delivery record not found.");
-    if (record.payments.length) throw badRequest("Cancel active supplier payments before cancelling this record.");
-    const cancelled = await prisma.supplierDeliveryRecord.update({ where: { id: record.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelReason: "Cancelled" } });
-    response.json({ record: cancelled, cancelled: true });
+    if (record.status === "cancelled") throw badRequest("Supplier invoice is already cancelled.");
+    if (record.payments.some(isActiveSupplierInvoicePayment)) throw badRequest("Active payments must be selected and cancelled before cancelling this invoice.");
+    throw badRequest("Use the cancel endpoint with a required cancellation reason.");
   } catch (error) { next(error); }
 });
 

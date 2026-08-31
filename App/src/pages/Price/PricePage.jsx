@@ -19,6 +19,11 @@ import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import { useCategoriesQuery, useProductsQuery, usePromotionCampaignsQuery } from "../../hooks/usePosQueries";
 import { usePosApi } from "../../hooks/useApiResource";
 import { useQueryClient } from "@tanstack/react-query";
+const yangonDateKey = (value = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Yangon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+  const part = (type) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+};
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
 export default function PricePage() {
@@ -41,7 +46,7 @@ export default function PricePage() {
   const { data: categoryResult } = useCategoriesQuery();
   const { data: campaignResult } = usePromotionCampaignsQuery();
   const catalog = useMemo(() => (productResult?.products || []).map((product) => ({ ...product, code: product.sku || product.barcodes?.[0]?.value || "", cost: Number(product.cost || 0), price: Number(product.price || 0), start: product.createdAt, icon: "box", color: "#eaf3ff" })), [productResult]);
-  const promotionRows = useMemo(() => (campaignResult?.campaigns || []).map((campaign) => { const sample = campaign.sampleProduct || {}; const first = campaign.promotions?.[0] || {}; const ended = ["ENDED", "CANCELLED"].includes(campaign.effectiveState) || campaign.state === "CANCELLED"; const value = Number(first.value || 0); const discountAmount = first.type === "FIXED_PRICE" ? Math.max(0, Number(sample.price || 0) - value) : Math.round(Number(sample.price || 0) * value / 100); const scopeLabel = campaign.scope === "PRODUCT" ? sample.name || first.product?.name || "Product" : campaign.scope === "CATEGORY" ? campaign.category?.name || "Category" : "All"; return { id: campaign.id, version: campaign.version, name: campaign.name, scopeLabel, code: sample.sku || "", cost: Number(sample.cost || 0), price: Number(sample.price || 0), promotion: true, ended, discountAmount, discountPercent: first.type === "PERCENTAGE" ? value : (Number(sample.price || 0) ? Math.round(discountAmount / Number(sample.price || 0) * 100) : 0), start: first.startsAt, end: first.endsAt, reason: first.reason || "", icon: "box", color: "#e5f5e8" }; }), [campaignResult]);
+  const promotionRows = useMemo(() => (campaignResult?.campaigns || []).map((campaign) => { const sample = campaign.sampleProduct || {}; const first = campaign.promotions?.[0] || {}; const ended = ["ENDED", "CANCELLED"].includes(campaign.effectiveState) || campaign.state === "CANCELLED"; const value = Number(first.value || 0); const discountAmount = first.type === "FIXED_PRICE" ? Math.max(0, Number(sample.price || 0) - value) : Math.round(Number(sample.price || 0) * value / 100); const scopeLabel = campaign.scope === "PRODUCT" ? sample.name || first.product?.name || "Product" : campaign.scope === "CATEGORY" ? campaign.category?.name || "Category" : "All"; const discountLabel = first.type === "PERCENTAGE" ? `${value}% OFF` : first.type === "FIXED_PRICE" ? `${money(value)} fixed price` : `${money(discountAmount)} OFF`; return { id: campaign.id, version: campaign.version, name: campaign.name, scope: campaign.scope, scopeLabel, categoryName: campaign.category?.name || "Category", discountLabel, code: sample.sku || "", cost: Number(sample.cost || 0), price: Number(sample.price || 0), promotion: true, ended, discountAmount, discountPercent: first.type === "PERCENTAGE" ? value : (Number(sample.price || 0) ? Math.round(discountAmount / Number(sample.price || 0) * 100) : 0), start: first.startsAt, end: first.endsAt, reason: first.reason || "", icon: "box", color: "#e5f5e8" }; }), [campaignResult]);
   const endPromotion = async (campaign) => {
     if (endingPromotionId || !window.confirm(`End promotion “${campaign.name}”?`)) return;
     setEndingPromotionId(campaign.id); setPromotionActionError("");
@@ -54,8 +59,8 @@ export default function PricePage() {
   const sourceProducts = tab === "promotion" ? promotionRows : catalog;
   const visible = useMemo(() => sourceProducts.filter((product) => {
     const query = search.trim().toLowerCase();
-    const today = new Date().toISOString().slice(0, 10);
-    const productDate = product.start || "2026-08-15";
+    const today = yangonDateKey();
+    const productDate = product.start ? yangonDateKey(product.start) : "";
     return (!query || [product.name, product.code].some((value) => value.toLowerCase().includes(query)))
       && (tab === "price" || product.promotion)
       && (dateMode !== "today" || productDate === today)
@@ -70,7 +75,7 @@ export default function PricePage() {
     <Box sx={{ px: 2.5, pt: 2 }}>
       <TextField fullWidth value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search product by name or code" slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon sx={{ color: "text.secondary", fontSize: 29 }} /></InputAdornment> } }} sx={searchSx} />
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25, mt: 1.5 }}><TabButton label="Price" active={tab === "price"} onClick={() => setTab("price")} tone="primary.main" /><TabButton label="Promotion" active={tab === "promotion"} onClick={() => setTab("promotion")} tone="success.main" /></Box>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2.25, mb: 1.75 }}><Typography sx={{ fontSize: 16, fontWeight: 500 }}>{visible.length} {tab === "price" ? "Products" : "Promotions"}</Typography><Typography sx={{ fontSize: 16, fontWeight: 700 }}>{tab === "promotion" ? `Active: ${activePromotionCount}` : money(total)}</Typography></Box>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2.25, mb: 1.75 }}><Typography sx={{ fontSize: 16, fontWeight: 500 }}>{visible.length} {tab === "price" ? "Products" : "Promotions"}</Typography>{tab === "promotion" && <Typography sx={{ fontSize: 16, fontWeight: 700 }}>Active: {activePromotionCount}</Typography>}</Box>
       {promotionActionError && <Alert severity="error" sx={{ mb: 1.5 }}>{promotionActionError}</Alert>}
       <Stack spacing={1.75}>{visible.map((product) => <ProductCard key={product.id} product={product} promotion={tab === "promotion"} ending={endingPromotionId === product.id} onEdit={() => navigate(tab === "price" ? `/price/add?edit=${product.id}` : `/price/promotion/add?edit=${product.id}`)} onEnd={tab === "promotion" ? () => void endPromotion(product) : undefined} />)}</Stack>
     </Box>
@@ -82,6 +87,7 @@ export default function PricePage() {
 function TabButton({ label, active, onClick, tone }) { return <Button onClick={onClick} startIcon={<LocalOfferOutlinedIcon />} sx={{ minHeight: 54, borderRadius: 1.25, border: "1px solid", borderColor: active ? tone : "#dfe3e8", bgcolor: active ? "#eaf3ff" : "background.paper", color: tone, fontSize: 16, fontWeight: 700, textTransform: "none" }}>{label}</Button>; }
 function ProductCard({ product, promotion, onEdit, onEnd, ending }) {
   const period = promotion ? formatPromotionPeriod(product.start, product.end) : "";
+  if (promotion && product.scope !== "PRODUCT") return <PromotionSummaryCard product={product} period={period} onEdit={onEdit} onEnd={onEnd} ending={ending} />;
   return <Paper elevation={2} sx={{ p: { xs: 1.75, sm: 2.25 }, borderRadius: 1.75, boxShadow: "0 2px 8px rgba(15,23,42,0.12)" }}>
     <Box sx={{ display: "grid", gridTemplateColumns: promotion ? "auto minmax(0, 1fr) auto auto auto" : "auto minmax(0, 1fr) auto", gap: { xs: 0.65, sm: 1 }, alignItems: "center" }}>
       <Chip label={promotion ? (product.ended ? "End Promotion" : "Promotion") : "Price"} size="small" sx={{ height: 28, bgcolor: promotion ? (product.ended ? "#ffebee" : "#e3f5e6") : "#eaf3ff", color: promotion ? (product.ended ? "error.main" : "#168437") : "primary.main", borderRadius: 1, fontSize: 12, fontWeight: 600, "& .MuiChip-label": { px: 0.8 } }} />
@@ -93,6 +99,7 @@ function ProductCard({ product, promotion, onEdit, onEnd, ending }) {
     <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", columnGap: 1.5, mt: 2 }}><Metric label="Cost Price" value={money(product.cost)} /><Box sx={{ bgcolor: "#d9dee5" }} /><Metric label="Sell Price" value={money(product.price)} caption={promotion && product.discountAmount ? `Discount ${money(product.discountAmount)} (${product.discountPercent}%)` : ""} /></Box>
   </Paper>;
 }
+function PromotionSummaryCard({ product, period, onEdit, onEnd, ending }) { const all = product.scope === "ALL"; return <Paper elevation={2} sx={{ p: { xs: 1.75, sm: 2.25 }, borderRadius: 1.75, boxShadow: "0 2px 8px rgba(15,23,42,0.12)" }}><Box sx={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto auto", gap: 1, alignItems: "center" }}><Chip label={product.ended ? "End Promotion" : "Promotion"} size="small" sx={{ height: 28, bgcolor: product.ended ? "#ffebee" : "#e3f5e6", color: product.ended ? "error.main" : "#168437", borderRadius: 1, fontSize: 12, fontWeight: 600 }} /><Typography noWrap sx={{ fontSize: { xs: 16, sm: 17 }, fontWeight: 600 }}>{product.name} <Box component="span" sx={{ color: "text.secondary", fontSize: { xs: 12, sm: 13 }, fontWeight: 500 }}>({all ? "All" : "Category"})</Box></Typography><Chip label={period} size="small" sx={{ height: 26, borderRadius: 99, bgcolor: "#e3f5e6", color: "#168437", fontSize: 10, fontWeight: 700 }} /><Box sx={{ display: "flex", alignItems: "center", gap: .5 }}><Button variant="outlined" startIcon={<EditOutlinedIcon />} onClick={onEdit} sx={{ minHeight: 42, px: { xs: .8, sm: 1.25 }, textTransform: "none", fontSize: 13, fontWeight: 600 }}>Edit</Button>{!product.ended && <IconButton aria-label={`End ${product.name}`} disabled={ending} onClick={onEnd} color="error"><StopCircleOutlinedIcon /></IconButton>}</Box></Box><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", columnGap: 1.5, mt: 2 }}><Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>Applies To</Typography><Typography sx={{ mt: .5, fontSize: 17, fontWeight: 600 }}>{all ? "All Products" : product.categoryName}</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 13 }}>{all ? "Entire shop" : "Selected category"}</Typography></Box><Box sx={{ bgcolor: "#d9dee5" }} /><Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>Discount</Typography><Typography color="success.main" sx={{ mt: .5, fontSize: 17, fontWeight: 600 }}>{product.discountLabel}</Typography><Typography color="text.secondary" sx={{ mt: .25, fontSize: 13 }}>{all ? "Applies to every product" : "Applies to products in this category"}</Typography></Box></Box></Paper>; }
 function formatPromotionPeriod(start, end) { const options = { timeZone: "Asia/Yangon", month: "short", day: "numeric" }; const startDate = new Date(start); const endDate = new Date(end); return Number.isNaN(startDate.valueOf()) || Number.isNaN(endDate.valueOf()) ? "—" : `${startDate.toLocaleDateString("en-US", options)}–${endDate.toLocaleDateString("en-US", options)}`; }
 function Metric({ label, value, caption }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>{label}</Typography><Typography sx={{ mt: 0.5, fontSize: 17, fontWeight: 600 }}>{value}</Typography>{caption && <Typography color="success.main" sx={{ mt: .35, fontSize: 11, fontWeight: 700 }}>{caption}</Typography>}</Box>; }
 
@@ -113,7 +120,7 @@ function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visib
     </Stack>
     <Box sx={desktopPriceSummarySx}>
       <Typography sx={{ fontSize: 14, fontWeight: 700 }}>{visibleProducts.length} {tabLabel}</Typography>
-      <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 13 }}>{tab === "promotion" ? "Active Promotions" : "Total Value"}</Typography><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{tab === "promotion" ? activePromotionCount : money(total)}</Typography></Box>
+      {tab === "promotion" && <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5 }}><Typography color="text.secondary" sx={{ fontSize: 13 }}>Active Promotions</Typography><Typography sx={{ fontSize: 20, fontWeight: 700 }}>{activePromotionCount}</Typography></Box>}
     </Box>
     <Box sx={desktopProductGridSx}>{visibleProducts.map((product) => <DesktopProductCard key={product.id} product={product} promotion={tab === "promotion"} ending={endingPromotionId === product.id} onEnd={tab === "promotion" ? () => void onEnd(product) : undefined} onEdit={() => setDialog(tab === "promotion" ? "promotion" : "price")} />)}</Box>
     {!visibleProducts.length && <Typography align="center" color="text.secondary" sx={{ py: 8 }}>No {tabLabel.toLowerCase()} found.</Typography>}
@@ -126,6 +133,7 @@ function DesktopPriceTab({ active, label, tone, onClick }) {
 }
 
 function DesktopProductCard({ product, promotion, onEdit, onEnd, ending }) {
+  if (promotion && product.scope !== "PRODUCT") return <PromotionSummaryCard product={product} period={formatPromotionPeriod(product.start, product.end)} onEdit={onEdit} onEnd={onEnd} ending={ending} />;
   return <Paper variant="outlined" sx={desktopProductCardSx}>
     <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 24 }}>
       <Chip label={promotion ? (product.ended ? "End Promotion" : "Promotion") : "Price"} size="small" sx={{ height: 22, borderRadius: 1, bgcolor: promotion ? (product.ended ? "#ffebee" : "#e5f5e8") : "#edf5ff", color: promotion ? (product.ended ? "error.main" : "#278a45") : "primary.main", fontSize: 11, fontWeight: 700, "& .MuiChip-label": { px: .75 } }} />

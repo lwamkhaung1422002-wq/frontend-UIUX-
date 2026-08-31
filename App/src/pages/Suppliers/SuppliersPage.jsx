@@ -194,6 +194,10 @@ export default function SuppliersPage() {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuRecord, setMenuRecord] = useState(null);
   const [archiveTarget, setArchiveTarget] = useState(null);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [paymentCancelTarget, setPaymentCancelTarget] = useState(null);
+  const [selectedPaymentId, setSelectedPaymentId] = useState("");
+  const [paymentCancelReason, setPaymentCancelReason] = useState("");
   const [archiveError, setArchiveError] = useState("");
   const [archiving, setArchiving] = useState(false);
   const api = usePosApi();
@@ -201,12 +205,12 @@ export default function SuppliersPage() {
   const { shop } = useAuth();
   const { data: purchasesResult } = usePurchasesQuery({ pageSize: 100 });
   const { data: deliveriesResult } = useSupplierDeliveriesQuery({ page: 1, pageSize: 100 });
-  const apiRecords = useMemo(() => { const purchases = (purchasesResult?.purchases || []).map((purchase) => {
+  const apiRecords = useMemo(() => { const purchases = [].map((purchase) => {
     const paid = Number(purchase.paidAmount || 0) >= Number(purchase.total || 0);
     const payment = [...(purchase.payments || [])].sort((a, b) => new Date(b.paidAt) - new Date(a.paidAt))[0];
     const date = supplierDate(paid ? payment?.paidAt || purchase.updatedAt : purchase.expectedAt || purchase.createdAt);
     return { id: purchase.purchaseNumber || purchase.id, apiId: purchase.id, supplierId: purchase.supplierId, name: purchase.supplier?.name || "Supplier", amount: paid ? Number(purchase.paidAmount || purchase.total || 0) : Math.max(0, Number(purchase.total || 0) - Number(purchase.paidAmount || 0)), status: purchase.status === "cancelled" ? "Cancel" : paid ? "Paid" : "Credit", receiveDate: supplierDate(purchase.createdAt), dateLabel: paid ? "Paid" : "Due", date, method: payment?.method === "KBZ Pay" ? "KBZPay" : payment?.method || "", hasPaymentRecord: (purchase.payments || []).length > 0 };
-  }); const purchaseSupplierIds = new Set(purchases.map((record) => record.supplierId)); const deliveries = (deliveriesResult?.records || []).filter((record) => !record.supplierId || !purchaseSupplierIds.has(record.supplierId)).map((record) => { const paid = (record.payments || []).filter((payment) => !payment.reversedAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0); const amount = Number(record.amount || 0); return { id: record.invoiceNumber || record.id, apiId: record.id, supplierId: record.supplierId, name: record.supplierName || record.supplier?.name || "Supplier", amount: Math.max(0, amount - paid), status: paid >= amount ? "Paid" : "Credit", receiveDate: supplierDate(record.receivedAt), dateLabel: paid >= amount ? "Paid" : "Due", date: supplierDate(paid >= amount ? (record.payments || []).at(-1)?.paidAt : record.dueAt || record.receivedAt), method: (record.payments || []).at(-1)?.method || "", deliveryOnly: true, deliveryRecord: record, hasPaymentRecord: paid > 0, sortAt: new Date(record.createdAt || record.receivedAt).getTime() }; }); return [...purchases, ...deliveries].sort((left, right) => (right.sortAt || new Date(right.date || 0).getTime()) - (left.sortAt || new Date(left.date || 0).getTime())); }, [deliveriesResult, purchasesResult]);
+  }); const deliveries = (deliveriesResult?.records || []).map((record) => { const activePayments = (record.payments || []).filter((payment) => !payment.reversedAt && !payment.reversal); const activePaid = Number(record.activePaid ?? activePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)); const amount = Number(record.amount || 0); const remaining = Number(record.remaining ?? Math.max(0, amount - activePaid)); const invoiceStatus = record.invoiceStatus || (record.status === "cancelled" ? "Cancelled" : remaining === 0 ? "Paid" : "Credit"); return { id: record.invoiceNumber || record.id, apiId: record.id, supplierId: record.supplierId, name: record.supplierName || record.supplier?.name || "Supplier", amount: invoiceStatus === "Paid" ? amount : remaining, totalAmount: amount, remainingAmount: remaining, activePaid, status: invoiceStatus === "Cancelled" ? "Cancel" : invoiceStatus, receiveDate: supplierDate(record.receivedAt), dateLabel: invoiceStatus === "Paid" ? "Paid" : invoiceStatus === "Cancelled" ? "Cancelled" : "Due", date: supplierDate(invoiceStatus === "Paid" ? activePayments.at(-1)?.paidAt : record.cancelledAt || record.dueAt || record.receivedAt), method: activePayments.at(-1)?.method || "", deliveryOnly: true, deliveryRecord: record, hasPaymentRecord: activePaid > 0, activePaymentRecordCount: Number(record.activePaymentCount ?? activePayments.length), allowedActions: record.allowedActions, sortAt: new Date(record.createdAt || record.receivedAt).getTime() }; }); return [...purchases, ...deliveries].sort((left, right) => (right.sortAt || new Date(right.date || 0).getTime()) - (left.sortAt || new Date(left.date || 0).getTime())); }, [deliveriesResult]);
 
   useEffect(() => {
     const openFilter = () => setFilterOpen(true);
@@ -235,17 +239,20 @@ export default function SuppliersPage() {
     setTo("");
   };
   const archiveSupplier = async () => {
-    if (!archiveTarget?.supplierId) return;
+    if (!archiveTarget?.apiId) return;
     setArchiving(true);
     setArchiveError("");
     try {
-      if (archiveTarget.deliveryOnly) await api.suppliers.removeDeliveryRecord(archiveTarget.apiId); else await api.suppliers.remove(archiveTarget.supplierId);
+      if (archiveTarget.deliveryOnly) {
+        if (!archiveReason.trim()) { setArchiveError("Cancellation reason is required."); return; }
+        await api.suppliers.cancelDeliveryRecord(archiveTarget.apiId, { reason: archiveReason.trim() });
+      } else await api.suppliers.remove(archiveTarget.supplierId);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "suppliers"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }),
         queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "purchases"] }),
       ]);
-      setArchiveTarget(null);
+      setArchiveTarget(null); setArchiveReason("");
     } catch (error) {
       setArchiveError(error.message || "Unable to delete supplier.");
     } finally {
@@ -582,19 +589,24 @@ export default function SuppliersPage() {
           Edit
         </MenuItem>}
         {menuRecord?.status !== "Cancel" && <MenuItem
-          onClick={() => { setArchiveTarget(menuRecord); setMenuAnchor(null); setMenuRecord(null); }}
+          onClick={() => { if (menuRecord.deliveryOnly && Number(menuRecord.activePaymentRecordCount || 0) > 0) { const active = (menuRecord.deliveryRecord?.payments || []).filter((payment) => !payment.reversedAt && !payment.reversal); setPaymentCancelTarget(menuRecord); setSelectedPaymentId(active[0]?.id || ""); setPaymentCancelReason(""); } else setArchiveTarget(menuRecord); setMenuAnchor(null); setMenuRecord(null); }}
           sx={{ ...menuItemSx, color: "error.main" }}
         >
           <DeleteOutlineRoundedIcon
             sx={{ fontSize: 15, color: "error.main" }}
           />
-          Delete
+          {menuRecord?.deliveryOnly && Number(menuRecord?.activePaymentRecordCount || 0) > 0 ? "Cancel Payment" : "Cancel Invoice"}
         </MenuItem>}
       </Menu>
+      <Dialog open={Boolean(paymentCancelTarget)} onClose={archiving ? undefined : () => { setPaymentCancelTarget(null); setPaymentCancelReason(""); setArchiveError(""); }} fullWidth slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } } }}>
+        <DialogTitle>Cancel Payment</DialogTitle>
+        <DialogContent><Typography color="text.secondary">Choose the supplier payment to cancel.</Typography><TextField select fullWidth label="Payment" value={selectedPaymentId} onChange={(event) => setSelectedPaymentId(event.target.value)} sx={{ mt: 2 }}>{(paymentCancelTarget?.deliveryRecord?.payments || []).filter((payment) => !payment.reversedAt && !payment.reversal).map((payment) => <MenuItem key={payment.id} value={payment.id}>{payment.method} · {money(payment.amount)} · {supplierDate(payment.paidAt)}</MenuItem>)}</TextField><TextField required fullWidth label="Cancel Payment Reason" value={paymentCancelReason} onChange={(event) => setPaymentCancelReason(event.target.value)} sx={{ mt: 1.5 }} />{archiveError && <Typography color="error" sx={{ mt: 1 }}>{archiveError}</Typography>}</DialogContent>
+        <DialogActions><Button onClick={() => { setPaymentCancelTarget(null); setPaymentCancelReason(""); setArchiveError(""); }} disabled={archiving}>Back</Button><Button color="error" variant="contained" disabled={archiving || !selectedPaymentId || !paymentCancelReason.trim()} onClick={async () => { setArchiving(true); setArchiveError(""); try { await api.suppliers.reverseDeliveryPayment(paymentCancelTarget.apiId, selectedPaymentId, { reason: paymentCancelReason.trim() }); await queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }); setPaymentCancelTarget(null); } catch (error) { setArchiveError(error.message || "Payment could not be cancelled."); } finally { setArchiving(false); } }}>{archiving ? "Cancelling…" : "Cancel Payment"}</Button></DialogActions>
+      </Dialog>
       <Dialog open={Boolean(archiveTarget)} onClose={archiving ? undefined : () => { setArchiveTarget(null); setArchiveError(""); }} fullWidth slotProps={{ paper: { sx: { m: 2.5, borderRadius: 2.5, maxWidth: 420 } } }}>
-        <DialogTitle>Delete Supplier</DialogTitle>
-        <DialogContent><Typography color="text.secondary">Delete <strong>{archiveTarget?.name}</strong>? This is only available when there are no payment records.</Typography>{archiveError && <Typography color="error" sx={{ mt: 1 }}>{archiveError}</Typography>}</DialogContent>
-        <DialogActions><Button onClick={() => { setArchiveTarget(null); setArchiveError(""); }} disabled={archiving}>Cancel</Button><Button color="error" variant="contained" onClick={archiveSupplier} disabled={archiving}>{archiving ? "Deleting…" : "Delete"}</Button></DialogActions>
+        <DialogTitle>Cancel Invoice</DialogTitle>
+        <DialogContent><Typography color="text.secondary">Cancel <strong>{archiveTarget?.name}</strong>? A cancellation reason is required.</Typography><TextField autoFocus fullWidth required label="Cancel Invoice Reason" value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} sx={{ mt: 2 }} />{archiveError && <Typography color="error" sx={{ mt: 1 }}>{archiveError}</Typography>}</DialogContent>
+        <DialogActions><Button onClick={() => { setArchiveTarget(null); setArchiveReason(""); setArchiveError(""); }} disabled={archiving}>Back</Button><Button color="error" variant="contained" onClick={archiveSupplier} disabled={archiving || !archiveReason.trim()}>{archiving ? "Cancelling…" : "Cancel Invoice"}</Button></DialogActions>
       </Dialog>
     </Box>
   );
@@ -626,7 +638,7 @@ function DesktopSuppliers({ initialRecords }) {
       (!query ||
         record.name.toLowerCase().includes(query) ||
         record.id.includes(query)) &&
-      (dateRange !== "today" || record.receiveDate === "2026-08-15") &&
+      (dateRange !== "today" || record.receiveDate === supplierDate(new Date())) &&
       (!from || record.receiveDate >= from) &&
       (!to || record.receiveDate <= to)
     );
@@ -634,10 +646,10 @@ function DesktopSuppliers({ initialRecords }) {
   const total = visibleRecords.reduce((sum, record) => sum + record.amount, 0);
   const open = (mode, record = null) => setDialog({ mode, record });
   const close = () => setDialog(null);
-  const handleDelete = async (record) => {
+  const handleDelete = async (record, reason) => {
     if (record.deliveryOnly) {
-      await api.suppliers.removeDeliveryRecord(record.apiId);
-      setRecords((current) => current.filter((item) => item.apiId !== record.apiId));
+      await api.suppliers.cancelDeliveryRecord(record.apiId, { reason });
+      setRecords((current) => current.map((item) => item.apiId === record.apiId ? { ...item, status: "Cancel" } : item));
     } else {
       if (!record.supplierId) return;
       await api.suppliers.remove(record.supplierId);
@@ -847,7 +859,15 @@ function DesktopSuppliers({ initialRecords }) {
                 fontWeight: 800,
               }}
             >
-              {money(record.amount)}
+              {record.status === "Credit" && Number(record.remainingAmount || 0) > 0 && (
+                <Box
+                  component="span"
+                  sx={{ mr: 1, color: "#ef6c00", fontSize: 12.5, fontWeight: 700 }}
+                >
+                  Remaining {money(record.remainingAmount)}
+                </Box>
+              )}
+              {money(record.totalAmount ?? record.amount)}
             </Typography>
             <Stack
               direction="row"
@@ -989,6 +1009,7 @@ function DesktopSuppliers({ initialRecords }) {
 }
 
 function DesktopSupplierDialog({ dialog, onClose, onDelete, onOpenPayment }) {
+  const [cancelReason, setCancelReason] = useState("");
   if (!dialog) return null;
   const { mode, record } = dialog;
   const title =
@@ -1001,7 +1022,7 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete, onOpenPayment }) {
           : mode === "history"
             ? "Payment History"
             : mode === "delete"
-              ? "Delete Supplier"
+              ? "Cancel Invoice"
               : "Supplier Details";
   const isHistory = mode === "history";
   return (
@@ -1015,9 +1036,7 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete, onOpenPayment }) {
       {!isHistory && <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>{title}</DialogTitle>}
       <DialogContent dividers sx={{ p: mode === "history" ? 2 : 2.5 }}>
         {mode === "delete" ? (
-          <Typography color="text.secondary">
-            Delete <strong>{record.name}</strong>? This is only available when there are no payment records.
-          </Typography>
+          <><Typography color="text.secondary">Cancel <strong>{record.name}</strong>? A cancellation reason is required.</Typography><TextField autoFocus fullWidth required label="Cancel Invoice Reason" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} sx={{ mt: 2 }} /></>
         ) : mode === "history" ? (
           <DesktopSupplierHistory />
         ) : mode === "details" ? (
@@ -1036,10 +1055,11 @@ function DesktopSupplierDialog({ dialog, onClose, onDelete, onOpenPayment }) {
           <Button
             color="error"
             variant="contained"
-            onClick={() => onDelete(record)}
+            onClick={() => onDelete(record, cancelReason.trim())}
+            disabled={!cancelReason.trim()}
             sx={{ textTransform: "none" }}
           >
-            Delete
+            Cancel Invoice
           </Button>
         ) : (
           !isHistory &&
@@ -1089,7 +1109,7 @@ function DesktopSupplierDetailsContent({ record, onOpenPayment }) {
   if (error) return <Typography color="error.main">{error}</Typography>;
   if (!details || !details.delivery) return <Typography color="text.secondary">Loading supplier details…</Typography>;
   const { supplier, delivery, payments } = details;
-  const paidAmount = payments.filter((payment) => !payment.reversedAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const paidAmount = payments.filter((payment) => !payment.reversedAt && !payment.reversal).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   return <Box sx={{ maxWidth: 520, mx: "auto" }}><SupplierDetailsCards supplier={supplier} delivery={delivery} payments={payments} />{paidAmount < Number(delivery.amount || 0) && record.deliveryOnly && <Button fullWidth variant="contained" startIcon={<PaymentsOutlinedIcon />} onClick={() => onOpenPayment(record)} sx={{ mt: 2.5, minHeight: 56, borderRadius: 1.5, textTransform: "none", fontSize: 16, fontWeight: 600 }}>Add Payment</Button>}</Box>;
 }
 
@@ -1603,8 +1623,9 @@ function StatusButton({ label, active, onClick, icon, color }) {
 }
 
 function SupplierCard({ record, onMenu, onClick }) {
+  const cancelled = record.status === "Cancel";
   const paid = record.status === "Paid";
-  const dateColor = paid ? "success.main" : "#ef6c00";
+  const dateColor = cancelled ? "#d14343" : paid ? "success.main" : "#ef6c00";
   return (
     <Paper
       elevation={2}
@@ -1630,7 +1651,7 @@ function SupplierCard({ record, onMenu, onClick }) {
           gridRow: 1,
           justifySelf: "start",
           height: 28,
-          bgcolor: paid ? "#e3f5e6" : "#fff1e4",
+          bgcolor: cancelled ? "#fff1f0" : paid ? "#e3f5e6" : "#fff1e4",
           color: dateColor,
           fontSize: 13,
           fontWeight: 600,
@@ -1695,24 +1716,28 @@ function SupplierCard({ record, onMenu, onClick }) {
           </Box>
         </Typography>
       </Box>
-      <Typography
-        noWrap
-        sx={{
-          gridColumn: 3,
-          gridRow: 1,
-          textAlign: "right",
-          fontSize: 18,
-          fontWeight: 600,
-          lineHeight: 1.2,
-          color: "text.primary",
-          whiteSpace: "nowrap",
-        }}
+      <Stack
+        direction="row"
+        spacing={0.6}
+        alignItems="baseline"
+        sx={{ gridColumn: 3, gridRow: 1, justifySelf: "end", whiteSpace: "nowrap" }}
       >
-        {money(record.amount)}
-      </Typography>
+        {record.status === "Credit" && Number(record.remainingAmount || 0) > 0 && (
+          <Typography sx={{ color: "#ef6c00", fontSize: 12, fontWeight: 700 }}>
+            Remaining {money(record.remainingAmount)}
+          </Typography>
+        )}
+        <Typography
+          noWrap
+          sx={{ fontSize: 18, fontWeight: 600, lineHeight: 1.2, color: "text.primary" }}
+        >
+          {money(record.totalAmount ?? record.amount)}
+        </Typography>
+      </Stack>
       <IconButton
         aria-label={`More actions for ${record.name}`}
         onClick={onMenu}
+        disabled={record.status === "Cancel"}
         size="small"
         sx={{ gridColumn: 3, gridRow: 2, justifySelf: "end", p: 0.25 }}
       >

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { writeAuditLog } from "../lib/audit-log.js";
 import {
+  activateDuePriceEntries,
   assertPricingTarget,
   effectivePromotionState,
   ensureDefaultPriceBook,
@@ -372,10 +373,13 @@ pricingRouter.get("/:shopId/prices", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const query = pagination(request.query); await assertUserOwnsShop(auth.id, shopId);
     const where = { shopId, ...(query.status ? { status: query.status.toUpperCase() } : {}), ...(query.search ? { product: { name: { contains: query.search, mode: "insensitive" as const } } } : {}) };
-    const [entries, totalCount] = await Promise.all([
-      prisma.priceEntry.findMany({ where, include: { product: true, variant: true, productUnit: { include: { unit: true } }, priceBook: true }, orderBy: [{ effectiveFrom: "desc" }], skip: query.skip, take: query.pageSize }),
-      prisma.priceEntry.count({ where }),
-    ]);
+    const [entries, totalCount] = await prisma.$transaction(async (tx) => {
+      await activateDuePriceEntries(tx, shopId);
+      return Promise.all([
+        tx.priceEntry.findMany({ where, include: { product: true, variant: true, productUnit: { include: { unit: true } }, priceBook: true }, orderBy: [{ effectiveFrom: "desc" }], skip: query.skip, take: query.pageSize }),
+        tx.priceEntry.count({ where }),
+      ]);
+    });
     response.json({ entries, page: query.page, pageSize: query.pageSize, totalCount });
   } catch (error) { next(error); }
 });
@@ -390,7 +394,9 @@ pricingRouter.post("/:shopId/prices", async (request, response, next) => {
       if (input.effectiveFrom <= now) {
         await tx.priceEntry.updateMany({ where: { shopId, targetKey, status: "ACTIVE", OR: [{ effectiveTo: null }, { effectiveTo: { gt: input.effectiveFrom } }] }, data: { effectiveTo: input.effectiveFrom, status: "EXPIRED" } });
       }
-      const created = await tx.priceEntry.create({ data: { shopId, priceBookId: book.id, productId: input.productId, targetKey, unitPrice: input.unitPrice, currencyCode: book.currencyCode, effectiveFrom: input.effectiveFrom, status: input.effectiveFrom <= now ? "ACTIVE" : "SCHEDULED", reason: input.reason, actorId: auth.id, ...(input.effectiveTo !== undefined ? { effectiveTo: input.effectiveTo } : {}), ...(input.variantId ? { variantId: input.variantId } : {}), ...(input.productUnitId ? { productUnitId: input.productUnitId } : {}) } });
+      const isImmediate = input.effectiveFrom <= now;
+      const previousUnitPrice = isImmediate ? (target.variant?.price ?? target.product.price) : null;
+      const created = await tx.priceEntry.create({ data: { shopId, priceBookId: book.id, productId: input.productId, targetKey, unitPrice: input.unitPrice, previousUnitPrice, currencyCode: book.currencyCode, effectiveFrom: input.effectiveFrom, status: isImmediate ? "ACTIVE" : "SCHEDULED", reason: input.reason, actorId: auth.id, ...(input.effectiveTo !== undefined ? { effectiveTo: input.effectiveTo } : {}), ...(input.variantId ? { variantId: input.variantId } : {}), ...(input.productUnitId ? { productUnitId: input.productUnitId } : {}) } });
       if (input.effectiveFrom <= now && !input.productUnitId) {
         if (target.variant) await tx.productVariant.update({ where: { id: target.variant.id }, data: { price: input.unitPrice } });
         else await tx.product.update({ where: { id: target.product.id }, data: { price: input.unitPrice, version: { increment: 1 } } });
@@ -422,7 +428,7 @@ pricingRouter.post("/:shopId/prices/bulk", async (request, response, next) => {
         assertPriceAtOrAboveCost(unitPrice, product.cost);
         const targetKey = priceTargetKey(product.id, null, null);
         await tx.priceEntry.updateMany({ where: { shopId, targetKey, status: "ACTIVE", OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }] }, data: { effectiveTo: now, status: "EXPIRED" } });
-        const entry = await tx.priceEntry.create({ data: { shopId, priceBookId: book.id, productId: product.id, targetKey, unitPrice, currencyCode: book.currencyCode, effectiveFrom: now, status: "ACTIVE", reason: input.reason, actorId: auth.id } });
+        const entry = await tx.priceEntry.create({ data: { shopId, priceBookId: book.id, productId: product.id, targetKey, unitPrice, previousUnitPrice: product.price, currencyCode: book.currencyCode, effectiveFrom: now, status: "ACTIVE", reason: input.reason, actorId: auth.id } });
         await tx.product.update({ where: { id: product.id }, data: { price: unitPrice, version: { increment: 1 } } });
         result.push(entry);
       }
@@ -500,7 +506,7 @@ pricingRouter.patch("/:shopId/promotion-campaigns/:id", async (request, response
           data: { targetKey: promotionTargetKey({ ...promotion, channel: input.channel }) },
         })));
       }
-      const updated = await tx.promotionCampaign.update({ where: { id }, data: { state, ...(input.name ? { name: input.name } : {}), version: { increment: 1 } } });
+      const updated = await tx.promotionCampaign.update({ where: { id }, data: { state, ...(state === "CANCELLED" && existing.state !== "CANCELLED" ? { endedAt: new Date() } : {}), ...(input.name ? { name: input.name } : {}), version: { increment: 1 } } });
       await writeAuditLog(tx, { shopId, actorId: auth.id, action: `promotion.campaign.${state.toLowerCase()}`, entity: "PromotionCampaign", entityId: id }); return updated;
     }); response.json({ campaign });
   } catch (error) { next(error); }

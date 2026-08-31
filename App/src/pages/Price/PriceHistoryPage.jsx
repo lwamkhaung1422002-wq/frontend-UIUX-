@@ -23,15 +23,15 @@ export default function PriceHistoryPage() {
   const { data: campaignResult } = usePromotionCampaignsQuery();
   const records = useMemo(() => {
     void legacyRecords;
-    const prices = (priceResult?.entries || []).map((entry) => {
+    const prices = (priceResult?.entries || []).filter((entry) => entry.status !== "SCHEDULED" && entry.status !== "CANCELLED").map((entry) => {
       const at = new Date(entry.effectiveFrom || entry.createdAt);
-      return { type: "Price", name: entry.product?.name || "Product", oldPrice: Number(entry.product?.price || 0), newPrice: Number(entry.unitPrice || 0), date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: entry.reason || "" };
+      return { type: "Price", name: entry.product?.name || "Product", oldPrice: entry.previousUnitPrice == null ? null : Number(entry.previousUnitPrice), newPrice: Number(entry.unitPrice || 0), date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: entry.reason || "", timestamp: at.valueOf() };
     });
     const promotions = (campaignResult?.campaigns || []).flatMap((campaign) => {
       const first = campaign.promotions?.[0] || {}; const ended = ["ENDED", "CANCELLED"].includes(campaign.effectiveState) || campaign.state === "CANCELLED"; const period = first.startsAt && first.endsAt ? `${new Date(first.startsAt).toLocaleDateString("en-GB")} - ${new Date(first.endsAt).toLocaleDateString("en-GB")}` : ""; const createAt = new Date(campaign.createdAt);
       const created = { type: "Promotion", promotionStatus: "created", name: campaign.sampleProduct?.name || campaign.name, promotionName: campaign.name, action: `Promotion created: ${first.value || 0}${first.type === "PERCENTAGE" ? "% off" : ""}`, period, date: createAt.toLocaleDateString("en-GB"), time: createAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: first.reason || "", timestamp: createAt.valueOf() };
       if (!ended) return [created];
-      const endAt = new Date(first.endsAt || campaign.updatedAt || campaign.createdAt);
+      const endAt = new Date(campaign.endedAt || first.endsAt || campaign.updatedAt || campaign.createdAt);
       return [created, { ...created, promotionStatus: "ended", action: campaign.effectiveState === "ENDED" ? "Promotion ended automatically" : "Promotion ended", date: endAt.toLocaleDateString("en-GB"), time: endAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), timestamp: endAt.valueOf() }];
     });
     return [...prices, ...promotions].sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0));
@@ -55,6 +55,6 @@ function HistoryCard({ record }) {
   </Paper>;
 }
 
-function PriceDetail({ record }) { return <Box sx={{ mt: 2 }}><Typography color="text.secondary" sx={{ fontSize: { xs: 14, sm: 16 } }}>Selling price changed</Typography><Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.45, sm: 1.5 }, mt: 1.5, whiteSpace: "nowrap" }}><Typography sx={{ fontSize: { xs: 16, sm: 20 }, fontWeight: 700 }}>{money(record.oldPrice)}</Typography><TrendingUpRoundedIcon sx={{ color: "#168437", fontSize: { xs: 24, sm: 34 } }} /><Typography sx={{ fontSize: { xs: 16, sm: 20 }, fontWeight: 700 }}>{money(record.newPrice)}</Typography></Box></Box>; }
+function PriceDetail({ record }) { return <Box sx={{ mt: 2 }}><Typography color="text.secondary" sx={{ fontSize: { xs: 14, sm: 16 } }}>Selling price changed</Typography><Box sx={{ display: "flex", alignItems: "center", gap: { xs: 0.45, sm: 1.5 }, mt: 1.5, whiteSpace: "nowrap" }}><Typography sx={{ fontSize: { xs: 16, sm: 20 }, fontWeight: 700 }}>{record.oldPrice == null ? "—" : money(record.oldPrice)}</Typography><TrendingUpRoundedIcon sx={{ color: "#168437", fontSize: { xs: 24, sm: 34 } }} /><Typography sx={{ fontSize: { xs: 16, sm: 20 }, fontWeight: 700 }}>{money(record.newPrice)}</Typography></Box></Box>; }
 function PromotionDetail({ record }) { const ended = record.promotionStatus === "ended"; const tone = ended ? "#d14343" : "#168437"; return <Paper elevation={0} sx={{ mt: 1.5, p: { xs: 1.1, sm: 1.4 }, borderRadius: 1.5, bgcolor: ended ? "#fff1f0" : "#f0f8f2", display: "flex", gap: 1, alignItems: "flex-start" }}><LocalOfferRoundedIcon sx={{ mt: 0.2, color: tone, fontSize: 22, flexShrink: 0 }} /><Box><Typography sx={{ fontSize: { xs: 14, sm: 16 }, lineHeight: 1.35 }}>{record.action}</Typography>{record.emphasis && <Typography sx={{ mt: 0.2, color: tone, fontSize: { xs: 15, sm: 17 }, fontWeight: 700 }}>{record.emphasis}</Typography>}{record.period && <Typography sx={{ mt: 0.3, fontSize: { xs: 13, sm: 15 }, lineHeight: 1.35 }}>{record.period}</Typography>}</Box></Paper>; }
 function Meta({ icon, text, compact }) { return <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0, color: "#2459d6" }}><Box sx={{ pt: 0.1, display: "flex" }}>{icon}</Box><Typography sx={{ minWidth: 0, color: "text.primary", fontSize: compact ? { xs: 12, sm: 14 } : { xs: 13, sm: 16 }, lineHeight: 1.35, overflowWrap: "anywhere" }}>{text}</Typography></Box>; }

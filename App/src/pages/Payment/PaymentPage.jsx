@@ -21,6 +21,7 @@ import {
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import CalendarTodayOutlinedIcon from "@mui/icons-material/CalendarTodayOutlined";
+import CancelOutlinedIcon from "@mui/icons-material/CancelOutlined";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import CreditCardOutlinedIcon from "@mui/icons-material/CreditCardOutlined";
@@ -351,10 +352,29 @@ async function loadPaymentRecordsLegacy(api) {
 }
 
 async function loadPaymentRecords(api) {
-  const result = await api.payments.history();
+  const result = await api.payments.history({ view: "worklist" });
   return (result.records || []).map((record) => {
-    const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Yangon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(record.occurredAt)).replace(/\//g, "-");
-    return { ...record, method: record.method || "", date, isoDate: date, dateLabel: record.status === "Paid" ? "Paid" : record.status === "Partial" ? "Partial" : "Due", sortAt: new Date(record.occurredAt).getTime() };
+    const date = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Yangon",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .format(new Date(record.occurredAt))
+      .replace(/\//g, "-");
+    return {
+      ...record,
+      method: record.method || "",
+      date,
+      isoDate: date,
+      dateLabel:
+        record.status === "Paid"
+          ? "Paid"
+          : record.status === "Partial"
+            ? "Partial"
+            : "Due",
+      sortAt: new Date(record.occurredAt).getTime(),
+    };
   });
 }
 
@@ -392,15 +412,23 @@ export default function PaymentPage() {
   }, [api]);
   useEffect(() => {
     let active = true;
-    api.shop.getSettings().then(({ settings }) => {
-      if (!active) return;
-      const configured = (settings.paymentMethods || [])
-        .filter((item) => item.active !== false)
-        .map((item) => item.name)
-        .filter(Boolean);
-      setPaymentMethods(["Cash", ...configured.filter((item) => item !== "Cash")]);
-    }).catch(() => {});
-    return () => { active = false; };
+    api.shop
+      .getSettings()
+      .then(({ settings }) => {
+        if (!active) return;
+        const configured = (settings.paymentMethods || [])
+          .filter((item) => item.active !== false)
+          .map((item) => item.name)
+          .filter(Boolean);
+        setPaymentMethods([
+          "Cash",
+          ...configured.filter((item) => item !== "Cash"),
+        ]);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [api]);
   const saveExpense = async (entry) => {
     await api.expenses.create({
@@ -408,7 +436,6 @@ export default function PaymentPage() {
       amount: Number(entry.amount),
       category: entry.type,
       method: entry.method === "KBZPay" ? "KBZ Pay" : entry.method,
-      spentAt: entry.date || undefined,
       note: entry.remark || undefined,
     });
     await reloadPayments();
@@ -416,15 +443,17 @@ export default function PaymentPage() {
 
   const visiblePayments = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Yangon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()).replace(/\//g, "-");
     return paymentRecords.filter(
       (payment) =>
         (status === "All" ||
           (status === "Unpaid"
-            ? ["Unpaid", "Partial"].includes(payment.status)
+            ? ["Unpaid", "Partial", "Credit"].includes(payment.status)
             : status === "Expense"
-            ? payment.kind === "expense"
-            : payment.status === status)) &&
+              ? payment.kind === "expense"
+              : status === "Cancel"
+                ? ["Cancel", "Cancelled"].includes(payment.status)
+                : payment.status === status)) &&
         (!query ||
           payment.name.toLowerCase().includes(query) ||
           payment.id.includes(query)) &&
@@ -506,7 +535,7 @@ export default function PaymentPage() {
         <Box
           sx={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
             gap: 1,
             mt: 1.5,
           }}
@@ -536,6 +565,7 @@ export default function PaymentPage() {
             icon={<CreditCardOutlinedIcon />}
             color="#ef6c00"
           />
+          <StatusButton label="Cancel" active={status === "Cancel"} onClick={() => setStatus("Cancel")} icon={<CancelOutlinedIcon />} color="error.main" />
         </Box>
         <Box
           sx={{
@@ -560,12 +590,19 @@ export default function PaymentPage() {
               payment={payment}
               onClick={() =>
                 payment.kind === "sale"
-                  ? navigate(`/sale/${payment.apiId}`, { state: { from: "/payment" } })
-                  : ["supplier", "supplier-delivery"].includes(payment.kind)
-                  ? navigate(payment.kind === "supplier-delivery" ? `/supplier-delivery/${payment.apiId}` : `/suppliers/${payment.supplierId}`, {
+                  ? navigate(`/sale/${payment.apiId}`, {
                       state: { from: "/payment" },
                     })
-                  : setMobileDialog({ mode: "details", record: payment })
+                  : ["supplier", "supplier-delivery"].includes(payment.kind)
+                    ? navigate(
+                        payment.kind === "supplier-delivery"
+                          ? `/supplier-delivery/${payment.apiId}`
+                          : `/suppliers/${payment.supplierId}`,
+                        {
+                          state: { from: "/payment" },
+                        },
+                      )
+                    : setMobileDialog({ mode: "details", record: payment })
               }
               onMenu={(event) => {
                 event.stopPropagation();
@@ -713,14 +750,16 @@ export default function PaymentPage() {
               mt: 1,
             }}
           >
-            {["All", ...paymentMethods].filter((value, index, values) => values.indexOf(value) === index).map((value) => (
-              <FilterButton
-                key={value}
-                label={value}
-                active={method === value}
-                onClick={() => setMethod(value)}
-              />
-            ))}
+            {["All", ...paymentMethods]
+              .filter((value, index, values) => values.indexOf(value) === index)
+              .map((value) => (
+                <FilterButton
+                  key={value}
+                  label={value}
+                  active={method === value}
+                  onClick={() => setMethod(value)}
+                />
+              ))}
           </Box>
           <Button
             fullWidth
@@ -758,14 +797,19 @@ export default function PaymentPage() {
           },
         }}
       >
-        {["Unpaid", "Partial"].includes(menuPayment?.status) && (
+        {((menuPayment?.kind === "supplier-delivery" && menuPayment?.allowedActions?.pay) || ["Unpaid", "Partial"].includes(menuPayment?.status)) && (
           <MenuItem
             onClick={() => {
               if (menuPayment.kind === "supplier-delivery")
-                navigate(`/supplier-delivery/${menuPayment.apiId}/pay`, { state: { from: "/payment" } });
+                navigate(`/suppliers/delivery/${menuPayment.apiId}/pay`, {
+                  state: { from: "/payment" },
+                });
               else if (menuPayment.kind === "supplier")
-                navigate(`/suppliers/${menuPayment.supplierId}/pay`, { state: { from: "/payment" } });
-              else if (menuPayment.kind === "sale") setMobileDialog({ mode: "order-pay", record: menuPayment });
+                navigate(`/suppliers/${menuPayment.supplierId}/pay`, {
+                  state: { from: "/payment" },
+                });
+              else if (menuPayment.kind === "sale")
+                setMobileDialog({ mode: "order-pay", record: menuPayment });
               closeMenu();
             }}
             sx={menuItemSx}
@@ -776,16 +820,32 @@ export default function PaymentPage() {
             Pay
           </MenuItem>
         )}
-        {["supplier", "supplier-delivery"].includes(menuPayment?.kind) && (
+        {["supplier", "supplier-delivery"].includes(menuPayment?.kind) && menuPayment?.allowedActions?.edit && (
           <MenuItem
             onClick={() => {
-              navigate(menuPayment.kind === "supplier-delivery" ? `/supplier-delivery/${menuPayment.apiId}` : `/suppliers/add?edit=${menuPayment?.supplierId}`);
+              navigate(
+                menuPayment.kind === "supplier-delivery"
+                  ? `/supplier-delivery/${menuPayment.apiId}`
+                  : `/suppliers/add?edit=${menuPayment?.supplierId}`,
+              );
               closeMenu();
             }}
             sx={menuItemSx}
           >
             <EditOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />
             Edit
+          </MenuItem>
+        )}
+        {menuPayment?.kind === "supplier-delivery" && menuPayment?.allowedActions?.cancelPayment && (
+          <MenuItem onClick={() => { setMobileDialog({ mode: "select-supplier-payment", record: menuPayment }); closeMenu(); }} sx={{ ...menuItemSx, color: "error.main" }}>
+            <DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />
+            Cancel Payment
+          </MenuItem>
+        )}
+        {menuPayment?.kind === "supplier-delivery" && menuPayment?.allowedActions?.cancelInvoice && (
+          <MenuItem onClick={async () => { const reason = window.prompt("Cancel invoice reason (required):")?.trim(); if (!reason) return; try { await api.suppliers.cancelDeliveryRecord(menuPayment.apiId, { reason }); await reloadPayments(); } catch (error) { setPaymentError(error.message || "Invoice could not be cancelled."); } finally { closeMenu(); } }} sx={{ ...menuItemSx, color: "error.main" }}>
+            <DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />
+            Cancel Invoice
           </MenuItem>
         )}
         {["expense", "income"].includes(menuPayment?.kind) && (
@@ -802,16 +862,40 @@ export default function PaymentPage() {
             Delete
           </MenuItem>
         )}
-        {menuPayment?.kind === "sale" && Number(menuPayment.activePaymentRecordCount || 0) > 1 && Number(menuPayment.remainingAmount || 0) > 0 && (
-          <MenuItem onClick={() => { setMobileDialog({ mode: "select-sale-payment", record: menuPayment }); closeMenu(); }} sx={{ ...menuItemSx, color: "error.main" }}>
-            <DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />Delete
-          </MenuItem>
-        )}
-        {menuPayment?.kind === "sale" && Number(menuPayment.activePaymentRecordCount || 0) <= 1 && (
-          <MenuItem onClick={() => { setMobileDialog({ mode: "delete-sale", record: menuPayment }); closeMenu(); }} sx={{ ...menuItemSx, color: "error.main" }}>
-            <DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />Delete
-          </MenuItem>
-        )}
+        {menuPayment?.kind === "sale" &&
+          Number(menuPayment.activePaymentRecordCount || 0) >= 1 && (
+            <MenuItem
+              onClick={() => {
+                setMobileDialog({
+                  mode: "select-sale-payment",
+                  record: menuPayment,
+                });
+                closeMenu();
+              }}
+              sx={{ ...menuItemSx, color: "error.main" }}
+            >
+              <DeleteOutlineRoundedIcon
+                sx={{ fontSize: 15, color: "error.main" }}
+              />
+              Cancel Payment
+            </MenuItem>
+          )}
+        {menuPayment?.kind === "sale" &&
+          Number(menuPayment.activePaymentRecordCount || 0) === 0 &&
+          menuPayment.status !== "Cancel" && (
+            <MenuItem
+              onClick={() => {
+                setMobileDialog({ mode: "delete-sale", record: menuPayment });
+                closeMenu();
+              }}
+              sx={{ ...menuItemSx, color: "error.main" }}
+            >
+              <DeleteOutlineRoundedIcon
+                sx={{ fontSize: 15, color: "error.main" }}
+              />
+              Cancel Order
+            </MenuItem>
+          )}
       </Menu>
       <MobilePaymentDialog
         dialog={mobileDialog}
@@ -857,7 +941,9 @@ export default function PaymentPage() {
             await reloadPayments();
             setMobileDialog(null);
           } catch (error) {
-            setPaymentError(error.message || "Order payment could not be saved.");
+            setPaymentError(
+              error.message || "Order payment could not be saved.",
+            );
           } finally {
             setSavingPayment(false);
           }
@@ -866,10 +952,29 @@ export default function PaymentPage() {
           setSavingPayment(true);
           setPaymentError("");
           try {
+            const reason = String(
+              window.prompt("Cancel order reason (required):") || "",
+            ).trim();
+            if (!reason) {
+              setSavingPayment(false);
+              return;
+            }
             const { order } = await api.orders.get(record.apiId);
-            const activePayments = (order.payments || []).filter((payment) => Number(payment.amount || 0) > 0 && !(order.payments || []).some((reversal) => Number(reversal.amount || 0) < 0 && reversal.originalPaymentId === payment.id));
-            if (activePayments.length > 1) throw new Error("Cancel later payment records from Payment before cancelling this order.");
-            if (order.fulfillmentStatus !== "cancelled") await api.orders.cancel(order.id, { reason: "Order cancelled" });
+            const activePayments = (order.payments || []).filter(
+              (payment) =>
+                Number(payment.amount || 0) > 0 &&
+                !(order.payments || []).some(
+                  (reversal) =>
+                    Number(reversal.amount || 0) < 0 &&
+                    reversal.originalPaymentId === payment.id,
+                ),
+            );
+            if (activePayments.length > 1)
+              throw new Error(
+                "Cancel later payment records from Payment before cancelling this order.",
+              );
+            if (order.fulfillmentStatus !== "cancelled")
+              await api.orders.cancel(order.id, { reason });
             await reloadPayments();
             setMobileDialog(null);
           } catch (error) {
@@ -878,16 +983,66 @@ export default function PaymentPage() {
             setSavingPayment(false);
           }
         }}
-        onCancelSalePayment={async (record, selectedPaymentId) => {
-          setSavingPayment(true); setPaymentError("");
+        onCancelSalePayment={async (
+          record,
+          selectedPaymentId,
+          suppliedReason,
+        ) => {
+          setSavingPayment(true);
+          setPaymentError("");
           try {
+            const reason = String(
+              suppliedReason ||
+                window.prompt("Cancel payment reason (required):") ||
+                "",
+            ).trim();
+            if (!reason) {
+              setSavingPayment(false);
+              return;
+            }
             const { order } = await api.orders.get(record.apiId);
-            const activePayments = (order.payments || []).filter((payment) => Number(payment.amount || 0) > 0 && !(order.payments || []).some((reversal) => Number(reversal.amount || 0) < 0 && reversal.originalPaymentId === payment.id));
-            const selectedPayment = selectedPaymentId ? activePayments.find((payment) => payment.id === selectedPaymentId) : activePayments.at(-1);
-            if (!selectedPayment) throw new Error("This payment has already been cancelled.");
-            await api.payments.refundOrder(order.id, { method: selectedPayment.method || "Cash", amount: Number(selectedPayment.amount || 0), originalPaymentId: selectedPayment.id, note: "Sale payment cancelled" });
-            await reloadPayments(); setMobileDialog(null);
-          } catch (error) { setPaymentError(error.message || "Payment could not be cancelled."); } finally { setSavingPayment(false); }
+            const activePayments = (order.payments || []).filter(
+              (payment) =>
+                Number(payment.amount || 0) > 0 &&
+                !(order.payments || []).some(
+                  (reversal) =>
+                    Number(reversal.amount || 0) < 0 &&
+                    reversal.originalPaymentId === payment.id,
+                ),
+            );
+            const selectedPayment = selectedPaymentId
+              ? activePayments.find(
+                  (payment) => payment.id === selectedPaymentId,
+                )
+              : activePayments.at(-1);
+            if (!selectedPayment)
+              throw new Error("This payment has already been cancelled.");
+            await api.payments.refundOrder(order.id, {
+              method: selectedPayment.method || "Cash",
+              amount: Number(selectedPayment.amount || 0),
+              originalPaymentId: selectedPayment.id,
+              note: reason,
+            });
+            await reloadPayments();
+            setMobileDialog(null);
+          } catch (error) {
+            setPaymentError(error.message || "Payment could not be cancelled.");
+          } finally {
+            setSavingPayment(false);
+          }
+        }}
+        onCancelSupplierPayment={async (record, paymentId, reason) => {
+          setSavingPayment(true);
+          setPaymentError("");
+          try {
+            await api.suppliers.reverseDeliveryPayment(record.apiId, paymentId, { reason });
+            await reloadPayments();
+            setMobileDialog(null);
+          } catch (error) {
+            setPaymentError(error.message || "Payment could not be cancelled.");
+          } finally {
+            setSavingPayment(false);
+          }
         }}
       />
     </Box>
@@ -922,12 +1077,16 @@ function DesktopPaymentsPage() {
       (status === "All" ||
         (status === "Expense"
           ? record.kind === "expense"
-          : record.status === status)) &&
+          : status === "Unpaid"
+            ? ["Unpaid", "Partial", "Credit"].includes(record.status)
+            : status === "Cancel"
+              ? ["Cancel", "Cancelled"].includes(record.status)
+            : record.status === status)) &&
       (!search ||
         [record.name, record.id].some((value) =>
           value.toLowerCase().includes(search.toLowerCase()),
         )) &&
-      (dateMode !== "today" || date === "2026-08-15") &&
+      (dateMode !== "today" || date === new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Yangon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()).replace(/\//g, "-")) &&
       (dateMode !== "custom" ||
         ((!from || date >= from) && (!to || date <= to)))
     );
@@ -1003,6 +1162,7 @@ function DesktopPaymentsPage() {
           tone="#ef6c00"
           icon={<CreditCardOutlinedIcon />}
         />
+        <DesktopPaymentFilter label="Cancel" active={status === "Cancel"} onClick={() => setStatus("Cancel")} tone="error.main" icon={<CancelOutlinedIcon />} />
         <Button
           variant="outlined"
           startIcon={<HistoryRoundedIcon />}
@@ -1124,9 +1284,12 @@ function DesktopPaymentFilter({
 }
 
 function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
+  const cancelled = ["Cancel", "Cancelled"].includes(payment.status);
   const paid = payment.status === "Paid";
-  const payDue = payment.status === "Unpaid";
-  const tone = paid
+  const payDue = ["sale", "supplier"].includes(payment.kind)
+    ? !cancelled && Number(payment.remainingAmount || 0) > 0
+    : payment.status === "Unpaid";
+  const tone = cancelled ? "#d14343" : paid
     ? "#278a45"
     : payment.kind === "receivable"
       ? "#7b4cc2"
@@ -1159,7 +1322,7 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
           height: 24,
           borderRadius: 1,
           color: tone,
-          bgcolor: paid
+          bgcolor: cancelled ? "#fff1f0" : paid
             ? "#e5f5e8"
             : payment.kind === "receivable"
               ? "#f1eaff"
@@ -1205,6 +1368,7 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
           onMenu(event);
         }}
         size="small"
+        disabled={cancelled}
         sx={{
           gridColumn: 3,
           gridRow: 1,
@@ -1257,6 +1421,14 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
               {payment.method}
             </Typography>
           )}
+          {!cancelled && ["sale", "supplier"].includes(payment.kind) &&
+            Number(payment.remainingAmount || 0) > 0 && (
+              <Typography
+                sx={{ color: "#ef6c00", fontSize: 12, fontWeight: 700 }}
+              >
+                Remaining {money(payment.remainingAmount)}
+              </Typography>
+            )}
           <Typography
             sx={{ color: "text.primary", fontSize: 14, fontWeight: 800 }}
           >
@@ -1901,15 +2073,16 @@ function StatusButton({ label, active, onClick, icon, color }) {
 }
 
 function PaymentCard({ payment, onClick, onMenu }) {
+  const cancelled = ["Cancel", "Cancelled"].includes(payment.status);
   const paid = payment.status === "Paid";
   const tone =
-    payment.status === "Cancel"
+    cancelled
       ? "#d14343"
       : paid || payment.kind === "income" || payment.kind === "expense"
-      ? "#168437"
-      : payment.kind === "receivable"
-        ? "#7b4cc2"
-        : "#ef6c00";
+        ? "#168437"
+        : payment.kind === "receivable"
+          ? "#7b4cc2"
+          : "#ef6c00";
   return (
     <Paper
       elevation={2}
@@ -1935,13 +2108,14 @@ function PaymentCard({ payment, onClick, onMenu }) {
           gridRow: 1,
           justifySelf: "start",
           height: 28,
-          bgcolor: payment.status === "Cancel"
-            ? "#fff1f0"
-            : paid
-            ? "#e3f5e6"
-            : payment.kind === "receivable"
-              ? "#f1eaff"
-              : "#fff1e4",
+          bgcolor:
+            cancelled
+              ? "#fff1f0"
+              : paid
+                ? "#e3f5e6"
+                : payment.kind === "receivable"
+                  ? "#f1eaff"
+                  : "#fff1e4",
           color: tone,
           fontSize: 13,
           fontWeight: 600,
@@ -1981,11 +2155,19 @@ function PaymentCard({ payment, onClick, onMenu }) {
             {payment.method}
           </Typography>
         )}
-        {payment.kind === "sale" && Number(payment.activePaymentRecordCount || 0) > 1 && Number(payment.remainingAmount || 0) > 0 && (
-          <Typography sx={{ color: "#ef6c00", fontSize: 13, fontWeight: 700, lineHeight: 1.2 }}>
-            Remaining {money(payment.remainingAmount)}
-          </Typography>
-        )}
+          {!cancelled && ["sale", "supplier"].includes(payment.kind) &&
+            Number(payment.remainingAmount || 0) > 0 && (
+            <Typography
+              sx={{
+                color: "#ef6c00",
+                fontSize: 13,
+                fontWeight: 700,
+                lineHeight: 1.2,
+              }}
+            >
+              Remaining {money(payment.remainingAmount)}
+            </Typography>
+          )}
         <Typography
           noWrap
           sx={{
@@ -2055,6 +2237,7 @@ function PaymentCard({ payment, onClick, onMenu }) {
       <IconButton
         aria-label={`More actions for ${payment.name}`}
         onClick={onMenu}
+        disabled={cancelled}
         size="small"
         sx={{ gridColumn: 3, gridRow: 2, justifySelf: "end", p: 0.25 }}
       >
@@ -2072,6 +2255,7 @@ function MobilePaymentDialog({
   onOrderPay,
   onDeleteSale,
   onCancelSalePayment,
+  onCancelSupplierPayment,
   paymentMethods,
   saving,
   error,
@@ -2084,14 +2268,28 @@ function MobilePaymentDialog({
     date: "",
     remark: "",
   });
-  const [orderPayment, setOrderPayment] = useState({ amount: "", method: "Cash", date: "", note: "" });
+  const [orderPayment, setOrderPayment] = useState({
+    amount: "",
+    method: "Cash",
+    date: "",
+    note: "",
+  });
   const [selectedSalePaymentId, setSelectedSalePaymentId] = useState("");
+  const [salePaymentReason, setSalePaymentReason] = useState("");
   useEffect(() => {
     if (dialog?.mode === "order-pay") {
-      setOrderPayment({ amount: String(dialog.record.remainingAmount || dialog.record.amount || ""), method: paymentMethods?.[0] || "Cash", date: new Date().toISOString().slice(0, 10), note: "" });
+      setOrderPayment({
+        amount: String(
+          dialog.record.remainingAmount || dialog.record.amount || "",
+        ),
+        method: paymentMethods?.[0] || "Cash",
+        date: new Date().toISOString().slice(0, 10),
+        note: "",
+      });
     }
-    if (dialog?.mode === "select-sale-payment") {
+    if (dialog?.mode === "select-sale-payment" || dialog?.mode === "select-supplier-payment") {
       setSelectedSalePaymentId(dialog.record.paymentOptions?.[0]?.id || "");
+      setSalePaymentReason("");
     }
   }, [dialog, paymentMethods]);
   if (!dialog) return null;
@@ -2123,11 +2321,13 @@ function MobilePaymentDialog({
                 ? "Delete Payment"
                 : dialog.mode === "cancel-sale-payment" || dialog.mode === "select-sale-payment"
                   ? "Cancel Sale Payment"
-                : dialog.mode === "order-pay"
-                  ? "Record Sale Payment"
-                : record.kind === "expense"
-                  ? "Expense Details"
-                  : "Payment Details"}
+                  : dialog.mode === "select-supplier-payment"
+                    ? "Cancel Supplier Payment"
+                  : dialog.mode === "order-pay"
+                    ? "Record Sale Payment"
+                    : record.kind === "expense"
+                      ? "Expense Details"
+                      : "Payment Details"}
           </Typography>
           <IconButton
             aria-label="Close payment dialog"
@@ -2142,42 +2342,156 @@ function MobilePaymentDialog({
             {error}
           </Alert>
         )}
-        {dialog.mode === "select-sale-payment" ? (
-          <Stack spacing={1.5}>
-            <Typography color="text.secondary">Choose the later partial payment to cancel. The first payment remains on the order.</Typography>
-            <TextField select label="Partial payment" value={selectedSalePaymentId} onChange={(event) => setSelectedSalePaymentId(event.target.value)} fullWidth>
-              {(record.paymentOptions || []).map((payment) => <MenuItem key={payment.id} value={payment.id}>{payment.method} · {money(payment.amount)} · {new Date(payment.paidAt).toLocaleDateString()}</MenuItem>)}
-            </TextField>
-            <Button color="error" variant="contained" disabled={saving || !selectedSalePaymentId} onClick={() => onCancelSalePayment(record, selectedSalePaymentId)} sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}>{saving ? "Saving…" : "Cancel Payment"}</Button>
-          </Stack>
-        ) : dialog.mode === "delete" || dialog.mode === "delete-sale" || dialog.mode === "cancel-sale-payment" ? (
+        {dialog.mode === "select-sale-payment" || dialog.mode === "select-supplier-payment" ? (
           <Stack spacing={1.5}>
             <Typography color="text.secondary">
-              {dialog.mode === "cancel-sale-payment" ? <>Cancel this payment for <strong>{record.name}</strong>?</> : <>Cancel <strong>{record.name}</strong>? This keeps the cancelled record for history.</>}
+              Choose the payment to cancel and enter a cancellation reason.
+            </Typography>
+            <TextField
+              select
+              label="Payment"
+              value={selectedSalePaymentId}
+              onChange={(event) => setSelectedSalePaymentId(event.target.value)}
+              fullWidth
+            >
+              {(record.paymentOptions || []).map((payment) => (
+                <MenuItem key={payment.id} value={payment.id}>
+                  {payment.method} · {money(payment.amount)} ·{" "}
+                  {new Date(payment.paidAt).toLocaleDateString()}
+                </MenuItem>
+              ))}
+            </TextField>
+            {dialog.mode === "select-supplier-payment" && <TextField label="Cancel Payment Reason" required value={salePaymentReason} onChange={(event) => setSalePaymentReason(event.target.value)} fullWidth />}
+            <Button
+              color="error"
+              variant="contained"
+              disabled={saving || !selectedSalePaymentId || (dialog.mode === "select-supplier-payment" && !salePaymentReason.trim())}
+              onClick={() => dialog.mode === "select-supplier-payment" ? onCancelSupplierPayment(record, selectedSalePaymentId, salePaymentReason) : onCancelSalePayment(record, selectedSalePaymentId)}
+              sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
+            >
+              {saving ? "Saving…" : "Cancel Payment"}
+            </Button>
+          </Stack>
+        ) : dialog.mode === "delete" ||
+          dialog.mode === "delete-sale" ||
+          dialog.mode === "cancel-sale-payment" ? (
+          <Stack spacing={1.5}>
+            <Typography color="text.secondary">
+              {dialog.mode === "cancel-sale-payment" ? (
+                <>
+                  Cancel this payment for <strong>{record.name}</strong>?
+                </>
+              ) : (
+                <>
+                  Cancel <strong>{record.name}</strong>? This keeps the
+                  cancelled record for history.
+                </>
+              )}
             </Typography>
             <Button
               color="error"
               variant="contained"
               disabled={saving}
-              onClick={() => dialog.mode === "delete-sale" ? onDeleteSale(record) : dialog.mode === "cancel-sale-payment" ? onCancelSalePayment(record) : onDelete(record)}
+              onClick={() =>
+                dialog.mode === "delete-sale"
+                  ? onDeleteSale(record)
+                  : dialog.mode === "cancel-sale-payment"
+                    ? onCancelSalePayment(record)
+                    : onDelete(record)
+              }
               sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
             >
-              {saving ? "Saving…" : dialog.mode === "cancel-sale-payment" ? "Cancel Payment" : "Cancel"}
+              {saving
+                ? "Saving…"
+                : dialog.mode === "cancel-sale-payment"
+                  ? "Cancel Payment"
+                  : "Cancel"}
             </Button>
           </Stack>
         ) : dialog.mode === "order-pay" ? (
           <Stack spacing={1.5}>
-            <Paper elevation={0} sx={{ p: 1.5, bgcolor: "#f4f8ff", border: "1px solid", borderColor: "primary.light", borderRadius: 1.5 }}>
-              <Typography color="text.secondary" sx={{ fontSize: 13 }}>Invoice {record.id} · Remaining balance</Typography>
-              <Typography sx={{ mt: 0.25, fontSize: 22, fontWeight: 800 }}>{money(record.remainingAmount ?? record.amount)}</Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 1.5,
+                bgcolor: "#f4f8ff",
+                border: "1px solid",
+                borderColor: "primary.light",
+                borderRadius: 1.5,
+              }}
+            >
+              <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+                Invoice {record.id} · Remaining balance
+              </Typography>
+              <Typography sx={{ mt: 0.25, fontSize: 22, fontWeight: 800 }}>
+                {money(record.remainingAmount ?? record.amount)}
+              </Typography>
             </Paper>
-            <TextField label="Amount" type="number" value={orderPayment.amount} onChange={(event) => setOrderPayment((current) => ({ ...current, amount: event.target.value }))} fullWidth />
-            <TextField select label="Payment method" value={orderPayment.method} onChange={(event) => setOrderPayment((current) => ({ ...current, method: event.target.value }))} fullWidth>
-              {(paymentMethods?.length ? paymentMethods : ["Cash"]).map((method) => <MenuItem key={method} value={method}>{method}</MenuItem>)}
+            <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+              The full remaining balance will be settled automatically.
+            </Typography>
+            <TextField
+              select
+              label="Payment method"
+              value={orderPayment.method}
+              onChange={(event) =>
+                setOrderPayment((current) => ({
+                  ...current,
+                  method: event.target.value,
+                }))
+              }
+              fullWidth
+            >
+              {(paymentMethods?.length ? paymentMethods : ["Cash"]).map(
+                (method) => (
+                  <MenuItem key={method} value={method}>
+                    {method}
+                  </MenuItem>
+                ),
+              )}
             </TextField>
-            <TextField label="Date" type="date" value={orderPayment.date} onChange={(event) => setOrderPayment((current) => ({ ...current, date: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
-            <TextField label="Remark" value={orderPayment.note} onChange={(event) => setOrderPayment((current) => ({ ...current, note: event.target.value }))} multiline minRows={2} fullWidth />
-            <Button variant="contained" disabled={saving || !Number(orderPayment.amount)} onClick={() => onOrderPay(record, { amount: Number(orderPayment.amount), method: orderPayment.method, ...(orderPayment.date ? { paidAt: `${orderPayment.date}T12:00:00.000Z` } : {}), ...(orderPayment.note.trim() ? { note: orderPayment.note.trim() } : {}) })} sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}>{saving ? "Saving…" : "Record Payment"}</Button>
+            <TextField
+              label="Date"
+              type="date"
+              value={orderPayment.date}
+              onChange={(event) =>
+                setOrderPayment((current) => ({
+                  ...current,
+                  date: event.target.value,
+                }))
+              }
+              slotProps={{ inputLabel: { shrink: true } }}
+              fullWidth
+            />
+            <TextField
+              label="Remark"
+              value={orderPayment.note}
+              onChange={(event) =>
+                setOrderPayment((current) => ({
+                  ...current,
+                  note: event.target.value,
+                }))
+              }
+              multiline
+              minRows={2}
+              fullWidth
+            />
+            <Button
+              variant="contained"
+              disabled={saving || !Number(orderPayment.amount)}
+              onClick={() =>
+                onOrderPay(record, {
+                  amount: Number(orderPayment.amount),
+                  method: orderPayment.method,
+                  ...(orderPayment.note.trim()
+                    ? { note: orderPayment.note.trim() }
+                    : {}),
+                })
+              }
+              sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
+            >
+              {saving ? "Saving…" : "Record Payment"}
+            </Button>
           </Stack>
         ) : dialog.mode === "entry" ? (
           <Stack spacing={1.5}>
@@ -2211,7 +2525,13 @@ function MobilePaymentDialog({
               onChange={update("method")}
               fullWidth
             >
-              {(paymentMethods?.length ? paymentMethods : ["Cash"]).map((method) => <MenuItem key={method} value={method}>{method}</MenuItem>)}
+              {(paymentMethods?.length ? paymentMethods : ["Cash"]).map(
+                (method) => (
+                  <MenuItem key={method} value={method}>
+                    {method}
+                  </MenuItem>
+                ),
+              )}
             </TextField>
             <TextField
               label="Date"

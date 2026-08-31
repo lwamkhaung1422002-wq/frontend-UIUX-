@@ -84,6 +84,25 @@ export async function ensureDefaultPriceBook(tx: DbClient, shopId: string) {
   });
 }
 
+export async function activateDuePriceEntries(tx: DbClient, shopId: string, now = new Date()) {
+  const entries = await tx.priceEntry.findMany({
+    where: { shopId, status: "SCHEDULED", effectiveFrom: { lte: now } },
+    include: { product: true, variant: true },
+    orderBy: [{ effectiveFrom: "asc" }, { createdAt: "asc" }],
+  });
+  for (const entry of entries) {
+    await tx.priceEntry.updateMany({
+      where: { shopId, targetKey: entry.targetKey, status: "ACTIVE", OR: [{ effectiveTo: null }, { effectiveTo: { gt: entry.effectiveFrom } }] },
+      data: { effectiveTo: entry.effectiveFrom, status: "EXPIRED" },
+    });
+    await tx.priceEntry.update({ where: { id: entry.id }, data: { status: "ACTIVE", previousUnitPrice: entry.variant?.price ?? entry.product.price } });
+    if (!entry.productUnitId) {
+      if (entry.variantId) await tx.productVariant.update({ where: { id: entry.variantId }, data: { price: entry.unitPrice } });
+      else await tx.product.update({ where: { id: entry.productId }, data: { price: entry.unitPrice, version: { increment: 1 } } });
+    }
+  }
+}
+
 function roundMoney(value: Prisma.Decimal): number {
   return Number(value.toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString());
 }
@@ -102,6 +121,7 @@ export async function resolvePrice(
     at?: Date | undefined;
   },
 ) {
+  await activateDuePriceEntries(tx, shopId, input.at ?? new Date());
   const { product, variant, productUnit } = await assertPricingTarget(tx, shopId, input);
   const at = input.at ?? new Date();
   const targetKeys = [

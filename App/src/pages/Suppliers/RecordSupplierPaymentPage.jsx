@@ -75,8 +75,9 @@ export default function RecordSupplierPaymentPage() {
       let active = true;
       api.suppliers.deliveryRecord(recordId).then(({ record }) => {
         if (!active) return;
-        const paid = (record.payments || []).filter((payment) => !payment.reversedAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-        setSupplier({ name: record.supplierName || record.supplier?.name || "Supplier", outstanding: Math.max(0, Number(record.amount || 0) - paid) });
+        const activePaid = (record.payments || []).filter((payment) => !payment.reversedAt && !payment.reversal).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+        const outstanding = Number(record.remaining ?? Math.max(0, Number(record.amount || 0) - activePaid));
+        setSupplier({ name: record.supplierName || record.supplier?.name || "Supplier", outstanding });
         setPurchase({ id: record.id });
       }).catch((nextError) => { if (active) setError(nextError.message || "Supplier payment could not be loaded."); }).finally(() => { if (active) setLoading(false); });
       return () => { active = false; };
@@ -173,7 +174,7 @@ export default function RecordSupplierPaymentPage() {
   const remaining = Math.max(0, supplier.outstanding - numericAmount);
   const dueRequired = numericAmount > 0 && numericAmount < supplier.outstanding;
   const isCash = method === "cash";
-  const valid = numericAmount > 0 && numericAmount <= supplier.outstanding && (!dueRequired || dueDate) && (isCash ? cashName && cashPhone && signature : mobileName && mobileNumber && transactionId.trim());
+  const valid = numericAmount > 0 && numericAmount <= supplier.outstanding && (!dueRequired || dueDate) && (isCash ? cashName && cashPhone : mobileName && mobileNumber && transactionId.trim());
   const save = async () => {
     if (saving) return;
     const nextFieldErrors = {};
@@ -210,12 +211,16 @@ export default function RecordSupplierPaymentPage() {
         notes: dueDate ? `Due date: ${dueDate}` : undefined,
       };
       if (recordId) await api.suppliers.payDeliveryRecord(recordId, paymentBody); else await api.purchases.pay(purchase.id, paymentBody);
-      void Promise.all([
+      await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["shops", shop?.id, "purchases"],
         }),
         queryClient.invalidateQueries({
           queryKey: ["shops", shop?.id, "payments"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["shops", shop?.id, "supplier-deliveries"],
+          refetchType: "all",
         }),
       ]);
       navigate(location.state?.from || "/suppliers");

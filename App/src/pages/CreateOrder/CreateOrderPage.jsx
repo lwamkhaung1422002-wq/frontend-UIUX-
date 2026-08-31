@@ -355,7 +355,10 @@ export default function CreateOrderPage() {
   const isPartial = paymentMethod === "other" && otherPayment === "partial";
   const showsAmountReceived = paymentMethod === "cash" || isPartial;
   const insufficientAmount = items.length > 0 && paymentMethod === "cash" && amountReceivedTouched && cashAmount < totals.total;
-  const invalidPartialAmount = items.length > 0 && isPartial && (!amountReceivedTouched || cashAmount <= 0 || cashAmount >= totals.total);
+  // A new order has no existing balance to settle. Partial is simply the
+  // amount received at creation; the later Payment worklist owns settlement
+  // and remaining-balance validation.
+  const invalidPartialAmount = items.length > 0 && isPartial && (!amountReceivedTouched || cashAmount <= 0);
   const updateAmountReceived = (value) => {
     setAmountReceived(value.replace(/[^0-9]/g, ""));
     setAmountReceivedTouched(true);
@@ -399,7 +402,7 @@ export default function CreateOrderPage() {
   const createOrder = async () => {
     if (creatingOrder) return;
     if (insufficientAmount) { setOrderError("Amount received must be at least the total amount."); return; }
-    if (invalidPartialAmount) { setOrderError("Enter a partial amount greater than zero and less than the total."); return; }
+    if (invalidPartialAmount) { setOrderError("Enter a partial payment amount greater than zero."); return; }
     if (!items.length) {
       setOrderError("Add at least one product before creating the order.");
       return;
@@ -415,9 +418,26 @@ export default function CreateOrderPage() {
     setCreatingOrder(true);
     setOrderError("");
     try {
+      const amountReceived =
+        paymentMethod === "other" && otherPayment === "unpaid"
+          ? 0
+          : paymentMethod === "cash" ||
+              (paymentMethod === "other" && otherPayment === "partial")
+            ? paymentMethod === "cash" && !amountReceivedTouched
+              ? totals.total
+              : cashAmount
+            : totals.total;
+      // Cash received can exceed the total; only the order total is a payment.
+      const initialPaymentAmount = Math.min(amountReceived, totals.total);
       const result = await api.orders.create({
         fulfillmentStatus: "reserved",
-        paymentTracking: paymentMethod === "other" && ["unpaid", "partial"].includes(otherPayment),
+        ...(initialPaymentAmount > 0 ? {
+          initialPayment: {
+            method: paymentName,
+            amount: initialPaymentAmount,
+            note: note.trim() || undefined,
+          },
+        } : {}),
         ...(buyerName.trim() ? { customer: { name: buyerName.trim() } } : {}),
         note: note.trim() || undefined,
         items: items.map((item) => ({
@@ -427,22 +447,6 @@ export default function CreateOrderPage() {
         })),
       });
       const order = result.order;
-      const amount =
-        paymentMethod === "other" && otherPayment === "unpaid"
-          ? 0
-          : paymentMethod === "cash" ||
-              (paymentMethod === "other" && otherPayment === "partial")
-            ? paymentMethod === "cash" && !amountReceivedTouched
-              ? totals.total
-              : Math.min(totals.total, cashAmount)
-            : totals.total;
-      if (amount > 0)
-        await api.payments.addToOrder(order.id, {
-          method: paymentName,
-          amount,
-          scope: isPartial ? "credit-settlement" : "order-payment",
-          note: note.trim() || undefined,
-        });
       const completed = await api.orders.updateStatus(order.id, { fulfillmentStatus: "completed" });
       window.dispatchEvent(new Event("inventory-updated"));
       await Promise.all([
@@ -902,7 +906,7 @@ export default function CreateOrderPage() {
           </Alert>
         )}
         {insufficientAmount && <Alert severity="warning" sx={{ mt: 2 }}>Amount received is lower than the total amount.</Alert>}
-        {invalidPartialAmount && <Alert severity="warning" sx={{ mt: 2 }}>Enter an amount less than the total for a partial payment.</Alert>}
+        {invalidPartialAmount && <Alert severity="warning" sx={{ mt: 2 }}>Enter a partial payment amount greater than zero.</Alert>}
         {createdOrder && (
           <Alert severity="success" sx={{ mt: 2 }}>
             Order {createdOrder.orderNumber || createdOrder.id} created
@@ -1424,7 +1428,7 @@ export function DesktopCreateOrder({
               </Box>
               {orderError && <Alert severity="error" sx={{ mt: 1.25 }}>{orderError}</Alert>}
               {insufficientAmount && <Alert severity="warning" sx={{ mt: 1.25 }}>Amount received is lower than the total amount.</Alert>}
-              {invalidPartialAmount && <Alert severity="warning" sx={{ mt: 1.25 }}>Enter an amount less than the total for a partial payment.</Alert>}
+              {invalidPartialAmount && <Alert severity="warning" sx={{ mt: 1.25 }}>Enter a partial payment amount greater than zero.</Alert>}
               {createdOrder && <Alert severity="success" sx={{ mt: 1.25 }}>Order {createdOrder.orderNumber || createdOrder.id} created successfully.</Alert>}
             </CardContent>
           </Card>

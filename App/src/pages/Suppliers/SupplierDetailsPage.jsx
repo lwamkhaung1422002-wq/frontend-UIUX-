@@ -5,6 +5,7 @@ import {
   AppBar,
   Box,
   Button,
+  Chip,
   IconButton,
   Paper,
   Toolbar,
@@ -25,6 +26,23 @@ const money = (value) =>
   `${new Intl.NumberFormat("en-US").format(Number(value || 0))} ကျပ်`;
 const date = (value) => (value ? new Date(value).toLocaleDateString() : "—");
 
+function supplierPaymentActivity(payments) {
+  return payments
+    .flatMap((payment) => {
+      const cancelledAt = payment.reversal?.reversedAt || payment.reversedAt;
+      return [
+        { type: "payment", payment, occurredAt: payment.paidAt || payment.createdAt, order: 0 },
+        ...(cancelledAt
+          ? [{ type: "cancelled", payment, occurredAt: cancelledAt, order: 1 }]
+          : []),
+      ];
+    })
+    .sort((left, right) => {
+      const byTime = new Date(left.occurredAt || 0) - new Date(right.occurredAt || 0);
+      return byTime || left.order - right.order;
+    });
+}
+
 export default function SupplierDetailsPage() {
   const { supplierId, recordId } = useParams();
   const navigate = useNavigate();
@@ -41,10 +59,11 @@ export default function SupplierDetailsPage() {
       api.suppliers.deliveryRecord(recordId).then(({ record }) => {
         if (!active) return;
         const payments = record.payments || [];
-        const paid = payments.filter((payment) => !payment.reversedAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+        const activePaid = payments.filter((payment) => !payment.reversedAt && !payment.reversal).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+        const remaining = Number(record.remaining ?? Math.max(0, Number(record.amount || 0) - activePaid));
         setSupplier({ name: record.supplierName || record.supplier?.name || "Supplier", phone: record.supplierPhone || record.supplier?.phone || "", deliveryRecords: [record] });
         setPurchase({ payments });
-        setOutstandingPurchase(paid < Number(record.amount || 0) ? { id: record.id } : null);
+        setOutstandingPurchase(remaining > 0 ? { id: record.id } : null);
       }).catch((nextError) => { if (active) setError(nextError.message || "Supplier details could not be loaded."); });
       return () => { active = false; };
     }
@@ -102,9 +121,8 @@ export default function SupplierDetailsPage() {
         <Alert severity="info">Loading supplier details…</Alert>
       </Box>
     );
-  const payments = [...(purchase?.payments || [])]
-    .filter((payment) => !payment.reversedAt)
-    .sort((a, b) => new Date(a.paidAt) - new Date(b.paidAt));
+  const paymentActivity = supplierPaymentActivity(purchase?.payments || []);
+  const invoiceStatus = delivery.invoiceStatus || (delivery.status === "cancelled" ? "Cancelled" : "Credit");
   return (
     <Box
       sx={{
@@ -131,7 +149,7 @@ export default function SupplierDetailsPage() {
           <Typography sx={{ fontSize: 20, fontWeight: 600 }}>
             Supplier Details
           </Typography>
-          <Box />
+          {invoiceStatus === "Cancelled" ? <Chip label="Cancelled" size="small" sx={{ justifySelf: "end", bgcolor: "#fff1f0", color: "#d14343", fontWeight: 700 }} /> : <Box />}
         </Toolbar>
       </AppBar>
       <Box sx={{ p: 2.5, maxWidth: 520, mx: "auto" }}>
@@ -151,6 +169,7 @@ export default function SupplierDetailsPage() {
             label="Invoice Number"
             value={delivery.invoiceNumber}
           />
+          <Detail icon={<ReceiptLongOutlinedIcon />} label="Status" value={invoiceStatus} accent={invoiceStatus === "Cancelled"} />
           <Detail
             icon={<LocalShippingOutlinedIcon />}
             label="Delivery Name"
@@ -182,11 +201,16 @@ export default function SupplierDetailsPage() {
             label="Due Date"
             value={date(delivery.dueAt)}
           />
+          {invoiceStatus === "Cancelled" && <><Detail icon={<ReceiptLongOutlinedIcon />} label="Cancel Reason" value={delivery.cancelReason || "—"} /><Detail icon={<CalendarTodayOutlinedIcon />} label="Cancelled At" value={date(delivery.cancelledAt)} /></>}
         </Paper>
-        {payments.map((payment) => (
-          <PaymentSummary key={payment.id} payment={payment} />
-        ))}
-        {outstandingPurchase && (
+        {paymentActivity.map((event) =>
+          event.type === "payment" ? (
+            <PaymentSummary key={`payment-${event.payment.id}`} payment={event.payment} />
+          ) : (
+            <CancelledPaymentSummary key={`cancel-${event.payment.id}`} payment={event.payment} />
+          ),
+        )}
+        {outstandingPurchase && invoiceStatus !== "Cancelled" && (
           <Button
             fullWidth
             variant="contained"
@@ -212,6 +236,8 @@ export default function SupplierDetailsPage() {
     </Box>
   );
 }
+
+function CancelledPaymentSummary({ payment }) { const reversal = payment.reversal || {}; return <Paper elevation={1} sx={{ mt: 2, p: 2, borderRadius: 2, bgcolor: "#fff8f8", border: "1px solid #f2c3c3" }}><Typography sx={{ color: "#d14343", fontSize: 16, fontWeight: 700 }}>Cancelled Payment / Refund Record</Typography><Detail icon={<PaymentsOutlinedIcon />} label="Amount" value={money(payment.amount)} accent /><Detail icon={<PaymentsOutlinedIcon />} label="Payment Method" value={payment.method} /><Detail icon={<ReceiptLongOutlinedIcon />} label="Cancel Reason" value={reversal.reason || payment.reversalReason || "—"} /><Detail icon={<CalendarTodayOutlinedIcon />} label="Cancelled At" value={date(reversal.reversedAt || payment.reversedAt)} /></Paper>; }
 function PaymentSummary({ payment }) {
   const isCash = payment.method === "Cash";
   return (
@@ -293,19 +319,25 @@ function PaymentSummary({ payment }) {
   );
 }
 export function SupplierDetailsCards({ supplier, delivery, payments = [] }) {
+  const activePaid = Number(delivery.activePaid ?? payments.filter((payment) => !payment.reversedAt && !payment.reversal).reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+  const remaining = Number(delivery.remaining ?? Math.max(0, Number(delivery.amount || 0) - activePaid));
+  const status = delivery.invoiceStatus || (delivery.status === "cancelled" ? "Cancelled" : remaining === 0 ? "Paid" : "Credit");
   return <>
     <Paper elevation={2} sx={{ p: 2, borderRadius: 2 }}>
       <Detail icon={<StorefrontOutlinedIcon />} label="Supplier Name" value={supplier.name} />
       <Detail icon={<PhoneOutlinedIcon />} label="Phone" value={supplier.phone || "—"} />
       <Detail icon={<ReceiptLongOutlinedIcon />} label="Invoice Number" value={delivery.invoiceNumber} />
+      <Detail icon={<ReceiptLongOutlinedIcon />} label="Status" value={status} accent={status === "Cancelled"} />
       <Detail icon={<LocalShippingOutlinedIcon />} label="Delivery Name" value={delivery.deliveryName} />
       <Detail icon={<PhoneOutlinedIcon />} label="Delivery Phone" value={delivery.deliveryPhone} />
       <Detail icon={<PersonOutlineRoundedIcon />} label="Receiver Name" value={delivery.receiverName} />
       <Detail icon={<CalendarTodayOutlinedIcon />} label="Receive Date" value={date(delivery.receivedAt)} />
       <Detail icon={<PaymentsOutlinedIcon />} label="Total Amount" value={money(delivery.amount)} accent />
+      {status === "Credit" && <Detail icon={<PaymentsOutlinedIcon />} label="Remaining Amount" value={money(remaining)} accent />}
       <Detail icon={<CalendarTodayOutlinedIcon />} label="Due Date" value={date(delivery.dueAt)} />
+      {status === "Cancelled" && <><Detail icon={<ReceiptLongOutlinedIcon />} label="Cancel Reason" value={delivery.cancelReason || "—"} /><Detail icon={<CalendarTodayOutlinedIcon />} label="Cancelled At" value={delivery.cancelledAt ? date(delivery.cancelledAt) : "—"} /></>}
     </Paper>
-    {payments.map((payment) => <PaymentSummary key={payment.id} payment={payment} />)}
+    {supplierPaymentActivity(payments).map((event) => event.type === "payment" ? <PaymentSummary key={`payment-${event.payment.id}`} payment={event.payment} /> : <CancelledPaymentSummary key={`cancel-${event.payment.id}`} payment={event.payment} />)}
   </>;
 }
 function Detail({ icon, label, value, accent = false }) {

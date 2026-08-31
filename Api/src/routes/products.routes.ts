@@ -348,8 +348,8 @@ productsRouter.get("/:shopId/products/:productId/cost-history", async (request, 
     await assertProductBelongsToShop(productId, shopId);
 
     const movements = await prisma.inventoryMovement.findMany({
-      where: { shopId, productId, direction: "IN", unitCost: { not: null } },
-      select: { id: true, type: true, enteredQuantity: true, unitCost: true, averageCostAfter: true, sourceType: true, occurredAt: true },
+      where: { shopId, productId, unitCost: { not: null }, OR: [{ direction: "IN" }, { type: "ADJUSTMENT_OUT" }] },
+      select: { id: true, type: true, direction: true, enteredQuantity: true, unitCost: true, averageCostAfter: true, sourceType: true, occurredAt: true },
       orderBy: { occurredAt: "desc" },
     });
     response.json({
@@ -357,9 +357,10 @@ productsRouter.get("/:shopId/products/:productId/cost-history", async (request, 
         id: movement.id,
         date: movement.occurredAt,
         stockIn: movement.enteredQuantity,
+        direction: movement.direction,
         unitCost: movement.unitCost,
         averageCost: movement.averageCostAfter,
-        source: movement.type === "PURCHASE_RECEIPT" ? "Purchase Receipt" : movement.type === "OPENING" ? "Stock In" : movement.sourceType,
+        source: movement.type === "PURCHASE_RECEIPT" ? "Purchase Receipt" : movement.type === "OPENING" ? "Stock In" : movement.type === "ADJUSTMENT_IN" ? "Adjustment In" : movement.type === "ADJUSTMENT_OUT" ? "Adjustment Out" : movement.sourceType,
       })),
     });
   } catch (error) {
@@ -648,17 +649,29 @@ productsRouter.delete("/:shopId/products/:productId", async (request, response, 
     if (saleHistoryCount > 0) throw badRequest("Products with sale history cannot be deleted.");
 
     const removedProduct = await prisma.$transaction(async (tx) => {
-      await recordInventoryMovement(tx, {
-        shopId,
-        productId,
-        type: "PRODUCT_DELETED",
-        direction: "OUT",
-        quantity: 0,
-        sourceType: "Product",
-        sourceId: productId,
-        idempotencyKey: `product.delete:${productId}`,
-        reason: "Product deleted",
-      });
+      const [batches, balances, activeReservations] = await Promise.all([
+        tx.inventoryBatch.findMany({ where: { shopId, productId } }),
+        tx.inventoryBalance.findMany({ where: { shopId, productId } }),
+        tx.inventoryReservation.count({ where: { shopId, productId, status: "ACTIVE" } }),
+      ]);
+      if (activeReservations || batches.some((batch) => batch.reservedQuantity > 0) || balances.some((balance) => Number(balance.reserved) > 0)) {
+        throw badRequest("Release reserved stock before deleting this product.");
+      }
+      for (const batch of batches) {
+        if (batch.quantity <= 0) continue;
+        await tx.inventoryBatch.update({ where: { id: batch.id }, data: { quantity: 0, ...(batch.baseQuantity !== null ? { baseQuantity: 0 } : {}) } });
+      }
+      for (const balance of balances) {
+        const available = Number(balance.onHand) - Number(balance.reserved);
+        if (available <= 0) continue;
+        await recordInventoryMovement(tx, {
+          shopId, productId, variantId: balance.variantId, locationId: balance.locationId,
+          type: "PRODUCT_DELETED", direction: "OUT", quantity: available,
+          sourceType: "Product", sourceId: productId,
+          idempotencyKey: `product.delete:${productId}:${balance.locationId}:${balance.variantId ?? "base"}`,
+          reason: "Product deleted",
+        });
+      }
 
       await tx.productVariant.updateMany({
         where: { productId },
@@ -683,7 +696,7 @@ productsRouter.delete("/:shopId/products/:productId", async (request, response, 
         action: "product.delete",
         entity: "Product",
         entityId: productId,
-        metadata: { availableQuantity, retainedInventory: availableQuantity > 0, saleHistoryCount, purchaseHistoryCount, stockMovementHistoryCount },
+        metadata: { availableQuantity, removedInventory: availableQuantity > 0, saleHistoryCount, purchaseHistoryCount, stockMovementHistoryCount },
       });
       return { product: archivedProduct, deleted: false, archived: true };
     });

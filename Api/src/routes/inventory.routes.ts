@@ -15,7 +15,7 @@ const paramsSchema = z.object({
   shopId: z.string().min(1),
 });
 
-const moneySchema = z.coerce.number().int().nonnegative();
+const moneySchema = z.coerce.number().int().positive();
 
 const createInventoryBatchSchema = z.object({
   productId: z.string().trim().min(1, "Product is required."),
@@ -113,6 +113,15 @@ inventoryRouter.get("/:shopId/inventory", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+const costPriceDecreaseSchema = z.object({
+  productId: z.string().trim().min(1, "Product is required."),
+  variantId: z.string().trim().optional(),
+  unitCost: z.coerce.number().int().positive("Cost price must be greater than 0."),
+  quantity: z.coerce.number().int().positive("Quantity must be greater than 0."),
+  reason: z.string().trim().min(1, "Reason is required."),
+  staffName: z.string().trim().min(1, "Staff name is required."),
 });
 
 inventoryRouter.get("/:shopId/inventory-movements", async (request, response, next) => {
@@ -291,6 +300,67 @@ inventoryRouter.delete("/:shopId/inventory/:inventoryBatchId", async (request, r
   }
 });
 
+inventoryRouter.post("/:shopId/inventory/adjustments/by-cost", async (request, response, next) => {
+  try {
+    const authUser = getAuthUser(request);
+    const { shopId } = paramsSchema.parse(request.params);
+    const input = costPriceDecreaseSchema.parse(request.body);
+    await assertUserOwnsShop(authUser.id, shopId);
+    await assertProductBelongsToShop(input.productId, shopId);
+    await assertVariantBelongsToProduct(input.variantId, input.productId);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const batches = await tx.inventoryBatch.findMany({
+        where: { shopId, productId: input.productId, variantId: input.variantId ?? null, unitCost: input.unitCost },
+        orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }],
+      });
+      const availableQuantity = batches.reduce((sum, batch) => sum + Math.max(0, batch.quantity - batch.reservedQuantity), 0);
+      if (input.quantity > availableQuantity) {
+        throw Object.assign(new Error(`Insufficient stock at cost price ${input.unitCost}. Available: ${availableQuantity}`), { name: "ConflictError" });
+      }
+      const beforeQuantity = batches.reduce((sum, batch) => sum + batch.quantity, 0);
+      let remaining = input.quantity;
+      const deductions: Array<{ batch: typeof batches[number]; quantity: number }> = [];
+      for (const batch of batches) {
+        if (remaining <= 0) break;
+        const deducted = Math.min(remaining, Math.max(0, batch.quantity - batch.reservedQuantity));
+        if (!deducted) continue;
+        await tx.inventoryBatch.update({ where: { id: batch.id }, data: { quantity: batch.quantity - deducted } });
+        deductions.push({ batch, quantity: deducted });
+        remaining -= deducted;
+      }
+      const adjustment = await tx.stockAdjustment.create({
+        data: {
+          shopId, productId: input.productId, selectedUnitCost: input.unitCost, action: "SUB", quantity: input.quantity,
+          beforeQuantity, afterQuantity: beforeQuantity - input.quantity, reason: input.reason, staffName: input.staffName,
+        },
+      });
+      await tx.stockAdjustmentAllocation.createMany({
+        data: deductions.map(({ batch, quantity }) => ({ stockAdjustmentId: adjustment.id, inventoryBatchId: batch.id, quantity })),
+      });
+      const movements = [];
+      for (const { batch, quantity } of deductions) {
+        const movement = await recordInventoryMovement(tx, {
+          shopId, productId: batch.productId, variantId: batch.variantId, inventoryBatchId: batch.id,
+          type: "ADJUSTMENT_OUT", direction: "OUT", quantity, unitCost: batch.unitCost,
+          sourceType: "StockAdjustment", sourceId: adjustment.id,
+          idempotencyKey: `inventory.adjust.cost:${adjustment.id}:${batch.id}`,
+          reason: input.reason, staffName: input.staffName,
+        });
+        if (movement) movements.push(movement);
+      }
+      await writeAuditLog(tx, {
+        shopId, actorId: authUser.id, action: "inventory.adjust", entity: "StockAdjustment", entityId: adjustment.id,
+        metadata: { productId: input.productId, unitCost: input.unitCost, quantity: input.quantity, availableQuantity, allocations: deductions.map(({ batch, quantity }) => ({ inventoryBatchId: batch.id, quantity })), reason: input.reason, staffName: input.staffName },
+      });
+      const averageCost = await refreshProductWeightedCost(tx, shopId, input.productId);
+      await Promise.all(movements.map((movement) => tx.inventoryMovement.update({ where: { id: movement.id }, data: { averageCostAfter: averageCost } })));
+      return { adjustment, availableQuantity, allocations: deductions.map(({ batch, quantity }) => ({ inventoryBatchId: batch.id, quantity })) };
+    });
+    response.status(201).json(result);
+  } catch (error) { next(error); }
+});
+
 inventoryRouter.post(
   "/:shopId/inventory/:inventoryBatchId/adjustments",
   async (request, response, next) => {
@@ -349,6 +419,7 @@ inventoryRouter.post(
         const adjustment = await tx.stockAdjustment.create({
           data: {
             shopId,
+            productId: batch.productId,
             inventoryBatchId,
             action,
             quantity: input.quantity,
@@ -376,8 +447,9 @@ inventoryRouter.post(
           },
         });
         const delta = afterQuantity - beforeQuantity;
+        let movement;
         if (delta !== 0) {
-          await recordInventoryMovement(tx, {
+          movement = await recordInventoryMovement(tx, {
             shopId, productId: batch.productId, variantId: batch.variantId,
             inventoryBatchId: batch.id,
             type: delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
@@ -388,7 +460,8 @@ inventoryRouter.post(
             staffName: input.staffName,
           });
         }
-        await refreshProductWeightedCost(tx, shopId, batch.productId);
+        const averageCost = await refreshProductWeightedCost(tx, shopId, batch.productId);
+        if (movement) await tx.inventoryMovement.update({ where: { id: movement.id }, data: { averageCostAfter: averageCost } });
 
         return { inventoryBatch, adjustment };
       });
