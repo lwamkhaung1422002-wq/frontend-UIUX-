@@ -22,7 +22,6 @@ import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
 import HistoryRoundedIcon from "@mui/icons-material/HistoryRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import DrawOutlinedIcon from "@mui/icons-material/DrawOutlined";
-import { usePurchasesQuery } from "../../hooks/usePosQueries";
 import { usePosApi } from "../../hooks/useApiResource";
 
 const legacyPaymentRecords = [
@@ -349,9 +348,7 @@ export default function SupplierHistoryPage() {
   const [configuredMethods, setConfiguredMethods] = useState(["Cash"]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [paymentPageRecords, setPaymentPageRecords] = useState([]);
   const [canonicalRecords, setCanonicalRecords] = useState([]);
-  const { data } = usePurchasesQuery({ page: 1, pageSize: 100 });
   const api = usePosApi();
   useEffect(() => {
     let active = true;
@@ -410,99 +407,6 @@ export default function SupplierHistoryPage() {
       active = false;
     };
   }, [api]);
-  useEffect(() => {
-    if (!pathname.startsWith("/payment")) return undefined;
-    let active = true;
-    Promise.all([api.orders.list({ pageSize: 100 }), api.expenses.list()])
-      .then(([ordersResult, expensesResult]) => {
-        if (!active) return;
-        const sales = (ordersResult.orders || []).flatMap((order) =>
-          (order.payments || [])
-            .filter(
-              (payment) =>
-                Number(payment.amount || 0) > 0 &&
-                (payment.scope === "credit-settlement" ||
-                  ["unpaid", "partial"].includes(
-                    String(order.paymentStatus || "unpaid").toLowerCase(),
-                  )),
-            )
-            .map((payment) => ({
-              payment,
-              name: "Sale",
-              invoice: order.orderNumber || order.id,
-            })),
-        );
-        const expenses = (expensesResult.expenses || []).map((expense) => ({
-          payment: {
-            id: expense.id,
-            amount: expense.amount,
-            method: expense.method,
-            paidAt: expense.spentAt || expense.createdAt,
-          },
-          name: expense.category === "income" ? "Income" : "Expense",
-          invoice: expense.title || "",
-        }));
-        setPaymentPageRecords(
-          [...sales, ...expenses]
-            .map(({ payment, name, invoice }) => {
-              const paidAt = new Date(payment.paidAt || payment.createdAt);
-              return {
-                id: payment.id,
-                transactionId: payment.transactionId || payment.id,
-                supplier: name,
-                invoice,
-                amount: Number(payment.amount || 0),
-                method: payment.method || "Cash",
-                kind: payment.method === "Cash" ? "cash" : "mobile",
-                paidAtMs: paidAt.getTime(),
-                isoDate: historyDateKey(paidAt),
-                paymentDate: historyDateTime(paidAt),
-                relativeTime: relativePaymentTime(paidAt),
-                timestamp: historyDateTime(paidAt),
-              };
-            })
-            .sort((left, right) => right.paidAtMs - left.paidAtMs),
-        );
-      })
-      .catch(() => {
-        if (active) setPaymentPageRecords([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [api, pathname]);
-  const supplierPaymentRecords = useMemo(
-    () =>
-      (data?.purchases || [])
-        .flatMap((purchase) =>
-          (purchase.payments || [])
-            .filter((payment) => !payment.reversedAt)
-            .map((payment) => {
-              const paidAt = new Date(payment.paidAt || payment.createdAt);
-              const method = payment.method || "Cash";
-              return {
-                id: payment.id,
-                transactionId: payment.reference || payment.id,
-                supplier: purchase.supplier?.name || "Supplier",
-                invoice:
-                  purchase.purchaseNumber ||
-                  purchase.supplierInvoiceNumber ||
-                  "",
-                amount: Number(payment.amount || 0),
-                method,
-                kind: method === "Cash" ? "cash" : "mobile",
-                signatureDataUrl: payment.signatureDataUrl,
-                paidAtMs: paidAt.getTime(),
-                isoDate: historyDateKey(paidAt),
-                paymentDate: historyDateTime(paidAt),
-                relativeTime: relativePaymentTime(paidAt),
-                timestamp: historyDateTime(paidAt),
-              };
-            }),
-        )
-        .sort((left, right) => right.paidAtMs - left.paidAtMs),
-    [data],
-  );
   const paymentRecords = canonicalRecords;
 
   const visibleRecords = useMemo(() => {

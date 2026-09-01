@@ -66,10 +66,9 @@ export default function PricePage() {
       && (dateMode !== "today" || productDate === today)
       && (dateMode !== "custom" || ((!from || productDate >= from) && (!to || productDate <= to)));
   }), [dateMode, from, search, sourceProducts, tab, to]);
-  const total = visible.reduce((sum, product) => sum + product.price, 0);
   const activePromotionCount = (campaignResult?.campaigns || []).filter((campaign) => campaign.effectiveState === "RUNNING").length;
 
-  if (!mobile) return <DesktopPricePromotion tab={tab} setTab={setTab} search={search} setSearch={setSearch} products={visible} catalog={catalog} categories={categoryResult?.categories || []} total={total} activePromotionCount={activePromotionCount} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} dialog={desktopDialog} setDialog={setDesktopDialog} onEnd={endPromotion} endingPromotionId={endingPromotionId} />;
+  if (!mobile) return <DesktopPricePromotion tab={tab} setTab={setTab} search={search} setSearch={setSearch} products={visible} catalog={catalog} categories={categoryResult?.categories || []} activePromotionCount={activePromotionCount} dateMode={dateMode} setDateMode={setDateMode} from={from} setFrom={setFrom} to={to} setTo={setTo} dialog={desktopDialog} setDialog={setDesktopDialog} onEnd={endPromotion} endingPromotionId={endingPromotionId} />;
   return <Box sx={{ minHeight: "100dvh", pb: "104px", bgcolor: "#fff", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <Box sx={barSx}><IconButton aria-label="Back to settings" onClick={() => navigate("/settings")} sx={barIconSx}><ArrowBackRoundedIcon sx={{ fontSize: 32 }} /></IconButton><Typography align="center" sx={{ fontSize: 22, fontWeight: 700 }}>Price &amp; Promotion</Typography><IconButton aria-label="Filter prices and promotions" onClick={() => setFilterOpen(true)} sx={barIconSx}><FilterAltOutlinedIcon sx={{ fontSize: 30 }} /></IconButton></Box>
     <Box sx={{ px: 2.5, pt: 2 }}>
@@ -103,7 +102,7 @@ function PromotionSummaryCard({ product, period, onEdit, onEnd, ending }) { cons
 function formatPromotionPeriod(start, end) { const options = { timeZone: "Asia/Yangon", month: "short", day: "numeric" }; const startDate = new Date(start); const endDate = new Date(end); return Number.isNaN(startDate.valueOf()) || Number.isNaN(endDate.valueOf()) ? "—" : `${startDate.toLocaleDateString("en-US", options)}–${endDate.toLocaleDateString("en-US", options)}`; }
 function Metric({ label, value, caption }) { return <Box><Typography color="text.secondary" sx={{ fontSize: 13 }}>{label}</Typography><Typography sx={{ mt: 0.5, fontSize: 17, fontWeight: 600 }}>{value}</Typography>{caption && <Typography color="success.main" sx={{ mt: .35, fontSize: 11, fontWeight: 700 }}>{caption}</Typography>}</Box>; }
 
-function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visibleProducts, catalog, categories, total, activePromotionCount, dateMode, setDateMode, from, setFrom, to, setTo, dialog, setDialog, onEnd, endingPromotionId }) {
+function DesktopPricePromotion({ tab, setTab, search, setSearch, products: visibleProducts, catalog, categories, activePromotionCount, dateMode, setDateMode, from, setFrom, to, setTo, dialog, setDialog, onEnd, endingPromotionId }) {
   const tabLabel = tab === "price" ? "Products" : "Promotions";
   const closeDialog = () => setDialog("");
   return <Paper sx={desktopPricePageSx}>

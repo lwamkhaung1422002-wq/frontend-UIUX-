@@ -1472,14 +1472,6 @@ function DesktopHistoryPaymentCard({ record }) {
   return <Paper elevation={0} sx={{ overflow: "hidden", borderRadius: 1.75, border: "1px solid", borderColor: "#e4e8ed", boxShadow: "0 2px 8px rgba(24, 52, 82, 0.11)" }}><Box sx={{ p: 2.25, pb: 1.875, display: "grid", gridTemplateColumns: "76px minmax(0, 1fr) auto", columnGap: 1.25, alignItems: "start" }}><Chip label="Paid" variant="outlined" sx={{ mt: 0.1, height: 40, minWidth: 72, borderRadius: 1.25, color: "#168437", borderColor: "#36a55a", bgcolor: "#f6fff8", "& .MuiChip-label": { px: 1.4, fontSize: 14, fontWeight: 600 } }} /><Box sx={{ minWidth: 0, pt: 0.15 }}><Typography noWrap sx={{ fontSize: 17.5, lineHeight: 1.3, fontWeight: 600 }}>{record.supplier}</Typography>{record.invoice && <Typography sx={{ mt: 0.95, fontSize: 13.5, lineHeight: 1.2, color: "text.secondary" }}>Invoice: {record.invoice}</Typography>}</Box><Stack direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" sx={{ whiteSpace: "nowrap" }}><Typography sx={{ color: record.method === "Cash" ? "#d87816" : "#238a3a", fontSize: 18, lineHeight: 1.28, fontWeight: 600 }}>{record.method}</Typography><Typography noWrap sx={{ fontSize: 18, lineHeight: 1.28, fontWeight: 600 }}>{money(record.amount)}</Typography></Stack></Box><Divider sx={{ mx: 2.25 }} /><Stack spacing={0.85} sx={{ px: 2.25, py: 1.75 }}>{record.kind === "mobile" && <DesktopHistoryDetailRow icon={<DescriptionOutlinedIcon />} label="Transaction ID" value={record.id} />}<DesktopHistoryDetailRow icon={<CalendarTodayOutlinedIcon />} label={record.dateLabel || "Payment Date"} value={record.paymentDate} /></Stack>{showSignature && <><Divider sx={{ mx: 2.25 }} /><Box sx={{ minHeight: 56, px: 2.25, display: "flex", alignItems: "center", gap: 1.4, color: "primary.main" }}><DrawOutlinedIcon sx={{ fontSize: 23 }} /><Typography sx={{ flex: 1, fontSize: 14, fontWeight: 500 }}>Receiver Signature</Typography><Typography sx={{ color: "text.primary", fontSize: 18, fontFamily: "cursive", fontStyle: "italic" }}>{record.signature}</Typography></Box></>}<Divider /><Box sx={{ minHeight: 58, px: 2.25, display: "flex", alignItems: "center", gap: 1.25, color: "text.secondary" }}><HistoryRoundedIcon sx={{ fontSize: 24, color: "primary.main" }} /><Typography sx={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>{record.relativeTime}</Typography><Typography noWrap sx={{ fontSize: 12.5 }}>{record.timestamp}</Typography></Box></Paper>;
 }
 
-function DesktopDetail({ label, value }) {
-  return (
-    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-      <Typography color="text.secondary">{label}</Typography>
-      <Typography fontWeight={700}>{value}</Typography>
-    </Box>
-  );
-}
 function DesktopSupplierHeader({ children, align }) {
   return (
     <Typography

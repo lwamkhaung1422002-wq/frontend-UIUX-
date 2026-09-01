@@ -57,7 +57,6 @@ export default function RecordSupplierPaymentPage() {
   const [amount, setAmount] = useState("");
   const [cashName, setCashName] = useState("");
   const [cashPhone, setCashPhone] = useState("");
-  const [signature, setSignature] = useState(false);
   const signatureRef = useRef(null);
   const [paymentMethods, setPaymentMethods] = useState([{ id: "cash", name: "Cash" }]);
   const [mobileName, setMobileName] = useState("");
@@ -256,12 +255,10 @@ export default function RecordSupplierPaymentPage() {
     context.strokeStyle = "#1f2937";
     context.lineTo(event.clientX - rect.left, event.clientY - rect.top);
     context.stroke();
-    setSignature(true);
   };
   const clearSignature = () => {
     const canvas = signatureRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-    setSignature(false);
   };
   return (
     <Box

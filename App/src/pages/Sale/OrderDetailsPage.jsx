@@ -178,13 +178,6 @@ export default function OrderDetailsPage() {
         new Date(left.paidAt || left.createdAt) -
         new Date(right.paidAt || right.createdAt),
     );
-  const cancelledPaymentRecords = [...(record.payments || [])]
-    .filter((payment) => Number(payment.amount || 0) < 0)
-    .sort(
-      (left, right) =>
-        new Date(left.paidAt || left.createdAt) -
-        new Date(right.paidAt || right.createdAt),
-    );
   const paymentActivity = [...(record.payments || [])].sort(
     (left, right) =>
       new Date(left.paidAt || left.createdAt) -
@@ -680,64 +673,6 @@ export default function OrderDetailsPage() {
               </Button>
             </CardContent>
           </Card>
-          {false && cancelledPaymentRecords.length > 0 && (
-            <Card sx={{ ...cardSx, mt: 2 }}>
-              <CardContent
-                sx={{
-                  p: isMobile ? 2.5 : 3,
-                  "&:last-child": { pb: isMobile ? 2.5 : 3 },
-                }}
-              >
-                <Typography
-                  sx={{
-                    fontSize: isMobile ? 20 : 21,
-                    fontWeight: 700,
-                    color: "#d14343",
-                    mb: 1.5,
-                  }}
-                >
-                  Cancelled Payments
-                </Typography>
-                <Stack spacing={1.25}>
-                  {cancelledPaymentRecords.map((payment) => (
-                    <Box
-                      key={payment.id}
-                      sx={{
-                        p: 1.25,
-                        borderRadius: 1.5,
-                        bgcolor: isDark ? "rgba(209,67,67,.14)" : "#fff1f0",
-                      }}
-                    >
-                      <DetailRow
-                        label={`Cancelled ${payment.method || "Payment"}`}
-                        value={formatKyat(
-                          Math.abs(Number(payment.amount || 0)),
-                        )}
-                        tone="#d14343"
-                      />
-                      <DetailRow
-                        label="Reason"
-                        value={payment.reason || payment.note || "—"}
-                        tone="#d14343"
-                      />
-                      <Typography
-                        sx={{
-                          mt: 0.5,
-                          color: colors.muted,
-                          fontSize: 13,
-                          textAlign: "right",
-                        }}
-                      >
-                        {new Date(
-                          payment.paidAt || payment.createdAt,
-                        ).toLocaleString()}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Stack>
-              </CardContent>
-            </Card>
-          )}
           <Typography
             sx={{ fontSize: isMobile ? 21 : 22, fontWeight: 700, mt: 2, mb: 1 }}
           >
@@ -888,53 +823,6 @@ export default function OrderDetailsPage() {
                         </Box>
                         );
                       })}
-                    </Stack>
-                  </>
-                )}
-                {false && cancelledPaymentRecords.length > 0 && (
-                  <>
-                    <Divider sx={{ my: 2, borderColor: colors.divider }} />
-                    <Typography
-                      sx={{ fontWeight: 700, mb: 1.25, color: "#d14343" }}
-                    >
-                      Cancelled Payments
-                    </Typography>
-                    <Stack spacing={1.25}>
-                      {cancelledPaymentRecords.map((payment) => (
-                        <Box
-                          key={payment.id}
-                          sx={{
-                            p: 1.25,
-                            borderRadius: 1.5,
-                            bgcolor: isDark ? "rgba(209,67,67,.14)" : "#fff1f0",
-                          }}
-                        >
-                          <DetailRow
-                            label={`Cancelled ${payment.method || "Payment"}`}
-                            value={formatKyat(
-                              Math.abs(Number(payment.amount || 0)),
-                            )}
-                            tone="#d14343"
-                          />
-                          <DetailRow
-                            label="Reason"
-                            value={payment.reason || payment.note || "—"}
-                            tone="#d14343"
-                          />
-                          <Typography
-                            sx={{
-                              mt: 0.5,
-                              color: colors.muted,
-                              fontSize: 13,
-                              textAlign: "right",
-                            }}
-                          >
-                            {new Date(
-                              payment.paidAt || payment.createdAt,
-                            ).toLocaleString()}
-                          </Typography>
-                        </Box>
-                      ))}
                     </Stack>
                   </>
                 )}
