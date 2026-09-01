@@ -94,7 +94,7 @@ npm run build
 
 ## Shop profile and history endpoints
 
-`Shop` supports `name`, optional `address`, and optional `logoUrl`. The API stores only a URL for a logo; image hosting/upload is intentionally owned by a future storage integration.
+`Shop` supports `name`, optional `address`, and optional `logoUrl`. Shop logo uploads use Cloudinary when `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` are configured.
 
 ```bash
 # Read/update the selected shop

@@ -554,4 +554,4 @@ export async function salesReportHandler(request: Parameters<typeof dashboardRou
   }
 }
 
-dashboardRouter.get("/:shopId/reports/sales", salesReportHandler);
+dashboardRouter.get("/:shopId/reports/sales", requireAuth, salesReportHandler);

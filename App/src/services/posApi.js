@@ -54,6 +54,8 @@ export function createPosApi({
     shop: {
       get: () => shopRequest(""),
       update: (body) => shopRequest("", { method: "PATCH", body }),
+      uploadLogo: (file) => { const body = new FormData(); body.append("logo", file); return shopRequest("/logo", { method: "POST", body }); },
+      removeLogo: () => shopRequest("/logo", { method: "DELETE" }),
       getSettings: () => shopRequest("/settings"),
       updateSettings: (body) =>
         shopRequest("/settings", { method: "PATCH", body }),

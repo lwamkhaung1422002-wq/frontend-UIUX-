@@ -57,7 +57,21 @@ export default function AppProvider() {
     return result;
   }, [saveSession]);
   const login = useCallback((credentials) => authenticate("/auth/login", credentials), [authenticate]);
-  const register = useCallback((details) => authenticate("/auth/register", details), [authenticate]);
+  const register = useCallback(async ({ logoFile, ...details }) => {
+    const result = await authenticate("/auth/register", details);
+    if (!logoFile || !result.shop?.id) return result;
+    try {
+      const body = new FormData();
+      body.append("logo", logoFile);
+      const logoResult = await apiRequest(`/shops/${result.shop.id}/logo`, { method: "POST", body, token: result.accessToken });
+      const updatedShop = logoResult.shop;
+      const updatedUser = { ...result.user, shops: (result.user?.shops || []).map((entry) => entry.id === updatedShop.id ? updatedShop : entry) };
+      saveSession({ user: updatedUser, shop: updatedShop }, result.accessToken);
+      return { ...result, user: updatedUser, shop: updatedShop };
+    } catch (error) {
+      return { ...result, logoUploadError: error.message || "Your account was created, but the logo could not be uploaded." };
+    }
+  }, [authenticate, saveSession]);
   const refreshAccessToken = useCallback(async () => {
     try {
       const refresh = await requestAccessTokenRefresh();

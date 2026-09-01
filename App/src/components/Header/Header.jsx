@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { AppBar, Badge, Box, IconButton, Menu, MenuItem, Stack, Toolbar, Typography, useMediaQuery } from "@mui/material";
+import { AppBar, Avatar, Badge, Box, IconButton, Menu, MenuItem, Stack, Toolbar, Typography, useMediaQuery } from "@mui/material";
 import FilterListRoundedIcon from "@mui/icons-material/FilterListRounded";
 import NotificationsRoundedIcon from "@mui/icons-material/NotificationsRounded";
 import AccountCircleRoundedIcon from "@mui/icons-material/AccountCircleRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
+import StorefrontRoundedIcon from "@mui/icons-material/StorefrontRounded";
 import { useLocation, useNavigate } from "react-router";
 import { useAuth } from "../../context/AuthContext";
 import { usePosApi } from "../../hooks/useApiResource";
@@ -38,7 +39,8 @@ export default function Header() {
   useEffect(() => { let active = true; if (!shop?.id) return undefined; api.notifications.list().then((result) => { if (active) setNotifications(result.notifications || []); }).catch(() => {}); return () => { active = false; }; }, [api, shop?.id]);
 
   if (isMobile) {
-    if (pathname.startsWith("/sale/") || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname.startsWith("/supplier-delivery/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/") || pathname.startsWith("/report/")) return null;
+    const mobileShopHeader = ["/", "/sale", "/stock", "/settings"].includes(pathname);
+    if (!mobileShopHeader && (pathname.startsWith("/sale/") || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname.startsWith("/supplier-delivery/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/") || pathname.startsWith("/report/"))) return null;
     const action = pathname === "/stock"
       ? { label: "Sort inventory", icon: <FilterListRoundedIcon />, event: "inventory-sort" }
       : pathname === "/sale"
@@ -46,6 +48,21 @@ export default function Header() {
       : pathname === "/suppliers"
       ? { label: "Filter suppliers", icon: <FilterListRoundedIcon />, event: "suppliers-filter" }
       : null;
+
+    if (mobileShopHeader) return (
+      <AppBar position="sticky" elevation={0} sx={{ bgcolor: "#1976d2", borderBottom: 0 }}>
+        <Toolbar sx={{ minHeight: 64, px: 2, display: "flex", justifyContent: "space-between", gap: 1.5 }}>
+          <Stack direction="row" alignItems="center" spacing={1.15} sx={{ minWidth: 0 }}>
+            <Avatar src={shop?.logoUrl || undefined} alt={shop?.name || "Shop"} sx={{ width: 34, height: 34, bgcolor: "common.white", color: "primary.main", border: "1px solid rgba(255,255,255,.55)" }}><StorefrontRoundedIcon fontSize="small" /></Avatar>
+            <Typography noWrap sx={{ minWidth: 0, color: "common.white", fontSize: 17, fontWeight: 750 }}>{shop?.name || "POS System"}</Typography>
+          </Stack>
+          {action ? <IconButton aria-label={action.label} onClick={(event) => action.event === "inventory-sort" ? setSortAnchor(event.currentTarget) : window.dispatchEvent(new Event(action.event))} sx={{ flexShrink: 0, color: "common.white" }}>{action.icon}</IconButton> : <Box sx={{ width: 40, flexShrink: 0 }} />}
+        </Toolbar>
+        <Menu anchorEl={sortAnchor} open={Boolean(sortAnchor)} onClose={() => setSortAnchor(null)} PaperProps={{ sx: { minWidth: 268, borderRadius: 1, mt: 1 } }}>
+          {[ ["recent", "Recently Added"], ["name", "Name (A-Z)"], ["price", "Price (High to Low)"], ["stock", "Stock (Low to High)"] ].map(([value, label]) => <MenuItem key={value} onClick={() => { window.dispatchEvent(new CustomEvent("inventory-sort", { detail: value })); setSortAnchor(null); }} sx={{ minHeight: 60, fontSize: 17 }}>{label}</MenuItem>)}
+        </Menu>
+      </AppBar>
+    );
 
     return (
       <AppBar position="sticky" elevation={0} sx={{ bgcolor: "#1976d2", borderBottom: 0 }}>
