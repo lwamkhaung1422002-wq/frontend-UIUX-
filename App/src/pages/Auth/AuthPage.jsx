@@ -307,15 +307,18 @@ function MobileAuthPage({ mode }) {
   const [preview, setPreview] = useState("");
   const [fileError, setFileError] = useState("");
   const fileRef = useRef(null);
+  const previewUrlRef = useRef("");
   useEffect(() => {
-    if (!logoFile) {
-      setPreview("");
-      return undefined;
-    }
-    const nextPreview = URL.createObjectURL(logoFile);
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
+  const replacePreview = (file) => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const nextPreview = file ? URL.createObjectURL(file) : "";
+    previewUrlRef.current = nextPreview;
     setPreview(nextPreview);
-    return () => URL.revokeObjectURL(nextPreview);
-  }, [logoFile]);
+  };
   const chooseLogo = (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -329,7 +332,13 @@ function MobileAuthPage({ mode }) {
       return;
     }
     setFileError("");
+    replacePreview(file);
     setLogoFile(file);
+  };
+  const removeLogo = () => {
+    replacePreview(null);
+    setLogoFile(null);
+    setFileError("");
   };
   const field = (label, key, icon, extra = {}) => (
     <Box>
@@ -515,10 +524,7 @@ function MobileAuthPage({ mode }) {
                   preview={preview}
                   fileName={logoFile?.name}
                   onChoose={() => fileRef.current?.click()}
-                  onRemove={() => {
-                    setLogoFile(null);
-                    setFileError("");
-                  }}
+                  onRemove={removeLogo}
                 />
                 {fileError && <Alert severity="error">{fileError}</Alert>}
                 <input
