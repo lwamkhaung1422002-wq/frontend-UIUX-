@@ -1,6 +1,6 @@
 # Online Shop API
 
-Express API for the `App` frontend, designed for Railway with Neon PostgreSQL.
+Express API for the `App` frontend, designed for Railway with Supabase PostgreSQL.
 
 ## Local Development
 
@@ -17,19 +17,19 @@ Create `.env` from `.env.example`:
 ```env
 NODE_ENV=development
 PORT=3108
-DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
+DATABASE_URL="postgresql://postgres.PROJECT_REF:YOUR_PASSWORD@aws-REGION.pooler.supabase.com:5432/postgres?sslmode=require"
 JWT_SECRET="replace-with-a-long-random-secret-at-least-32-characters"
 CORS_ORIGIN="http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
 ```
 
-## Railway + Neon Deployment
+## Railway + Supabase Deployment
 
-1. Create a Neon PostgreSQL database.
+1. Create a Supabase PostgreSQL project. Use its direct connection string for a Railway service with IPv6 access, or the Supavisor **session pooler** (`:5432`) when Railway needs IPv4 access.
 2. Add Railway environment variables:
 
 ```env
 NODE_ENV=production
-DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
+DATABASE_URL="postgresql://postgres.PROJECT_REF:YOUR_PASSWORD@aws-REGION.pooler.supabase.com:5432/postgres?sslmode=require"
 JWT_SECRET="replace-with-a-long-random-secret-at-least-32-characters"
 CORS_ORIGIN="https://your-netlify-site.netlify.app"
 UPSTASH_REDIS_REST_URL="https://your-upstash-instance.upstash.io"
@@ -40,7 +40,7 @@ REFRESH_COOKIE_PATH="/api/auth"
 3. Railway build command:
 
 ```bash
-npm install --include=dev && npm run build
+npm ci --include=dev && npm run build
 ```
 
 4. Configure the Netlify `netlify.toml` `/api/*` redirect with the Railway public API host. The browser must use `/api` as `VITE_API_BASE_URL`, so refresh cookies remain same-origin.
@@ -78,7 +78,7 @@ npm run build
 
 ## Deployment Order
 
-1. Create Neon database.
+1. Create Supabase database and configure SSL enforcement and network restrictions.
 2. Deploy Railway API with `DATABASE_URL`, `JWT_SECRET`, and `CORS_ORIGIN`.
 3. Confirm `https://your-railway-api/health` returns `{ "status": "ok" }`.
 4. Deploy Netlify frontend with `VITE_API_BASE_URL` pointing to Railway.
