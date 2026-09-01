@@ -16,6 +16,7 @@ export default function ShopDetailsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const fileRef = useRef(null);
+  const previewUrlRef = useRef("");
   const { shop, setShop } = useAppPreferences();
   const { shop: authenticatedShop, selectShop } = useAuth();
   const api = usePosApi();
@@ -36,21 +37,29 @@ export default function ShopDetailsPage() {
     }).catch((requestError) => { if (active) setError(requestError.message || "Unable to load shop details."); });
     return () => { active = false; };
   }, [api]);
-  useEffect(() => {
-    if (!logoFile) { setLogoPreview(""); return undefined; }
-    const preview = URL.createObjectURL(logoFile);
-    setLogoPreview(preview);
-    return () => URL.revokeObjectURL(preview);
-  }, [logoFile]);
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
 
   const change = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
+  const clearLogoPreview = () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = "";
+    setLogoPreview("");
+  };
+  const selectLogoPreview = (file) => {
+    clearLogoPreview();
+    const preview = URL.createObjectURL(file);
+    previewUrlRef.current = preview;
+    setLogoPreview(preview);
+  };
   const chooseLogo = (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setError("Choose a JPEG, PNG, or WebP logo image."); return; }
     if (file.size > 5 * 1024 * 1024) { setError("Logo image must be 5 MB or smaller."); return; }
-    setError(""); setNotice(""); setRemoveLogo(false); setLogoFile(file);
+    setError(""); setNotice(""); setRemoveLogo(false); selectLogoPreview(file); setLogoFile(file);
   };
   const applyUpdatedShop = async (updated) => {
     const preferenceShop = { name: updated.name, address: updated.address || "", logo: updated.logoUrl || "" };
@@ -59,7 +68,7 @@ export default function ShopDetailsPage() {
     if (authenticatedShop) selectShop({ ...authenticatedShop, ...updated });
     await queryClient.invalidateQueries({ queryKey: ["shops", authenticatedShop?.id, "settings"] });
   };
-  const removeSelectedLogo = () => { setLogoFile(null); setLogoPreview(""); setRemoveLogo(true); setNotice(""); };
+  const removeSelectedLogo = () => { clearLogoPreview(); setLogoFile(null); setRemoveLogo(true); setNotice(""); };
   const save = async () => {
     setSaving(true); setError(""); setNotice("");
     try {
@@ -68,7 +77,7 @@ export default function ShopDetailsPage() {
       if (removeLogo && updated.logoUrl) { result = await api.shop.removeLogo(); updated = result.shop; }
       if (logoFile) { result = await api.shop.uploadLogo(logoFile); updated = result.shop; }
       await applyUpdatedShop(updated);
-      setLogoFile(null); setRemoveLogo(false); setNotice("Shop details updated successfully.");
+      clearLogoPreview(); setLogoFile(null); setRemoveLogo(false); setNotice("Shop details updated successfully.");
     } catch (requestError) { setError(requestError.message || "Shop details could not be updated. Please try again."); }
     finally { setSaving(false); }
   };
