@@ -186,6 +186,7 @@ void loadSupplierRecords;
 export default function SuppliersPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
+  const location = useLocation();
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -277,7 +278,7 @@ export default function SuppliersPage() {
   };
 
   if (!isMobile)
-    return <DesktopSuppliers key={apiRecords.map((record) => `${record.id}:${record.status}:${record.amount}`).join("|")} initialRecords={apiRecords} />;
+    return <DesktopSuppliers key={`${apiRecords.map((record) => `${record.id}:${record.status}:${record.amount}`).join("|")}:${location.state?.openPaymentRecordId || ""}`} initialRecords={apiRecords} openPaymentRecordId={location.state?.openPaymentRecordId || ""} />;
 
   return (
     <Box
@@ -612,25 +613,26 @@ export default function SuppliersPage() {
   );
 }
 
-function DesktopSuppliers({ initialRecords }) {
+function DesktopSuppliers({ initialRecords, openPaymentRecordId }) {
   const api = usePosApi();
   const navigate = useNavigate();
-  const location = useLocation();
   const [records, setRecords] = useState(initialRecords);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
-  const [dialog, setDialog] = useState(null);
+  const [dialog, setDialog] = useState(() => {
+    const record = initialRecords.find(
+      (item) => item.apiId === openPaymentRecordId && item.deliveryOnly,
+    );
+    return record ? { mode: "pay", record } : null;
+  });
   const [dateAnchor, setDateAnchor] = useState(null);
   const [dateRange, setDateRange] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   useEffect(() => {
-    const recordId = location.state?.openPaymentRecordId;
-    if (!recordId) return;
-    const record = records.find((item) => item.apiId === recordId && item.deliveryOnly);
-    if (record) setDialog({ mode: "pay", record });
+    if (!openPaymentRecordId) return;
     window.history.replaceState({}, "", "/suppliers");
-  }, [location.state?.openPaymentRecordId, records]);
+  }, [openPaymentRecordId]);
   const visibleRecords = records.filter((record) => {
     const query = search.trim().toLowerCase();
     return (
