@@ -50,6 +50,17 @@ export default function RecordSupplierPaymentPage() {
   const api = usePosApi();
   const queryClient = useQueryClient();
   const { shop } = useAuth();
+  const preloadedPurchase = recordId ? null : location.state?.purchase || null;
+  const preloadedSupplier = preloadedPurchase
+    ? {
+        name: preloadedPurchase.supplier?.name || "Supplier",
+        outstanding: Math.max(
+          0,
+          Number(preloadedPurchase.total || 0) -
+            Number(preloadedPurchase.paidAmount || 0),
+        ),
+      }
+    : null;
   const [supplier, setSupplier] = useState(null);
   const [purchase, setPurchase] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -81,16 +92,7 @@ export default function RecordSupplierPaymentPage() {
       }).catch((nextError) => { if (active) setError(nextError.message || "Supplier payment could not be loaded."); }).finally(() => { if (active) setLoading(false); });
       return () => { active = false; };
     }
-    const selectedPurchase = location.state?.purchase;
-    if (selectedPurchase) {
-      setSupplier({
-        name: selectedPurchase.supplier?.name || "Supplier",
-        outstanding: Math.max(0, Number(selectedPurchase.total || 0) - Number(selectedPurchase.paidAmount || 0)),
-      });
-      setPurchase(selectedPurchase);
-      setLoading(false);
-      return undefined;
-    }
+    if (preloadedPurchase) return undefined;
     let active = true;
     Promise.all([
       api.suppliers.list({ page: 1, pageSize: 100 }),
@@ -136,7 +138,7 @@ export default function RecordSupplierPaymentPage() {
     return () => {
       active = false;
     };
-  }, [api, location.state?.purchase, location.state?.purchaseId, recordId, supplierId]);
+  }, [api, location.state?.purchaseId, preloadedPurchase, recordId, supplierId]);
   useEffect(() => {
     let active = true;
     api.shop
@@ -155,13 +157,16 @@ export default function RecordSupplierPaymentPage() {
       active = false;
     };
   }, [api]);
-  if (loading)
+  const activeSupplier = preloadedSupplier || supplier;
+  const activePurchase = preloadedPurchase || purchase;
+  const isLoading = preloadedPurchase ? false : loading;
+  if (isLoading)
     return (
       <Box sx={{ p: 2.5 }}>
         <Typography>Loading payment…</Typography>
       </Box>
     );
-  if (!supplier || !purchase)
+  if (!activeSupplier || !activePurchase)
     return (
       <Box sx={{ p: 2.5 }}>
         <Typography color="error">
@@ -170,15 +175,15 @@ export default function RecordSupplierPaymentPage() {
       </Box>
     );
   const numericAmount = Number(amount) || 0;
-  const remaining = Math.max(0, supplier.outstanding - numericAmount);
-  const dueRequired = numericAmount > 0 && numericAmount < supplier.outstanding;
+  const remaining = Math.max(0, activeSupplier.outstanding - numericAmount);
+  const dueRequired = numericAmount > 0 && numericAmount < activeSupplier.outstanding;
   const isCash = method === "cash";
-  const valid = numericAmount > 0 && numericAmount <= supplier.outstanding && (!dueRequired || dueDate) && (isCash ? cashName && cashPhone : mobileName && mobileNumber && transactionId.trim());
+  const valid = numericAmount > 0 && numericAmount <= activeSupplier.outstanding && (!dueRequired || dueDate) && (isCash ? cashName && cashPhone : mobileName && mobileNumber && transactionId.trim());
   const save = async () => {
     if (saving) return;
     const nextFieldErrors = {};
     if (numericAmount <= 0) nextFieldErrors.amount = "Enter a payment amount.";
-    if (numericAmount > supplier.outstanding) nextFieldErrors.amount = "Payment amount cannot exceed outstanding balance.";
+    if (numericAmount > activeSupplier.outstanding) nextFieldErrors.amount = "Payment amount cannot exceed outstanding balance.";
     if (!isCash && !transactionId.trim()) nextFieldErrors.transactionId = "Transaction ID is required for non-cash payments.";
     if (Object.keys(nextFieldErrors).length) {
       setFieldErrors(nextFieldErrors);
@@ -209,7 +214,7 @@ export default function RecordSupplierPaymentPage() {
             : undefined,
         notes: dueDate ? `Due date: ${dueDate}` : undefined,
       };
-      if (recordId) await api.suppliers.payDeliveryRecord(recordId, paymentBody); else await api.purchases.pay(purchase.id, paymentBody);
+      if (recordId) await api.suppliers.payDeliveryRecord(recordId, paymentBody); else await api.purchases.pay(activePurchase.id, paymentBody);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["shops", shop?.id, "purchases"],
@@ -307,10 +312,10 @@ export default function RecordSupplierPaymentPage() {
             </Box>
             <Box>
               <Typography color="text.secondary" sx={{ fontSize: 14 }}>
-                {supplier.name} · Outstanding Balance
+                {activeSupplier.name} · Outstanding Balance
               </Typography>
               <Typography sx={{ fontSize: 24, fontWeight: 700, mt: 0.25 }}>
-                {money(supplier.outstanding)}
+                {money(activeSupplier.outstanding)}
               </Typography>
             </Box>
           </Box>
