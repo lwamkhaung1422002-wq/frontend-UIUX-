@@ -2163,30 +2163,6 @@ function MobilePaymentDialog({
     date: "",
     remark: "",
   });
-  const [orderPayment, setOrderPayment] = useState({
-    amount: "",
-    method: "Cash",
-    date: "",
-    note: "",
-  });
-  const [selectedSalePaymentId, setSelectedSalePaymentId] = useState("");
-  const [salePaymentReason, setSalePaymentReason] = useState("");
-  useEffect(() => {
-    if (dialog?.mode === "order-pay") {
-      setOrderPayment({
-        amount: String(
-          dialog.record.remainingAmount || dialog.record.amount || "",
-        ),
-        method: paymentMethods?.[0] || "Cash",
-        date: new Date().toISOString().slice(0, 10),
-        note: "",
-      });
-    }
-    if (dialog?.mode === "select-sale-payment" || dialog?.mode === "select-supplier-payment") {
-      setSelectedSalePaymentId(dialog.record.paymentOptions?.[0]?.id || "");
-      setSalePaymentReason("");
-    }
-  }, [dialog, paymentMethods]);
   if (!dialog) return null;
   const update = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -2238,35 +2214,14 @@ function MobilePaymentDialog({
           </Alert>
         )}
         {dialog.mode === "select-sale-payment" || dialog.mode === "select-supplier-payment" ? (
-          <Stack spacing={1.5}>
-            <Typography color="text.secondary">
-              Choose the payment to cancel and enter a cancellation reason.
-            </Typography>
-            <TextField
-              select
-              label="Payment"
-              value={selectedSalePaymentId}
-              onChange={(event) => setSelectedSalePaymentId(event.target.value)}
-              fullWidth
-            >
-              {(record.paymentOptions || []).map((payment) => (
-                <MenuItem key={payment.id} value={payment.id}>
-                  {payment.method} · {money(payment.amount)} ·{" "}
-                  {new Date(payment.paidAt).toLocaleDateString()}
-                </MenuItem>
-              ))}
-            </TextField>
-            {dialog.mode === "select-supplier-payment" && <TextField label="Cancel Payment Reason" required value={salePaymentReason} onChange={(event) => setSalePaymentReason(event.target.value)} fullWidth />}
-            <Button
-              color="error"
-              variant="contained"
-              disabled={saving || !selectedSalePaymentId || (dialog.mode === "select-supplier-payment" && !salePaymentReason.trim())}
-              onClick={() => dialog.mode === "select-supplier-payment" ? onCancelSupplierPayment(record, selectedSalePaymentId, salePaymentReason) : onCancelSalePayment(record, selectedSalePaymentId)}
-              sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
-            >
-              {saving ? "Saving…" : "Cancel Payment"}
-            </Button>
-          </Stack>
+          <PaymentCancellationForm
+            key={`${dialog.mode}:${record.apiId || record.id}:${(record.paymentOptions || []).map((payment) => payment.id).join("|")}`}
+            mode={dialog.mode}
+            record={record}
+            saving={saving}
+            onCancelSalePayment={onCancelSalePayment}
+            onCancelSupplierPayment={onCancelSupplierPayment}
+          />
         ) : dialog.mode === "delete" ||
           dialog.mode === "delete-sale" ||
           dialog.mode === "cancel-sale-payment" ? (
@@ -2304,90 +2259,13 @@ function MobilePaymentDialog({
             </Button>
           </Stack>
         ) : dialog.mode === "order-pay" ? (
-          <Stack spacing={1.5}>
-            <Paper
-              elevation={0}
-              sx={{
-                p: 1.5,
-                bgcolor: "#f4f8ff",
-                border: "1px solid",
-                borderColor: "primary.light",
-                borderRadius: 1.5,
-              }}
-            >
-              <Typography color="text.secondary" sx={{ fontSize: 13 }}>
-                Invoice {record.id} · Remaining balance
-              </Typography>
-              <Typography sx={{ mt: 0.25, fontSize: 22, fontWeight: 800 }}>
-                {money(record.remainingAmount ?? record.amount)}
-              </Typography>
-            </Paper>
-            <Typography color="text.secondary" sx={{ fontSize: 13 }}>
-              The full remaining balance will be settled automatically.
-            </Typography>
-            <TextField
-              select
-              label="Payment method"
-              value={orderPayment.method}
-              onChange={(event) =>
-                setOrderPayment((current) => ({
-                  ...current,
-                  method: event.target.value,
-                }))
-              }
-              fullWidth
-            >
-              {(paymentMethods?.length ? paymentMethods : ["Cash"]).map(
-                (method) => (
-                  <MenuItem key={method} value={method}>
-                    {method}
-                  </MenuItem>
-                ),
-              )}
-            </TextField>
-            <TextField
-              label="Date"
-              type="date"
-              value={orderPayment.date}
-              onChange={(event) =>
-                setOrderPayment((current) => ({
-                  ...current,
-                  date: event.target.value,
-                }))
-              }
-              slotProps={{ inputLabel: { shrink: true } }}
-              fullWidth
-            />
-            <TextField
-              label="Remark"
-              value={orderPayment.note}
-              onChange={(event) =>
-                setOrderPayment((current) => ({
-                  ...current,
-                  note: event.target.value,
-                }))
-              }
-              multiline
-              minRows={2}
-              fullWidth
-            />
-            <Button
-              variant="contained"
-              disabled={saving || !Number(orderPayment.amount)}
-              onClick={() =>
-                onOrderPay(record, {
-                  amount: Number(orderPayment.amount),
-                  method: orderPayment.method,
-                  ...(orderPayment.note.trim()
-                    ? { note: orderPayment.note.trim() }
-                    : {}),
-                })
-              }
-              sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
-            >
-              {saving ? "Saving…" : "Record Payment"}
-            </Button>
-          </Stack>
+          <OrderPaymentForm
+            key={`order-pay:${record.apiId || record.id}:${(paymentMethods || []).join("|")}`}
+            record={record}
+            paymentMethods={paymentMethods}
+            saving={saving}
+            onOrderPay={onOrderPay}
+          />
         ) : dialog.mode === "entry" ? (
           <Stack spacing={1.5}>
             <TextField
@@ -2502,6 +2380,149 @@ function MobilePaymentDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PaymentCancellationForm({
+  mode,
+  record,
+  saving,
+  onCancelSalePayment,
+  onCancelSupplierPayment,
+}) {
+  const [selectedPaymentId, setSelectedPaymentId] = useState(
+    () => record.paymentOptions?.[0]?.id || "",
+  );
+  const [reason, setReason] = useState("");
+  const isSupplierPayment = mode === "select-supplier-payment";
+  return (
+    <Stack spacing={1.5}>
+      <Typography color="text.secondary">
+        Choose the payment to cancel and enter a cancellation reason.
+      </Typography>
+      <TextField
+        select
+        label="Payment"
+        value={selectedPaymentId}
+        onChange={(event) => setSelectedPaymentId(event.target.value)}
+        fullWidth
+      >
+        {(record.paymentOptions || []).map((payment) => (
+          <MenuItem key={payment.id} value={payment.id}>
+            {payment.method} · {money(payment.amount)} ·{" "}
+            {new Date(payment.paidAt).toLocaleDateString()}
+          </MenuItem>
+        ))}
+      </TextField>
+      {isSupplierPayment && (
+        <TextField
+          label="Cancel Payment Reason"
+          required
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          fullWidth
+        />
+      )}
+      <Button
+        color="error"
+        variant="contained"
+        disabled={saving || !selectedPaymentId || (isSupplierPayment && !reason.trim())}
+        onClick={() =>
+          isSupplierPayment
+            ? onCancelSupplierPayment(record, selectedPaymentId, reason)
+            : onCancelSalePayment(record, selectedPaymentId)
+        }
+        sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
+      >
+        {saving ? "Saving…" : "Cancel Payment"}
+      </Button>
+    </Stack>
+  );
+}
+
+function OrderPaymentForm({ record, paymentMethods, saving, onOrderPay }) {
+  const [orderPayment, setOrderPayment] = useState(() => ({
+    amount: String(record.remainingAmount || record.amount || ""),
+    method: paymentMethods?.[0] || "Cash",
+    date: new Date().toISOString().slice(0, 10),
+    note: "",
+  }));
+  const methods = paymentMethods?.length ? paymentMethods : ["Cash"];
+  return (
+    <Stack spacing={1.5}>
+      <Paper
+        elevation={0}
+        sx={{
+          p: 1.5,
+          bgcolor: "#f4f8ff",
+          border: "1px solid",
+          borderColor: "primary.light",
+          borderRadius: 1.5,
+        }}
+      >
+        <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+          Invoice {record.id} · Remaining balance
+        </Typography>
+        <Typography sx={{ mt: 0.25, fontSize: 22, fontWeight: 800 }}>
+          {money(record.remainingAmount ?? record.amount)}
+        </Typography>
+      </Paper>
+      <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+        The full remaining balance will be settled automatically.
+      </Typography>
+      <TextField
+        select
+        label="Payment method"
+        value={orderPayment.method}
+        onChange={(event) =>
+          setOrderPayment((current) => ({
+            ...current,
+            method: event.target.value,
+          }))
+        }
+        fullWidth
+      >
+        {methods.map((method) => (
+          <MenuItem key={method} value={method}>
+            {method}
+          </MenuItem>
+        ))}
+      </TextField>
+      <TextField
+        label="Date"
+        type="date"
+        value={orderPayment.date}
+        onChange={(event) =>
+          setOrderPayment((current) => ({ ...current, date: event.target.value }))
+        }
+        slotProps={{ inputLabel: { shrink: true } }}
+        fullWidth
+      />
+      <TextField
+        label="Remark"
+        value={orderPayment.note}
+        onChange={(event) =>
+          setOrderPayment((current) => ({ ...current, note: event.target.value }))
+        }
+        multiline
+        minRows={2}
+        fullWidth
+      />
+      <Button
+        variant="contained"
+        disabled={saving || !Number(orderPayment.amount)}
+        onClick={() =>
+          onOrderPay(record, {
+            amount: Number(orderPayment.amount),
+            method: orderPayment.method,
+            ...(orderPayment.note.trim() ? { note: orderPayment.note.trim() } : {}),
+          })
+        }
+        sx={{ minHeight: 50, fontWeight: 700, textTransform: "none" }}
+      >
+        {saving ? "Saving…" : "Record Payment"}
+      </Button>
+    </Stack>
   );
 }
 
