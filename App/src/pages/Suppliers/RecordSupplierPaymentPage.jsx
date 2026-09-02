@@ -220,13 +220,13 @@ export default function RecordSupplierPaymentPage() {
           queryKey: ["shops", shop?.id, "purchases"],
         }),
         queryClient.invalidateQueries({
-          queryKey: ["shops", shop?.id, "payments"],
-        }),
-        queryClient.invalidateQueries({
           queryKey: ["shops", shop?.id, "supplier-deliveries"],
           refetchType: "all",
         }),
       ]);
+      void queryClient.invalidateQueries({
+        queryKey: ["shops", shop?.id, "payments"],
+      });
       navigate(location.state?.from || "/suppliers");
     } catch (nextError) {
       const message = nextError.message || "Unable to record payment.";
