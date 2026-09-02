@@ -462,7 +462,9 @@ export default function CreateOrderPage() {
       const order = result.order;
       const completed = await api.orders.updateStatus(order.id, { fulfillmentStatus: "completed" });
       window.dispatchEvent(new Event("inventory-updated"));
-      await Promise.all([
+      // The completed order response is authoritative for this checkout. Keep
+      // its success UI immediate while dependent lists refresh in the background.
+      void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.orders(shop?.id) }),
         queryClient.invalidateQueries({
           queryKey: ["shops", shop?.id, "products"],

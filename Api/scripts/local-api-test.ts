@@ -313,6 +313,17 @@ async function main(): Promise<void> {
     });
     const orderId = orderResult.order.id;
 
+    // The Orders screen only needs list fields. The summary view must preserve
+    // its amounts, statuses and payment data without loading allocation/serial
+    // details that belong exclusively to the Order Details endpoint.
+    const orderSummaryResult = await request(baseUrl, `/shops/${shopId}/orders?view=summary&pageSize=25`, { token });
+    const orderSummary = orderSummaryResult.orders.find((entry: Json) => entry.id === orderId);
+    assert.ok(orderSummary);
+    assert.equal(orderSummary.total, orderResult.order.total);
+    assert.equal(orderSummary.fulfillmentStatus, orderResult.order.fulfillmentStatus);
+    assert.equal(orderSummary.items[0].product, undefined);
+    assert.equal(orderSummary.items[0].allocations, undefined);
+
     const inventoryAfterOrder = await request(baseUrl, `/shops/${shopId}/inventory`, { token });
     const batchAfterOrder = inventoryAfterOrder.inventory.find((batch: Json) => batch.id === batchId);
     assert.equal(batchAfterOrder.reservedQuantity, 2);

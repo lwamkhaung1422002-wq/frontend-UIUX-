@@ -22,6 +22,9 @@ const orderListQuerySchema = z.object({
   direction: z.enum(["asc", "desc"]).default("desc"),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().refine((value) => [25, 50, 100].includes(value)).default(25),
+  // Existing callers retain the full representation. The Orders screen can
+  // explicitly ask for a smaller list projection and load details on demand.
+  view: z.enum(["summary", "full"]).default("full"),
 });
 
 const moneySchema = z.coerce.number().int().nonnegative();
@@ -348,28 +351,48 @@ ordersRouter.get("/:shopId/orders", async (request, response, next) => {
         ],
       } : {}),
     };
-    const [orders, totalCount] = await prisma.$transaction([
-      prisma.order.findMany({
+    const orderListArgs = {
       where,
-      include: {
-        customer: true,
-        items: {
-          include: {
-            product: true,
-            variant: true,
-            allocations: {
-              include: { inventoryBatch: true },
-            },
-            serialAllocations: { include: { serial: true } },
-            modifierSelections: true,
-          },
-        },
-        payments: true,
-      },
       orderBy: { [query.sort]: query.direction },
       skip: (query.page - 1) * query.pageSize,
       take: query.pageSize,
-    }),
+    };
+    const ordersQuery = query.view === "summary"
+      ? prisma.order.findMany({
+        ...orderListArgs,
+        select: {
+          id: true,
+          orderNumber: true,
+          subtotal: true,
+          discount: true,
+          total: true,
+          paymentStatus: true,
+          fulfillmentStatus: true,
+          createdAt: true,
+          items: { select: { id: true, quantity: true } },
+          payments: {
+            select: { id: true, amount: true, method: true, paidAt: true, createdAt: true, originalPaymentId: true },
+          },
+        },
+      })
+      : prisma.order.findMany({
+        ...orderListArgs,
+        include: {
+          customer: true,
+          items: {
+            include: {
+              product: true,
+              variant: true,
+              allocations: { include: { inventoryBatch: true } },
+              serialAllocations: { include: { serial: true } },
+              modifierSelections: true,
+            },
+          },
+          payments: true,
+        },
+      });
+    const [orders, totalCount] = await prisma.$transaction([
+      ordersQuery,
       prisma.order.count({ where }),
     ]);
 

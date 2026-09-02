@@ -112,13 +112,17 @@ export const usePaymentWorklistQuery = () => {
   );
 };
 
-export function useShopMutation(mutationFn, invalidate = []) {
+export function useShopMutation(mutationFn, { critical = [], background = [] } = {}) {
   const { shop } = useAuth();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,
     onSuccess: async () => {
-      await Promise.all(invalidate.map((key) => queryClient.invalidateQueries({ queryKey: key(shop?.id) })));
+      // Only data required by the caller's current workflow blocks completion.
+      // Secondary dashboard/report data remains correct, but refreshes after the
+      // UI has received the authoritative mutation response.
+      await Promise.all(critical.map((key) => queryClient.invalidateQueries({ queryKey: key(shop?.id) })));
+      void Promise.all(background.map((key) => queryClient.invalidateQueries({ queryKey: key(shop?.id) })));
     },
   });
 }
@@ -127,6 +131,9 @@ export function useOrderCancelMutation() {
   const api = usePosApi();
   return useShopMutation(
     ({ id, reason }) => api.orders.cancel(id, { reason }),
-    [queryKeys.orders, queryKeys.inventory, queryKeys.movements, queryKeys.dashboard],
+    {
+      critical: [queryKeys.orders],
+      background: [queryKeys.inventory, queryKeys.movements, queryKeys.dashboard],
+    },
   );
 }

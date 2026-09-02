@@ -1,10 +1,11 @@
 import { Alert, Box, Button, Container, useMediaQuery } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import Header from "../../components/Header/Header";
 import AppDrawer from "../../components/AppDrawer/AppDrawer";
 import MobileBottomNavigation from "../../components/MobileBottomNavigation/MobileBottomNavigation";
 import { useAuth } from "../../context/AuthContext";
+import { prefetchCommonRouteChunks } from "../../routeChunks";
 
 export default function AppLayout() {
   const isMobile = useMediaQuery("(max-width:768px)");
@@ -12,6 +13,16 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const { isGuest, requestRegistration } = useAuth();
   const isFullscreenMobilePage = pathname.startsWith("/sale/") || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname.startsWith("/supplier-delivery/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/") || pathname.startsWith("/report/");
+
+  useEffect(() => {
+    const schedule = window.requestIdleCallback
+      ? window.requestIdleCallback(() => { void prefetchCommonRouteChunks(); }, { timeout: 2_000 })
+      : window.setTimeout(() => { void prefetchCommonRouteChunks(); }, 500);
+    return () => {
+      if (window.cancelIdleCallback) window.cancelIdleCallback(schedule);
+      else window.clearTimeout(schedule);
+    };
+  }, []);
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: isMobile ? "#f8fafc" : "background.default" }}>

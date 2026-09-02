@@ -99,7 +99,7 @@ export default function SalePage() {
   const api = usePosApi();
   const queryClient = useQueryClient();
   const { shop } = useAuth();
-  const { data: orderResponse } = useOrdersQuery({ pageSize: 100 });
+  const { data: orderResponse } = useOrdersQuery({ pageSize: 100, view: "summary" });
   const cancelOrderMutation = useOrderCancelMutation();
   const [search, setSearch] = useState(() => window.sessionStorage.getItem(ordersSearchStorageKey) || "");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -208,7 +208,6 @@ export default function SalePage() {
       if (!reason?.trim()) return;
       if (!window.confirm("Cancel this order? The order record will be kept.")) return;
       if (order.fulfillmentStatus !== "cancelled") await cancelOrderMutation.mutateAsync({ id, reason: reason.trim() });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.orders(shop?.id) });
     } catch (error) {
       window.alert(error.message || "This order cannot be deleted.");
       throw error;
