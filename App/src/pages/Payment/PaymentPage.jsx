@@ -250,34 +250,37 @@ void desktopPayments;
 
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
-const invalidatePaymentData = (queryClient, shopId, queryKeysToRefresh) =>
-  Promise.all(
-    queryKeysToRefresh.map((queryKey) =>
-      queryClient.invalidateQueries({ queryKey }),
-    ),
+const invalidatePaymentData = async (queryClient, refreshPlan) => {
+  // The worklist is the current screen's source of truth, so it remains
+  // blocking. Supporting dashboards and source lists stay fresh without
+  // delaying the completed payment/cancellation UI.
+  await Promise.all(
+    refreshPlan.critical.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
   );
+  void Promise.all(
+    refreshPlan.background.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  );
+};
 
 const paymentRefreshKeys = {
-  expense: (shopId) => [
-    queryKeys.payments(shopId),
-    queryKeys.dashboard(shopId),
-    ["shops", shopId, "reports"],
-  ],
-  order: (shopId) => [
-    queryKeys.payments(shopId),
-    queryKeys.orders(shopId),
-    queryKeys.inventory(shopId),
-    queryKeys.movements(shopId),
-    queryKeys.dashboard(shopId),
-    ["shops", shopId, "reports"],
-  ],
-  supplier: (shopId) => [
-    queryKeys.payments(shopId),
-    ["shops", shopId, "purchases"],
-    queryKeys.supplierDeliveries(shopId),
-    queryKeys.dashboard(shopId),
-    ["shops", shopId, "reports"],
-  ],
+  expense: (shopId) => ({
+    critical: [queryKeys.payments(shopId)],
+    background: [queryKeys.dashboard(shopId), ["shops", shopId, "reports"]],
+  }),
+  order: (shopId) => ({
+    critical: [queryKeys.payments(shopId)],
+    background: [
+      queryKeys.orders(shopId), queryKeys.inventory(shopId), queryKeys.movements(shopId),
+      queryKeys.dashboard(shopId), ["shops", shopId, "reports"],
+    ],
+  }),
+  supplier: (shopId) => ({
+    critical: [queryKeys.payments(shopId)],
+    background: [
+      ["shops", shopId, "purchases"], queryKeys.supplierDeliveries(shopId),
+      queryKeys.dashboard(shopId), ["shops", shopId, "reports"],
+    ],
+  }),
 };
 
 export default function PaymentPage() {
@@ -315,7 +318,7 @@ export default function PaymentPage() {
       method: entry.method === "KBZPay" ? "KBZ Pay" : entry.method,
       note: entry.remark || undefined,
     });
-    await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
+    await invalidatePaymentData(queryClient, paymentRefreshKeys.expense(shop?.id));
   };
   const openMobilePayment = useCallback((payment) => {
     if (payment.kind === "sale") {
@@ -722,7 +725,7 @@ export default function PaymentPage() {
           </MenuItem>
         )}
         {menuPayment?.kind === "supplier-delivery" && menuPayment?.allowedActions?.cancelInvoice && (
-          <MenuItem onClick={async () => { const reason = window.prompt("Cancel invoice reason (required):")?.trim(); if (!reason) return; try { await api.suppliers.cancelDeliveryRecord(menuPayment.apiId, { reason }); await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.supplier(shop?.id)); } catch (error) { setPaymentError(error.message || "Invoice could not be cancelled."); } finally { closeMenu(); } }} sx={{ ...menuItemSx, color: "error.main" }}>
+          <MenuItem onClick={async () => { const reason = window.prompt("Cancel invoice reason (required):")?.trim(); if (!reason) return; try { await api.suppliers.cancelDeliveryRecord(menuPayment.apiId, { reason }); await invalidatePaymentData(queryClient, paymentRefreshKeys.supplier(shop?.id)); } catch (error) { setPaymentError(error.message || "Invoice could not be cancelled."); } finally { closeMenu(); } }} sx={{ ...menuItemSx, color: "error.main" }}>
             <DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />
             Cancel Invoice
           </MenuItem>
@@ -803,7 +806,7 @@ export default function PaymentPage() {
           setPaymentError("");
           try {
             await api.expenses.remove(record.apiId);
-            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
+            await invalidatePaymentData(queryClient, paymentRefreshKeys.expense(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Payment could not be deleted.");
@@ -817,7 +820,7 @@ export default function PaymentPage() {
           setPaymentError("");
           try {
             await api.payments.addToOrder(record.apiId, payment);
-            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.order(shop?.id));
+            await invalidatePaymentData(queryClient, paymentRefreshKeys.order(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(
@@ -854,7 +857,7 @@ export default function PaymentPage() {
               );
             if (order.fulfillmentStatus !== "cancelled")
               await api.orders.cancel(order.id, { reason });
-            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.order(shop?.id));
+            await invalidatePaymentData(queryClient, paymentRefreshKeys.order(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Order could not be deleted.");
@@ -902,7 +905,7 @@ export default function PaymentPage() {
               originalPaymentId: selectedPayment.id,
               note: reason,
             });
-            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.order(shop?.id));
+            await invalidatePaymentData(queryClient, paymentRefreshKeys.order(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Payment could not be cancelled.");
@@ -915,7 +918,7 @@ export default function PaymentPage() {
           setPaymentError("");
           try {
             await api.suppliers.reverseDeliveryPayment(record.apiId, paymentId, { reason });
-            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.supplier(shop?.id));
+            await invalidatePaymentData(queryClient, paymentRefreshKeys.supplier(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Payment could not be cancelled.");
@@ -980,7 +983,7 @@ function DesktopPaymentsPage() {
     if (record.kind !== "expense")
       throw new Error("Only expense records can be deleted.");
     await api.expenses.remove(record.apiId);
-    await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
+    await invalidatePaymentData(queryClient, paymentRefreshKeys.expense(shop?.id));
     close();
   };
   return (
