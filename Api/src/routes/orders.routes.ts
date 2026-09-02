@@ -27,6 +27,9 @@ const orderListQuerySchema = z.object({
 const moneySchema = z.coerce.number().int().nonnegative();
 const quantitySchema = z.coerce.number().positive("Quantity must be greater than 0.");
 const QUANTITY_SCALE = 3;
+// Order lifecycle operations can update allocations, batches, serials, payments, and audit data
+// atomically.  Keep their production transaction budget consistent without changing any order rule.
+const ORDER_LIFECYCLE_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
 function quantityDecimal(value: string | number | Prisma.Decimal | null | undefined): Prisma.Decimal {
   return new Prisma.Decimal(value ?? 0).toDecimalPlaces(QUANTITY_SCALE, Prisma.Decimal.ROUND_HALF_UP);
@@ -840,7 +843,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       });
 
       return fullOrder;
-    }, { maxWait: 10_000, timeout: 20_000 });
+    }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
     response.status(201).json({ order });
   } catch (error) {
@@ -866,7 +869,7 @@ ordersRouter.post("/:shopId/orders/:orderId/fulfill", async (request, response, 
         entityId: orderId,
       });
       return fulfilledOrder;
-    });
+    }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
     response.status(200).json({ order });
   } catch (error) {
@@ -1024,7 +1027,7 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
         metadata: { fulfillmentStatus: input.fulfillmentStatus },
       });
       return updatedOrder;
-    }, { maxWait: 10_000, timeout: 20_000 });
+    }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
     response.status(200).json({ order });
   } catch (error) {
@@ -1159,7 +1162,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
       });
 
       return cancelledOrder;
-    });
+    }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
     response.status(200).json({ order });
   } catch (error) {
@@ -1300,7 +1303,7 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
         created.push(customerReturn);
       }
       return { returns: created, duplicate: false };
-    });
+    }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
     response.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) { next(error); }
 });
