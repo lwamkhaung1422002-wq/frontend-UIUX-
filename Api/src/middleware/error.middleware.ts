@@ -3,7 +3,7 @@ import { ZodError } from "zod";
 
 export function errorHandler(
   error: unknown,
-  _request: Request,
+  request: Request,
   response: Response,
   _next: NextFunction,
 ): void {
@@ -33,6 +33,17 @@ export function errorHandler(
     });
     return;
   }
+
+  // Keep production responses generic, but record enough context in the server
+  // logs to diagnose unexpected failures without logging request bodies or secrets.
+  const unexpectedError = error instanceof Error ? error : new Error(String(error));
+  console.error("Unhandled API error", {
+    method: request.method,
+    path: request.originalUrl,
+    name: unexpectedError.name,
+    message: unexpectedError.message,
+    stack: unexpectedError.stack,
+  });
 
   if (error instanceof Error && process.env.NODE_ENV !== "production") {
     response.status(500).json({ message: error.message });
