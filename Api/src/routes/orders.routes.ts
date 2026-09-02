@@ -1024,7 +1024,7 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
         metadata: { fulfillmentStatus: input.fulfillmentStatus },
       });
       return updatedOrder;
-    });
+    }, { maxWait: 10_000, timeout: 20_000 });
 
     response.status(200).json({ order });
   } catch (error) {
