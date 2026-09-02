@@ -28,6 +28,7 @@
     "db:backup:local": "tsx scripts/backup-local-db.ts",
     "db:restore-drill:local": "tsx scripts/restore-drill-local.ts",
     "smoke:staging": "tsx scripts/staging-smoke.ts",
+    "smoke:production": "tsx scripts/production-smoke.ts",
     "inventory:cutover:local": "tsx scripts/inventory-cutover.ts",
     "inventory:reconcile": "tsx scripts/inventory-reconcile.ts",
     "financial:reconcile": "tsx scripts/financial-reconcile.ts",
