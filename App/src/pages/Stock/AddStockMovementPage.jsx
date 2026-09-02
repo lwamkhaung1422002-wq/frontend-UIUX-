@@ -151,7 +151,19 @@ export default function AddStockMovementPage() {
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
-    try { if (movementType === "in") await api.inventory.create({ productId: product.id, quantity: Number(quantity), unitCost: Number(cost), note: notes.trim() }); else if (adjustmentType === "decrease") await api.inventory.adjustByCost({ productId: product.id, unitCost: Number(adjustmentCost), quantity: Number(quantity), reason: notes.trim(), staffName: adjustedBy.trim() }); else { const batch = batches.find((item) => item.productId === product.id); if (!batch) throw new Error("Add stock before recording an adjustment."); await api.inventory.adjust(batch.id, { action: "ADD", quantity: Number(quantity), reason: notes.trim(), staffName: adjustedBy.trim() }); } await Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.movements(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shop?.id) }), queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }), queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] })]); navigate("/stock/history"); } catch (error) { setErrors((current) => ({ ...current, submit: error.message || "Unable to save stock movement." })); }
+    try { if (movementType === "in") await api.inventory.create({ productId: product.id, quantity: Number(quantity), unitCost: Number(cost), note: notes.trim() }); else if (adjustmentType === "decrease") await api.inventory.adjustByCost({ productId: product.id, unitCost: Number(adjustmentCost), quantity: Number(quantity), reason: notes.trim(), staffName: adjustedBy.trim() }); else { const batch = batches.find((item) => item.productId === product.id); if (!batch) throw new Error("Add stock before recording an adjustment."); await api.inventory.adjust(batch.id, { action: "ADD", quantity: Number(quantity), reason: notes.trim(), staffName: adjustedBy.trim() }); }
+      // Stock History is the next screen, so its movement feed stays critical.
+      // Catalog, pricing and analytical summaries refresh without delaying navigation.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.movements(shop?.id) });
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] }),
+      ]);
+      navigate("/stock/history");
+    } catch (error) { setErrors((current) => ({ ...current, submit: error.message || "Unable to save stock movement." })); }
   };
 
   if (!isMobile) return <><DesktopAddStockMovement movementType={movementType} setMovementType={setMovementType} adjustmentType={adjustmentType} setAdjustmentType={setAdjustmentType} query={query} filteredProducts={filteredProducts} activeProductCount={products.length} product={product} selectProduct={selectProduct} findProduct={findProduct} onProductInputChange={handleProductInputChange} onSearchKeyDown={handleSearchKeyDown} productsLoading={productsLoading} productsError={productsError} quantity={quantity} setQuantity={setQuantity} cost={cost} setCost={setCost} adjustmentCost={adjustmentCost} setAdjustmentCost={setAdjustmentCost} availableCostBuckets={availableCostBuckets} notes={notes} setNotes={setNotes} adjustedBy={adjustedBy} setAdjustedBy={setAdjustedBy} errors={errors} onClose={() => navigate("/stock")} onSave={saveMovement} /><BarcodeScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={handleScan} /></>;
