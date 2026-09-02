@@ -66,6 +66,10 @@ export const useStockMovementsQuery = (query = {}) => {
   const api = usePosApi();
   return useShopQuery((shopId) => queryKeys.movements(shopId, query), () => api.inventory.movements(query));
 };
+export const useShopDetailsQuery = () => {
+  const api = usePosApi();
+  return useShopQuery(queryKeys.shopDetails, () => api.shop.get(), catalogOptions);
+};
 export const useShopSettingsQuery = () => {
   const api = usePosApi();
   return useShopQuery(queryKeys.settings, () => api.shop.getSettings(), catalogOptions);

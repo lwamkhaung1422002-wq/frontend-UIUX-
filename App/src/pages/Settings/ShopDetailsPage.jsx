@@ -11,6 +11,8 @@ import StorefrontRoundedIcon from "@mui/icons-material/StorefrontRounded";
 import { useAppPreferences } from "../../context/AppPreferenceContext";
 import { useAuth } from "../../context/AuthContext";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useShopDetailsQuery } from "../../hooks/usePosQueries";
+import { queryKeys } from "../../lib/queryKeys";
 
 export default function ShopDetailsPage() {
   const navigate = useNavigate();
@@ -21,22 +23,24 @@ export default function ShopDetailsPage() {
   const { shop: authenticatedShop, selectShop } = useAuth();
   const api = usePosApi();
   const queryClient = useQueryClient();
+  const { data: shopResult, error: shopQueryError } = useShopDetailsQuery();
   const [form, setForm] = useState({ name: shop?.name || "", address: shop?.address || "", logoUrl: shop?.logo || "" });
   const [logoFile, setLogoFile] = useState(null);
   const [logoPreview, setLogoPreview] = useState("");
   const [removeLogo, setRemoveLogo] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(location.state?.logoUploadError || "");
+  const [requestError, setError] = useState(location.state?.logoUploadError || "");
   const [notice, setNotice] = useState("");
+  const error = requestError || shopQueryError?.message || "";
 
   useEffect(() => {
-    let active = true;
-    api.shop.get().then(({ shop: persistedShop }) => {
-      if (!active || !persistedShop) return;
+    const persistedShop = shopResult?.shop;
+    if (!persistedShop) return;
+    const timer = setTimeout(() => {
       setForm({ name: persistedShop.name, address: persistedShop.address || "", logoUrl: persistedShop.logoUrl || "" });
-    }).catch((requestError) => { if (active) setError(requestError.message || "Unable to load shop details."); });
-    return () => { active = false; };
-  }, [api]);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [shopResult]);
   useEffect(() => () => {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
   }, []);
@@ -66,6 +70,7 @@ export default function ShopDetailsPage() {
     setForm({ name: updated.name, address: updated.address || "", logoUrl: updated.logoUrl || "" });
     setShop(preferenceShop);
     if (authenticatedShop) selectShop({ ...authenticatedShop, ...updated });
+    queryClient.setQueryData(queryKeys.shopDetails(authenticatedShop?.id), { shop: updated });
     await queryClient.invalidateQueries({ queryKey: ["shops", authenticatedShop?.id, "settings"] });
   };
   const removeSelectedLogo = () => { clearLogoPreview(); setLogoFile(null); setRemoveLogo(true); setNotice(""); };

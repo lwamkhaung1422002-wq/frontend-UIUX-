@@ -8,6 +8,7 @@ export const queryKeys = {
   movements: (shopId, query = {}) => ["shops", shopId, "movements", query],
   orders: (shopId, query = {}) => ["shops", shopId, "orders", query],
   order: (shopId, orderId) => ["shops", shopId, "orders", orderId],
+  shopDetails: (shopId) => ["shops", shopId, "details"],
   settings: (shopId) => ["shops", shopId, "settings"],
   pricing: (shopId, query = {}) => ["shops", shopId, "pricing", query],
   promotionCampaigns: (shopId) => ["shops", shopId, "promotion-campaigns"],
