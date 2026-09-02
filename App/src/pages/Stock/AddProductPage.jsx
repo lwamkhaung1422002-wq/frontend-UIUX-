@@ -101,7 +101,9 @@ export default function AddProductPage() {
     Promise.all([
       api.categories.list(),
       api.units.list(),
-      api.inventory.list(),
+      // A new product has no existing batches, so avoid an all-inventory read
+      // until edit mode actually needs the product's current stock history.
+      productId ? api.inventory.list() : Promise.resolve({ inventory: [] }),
       productId ? api.products.get(productId) : Promise.resolve(null),
     ])
       .then(([categoryResult, unitResult, inventoryResult, productResult]) => {
