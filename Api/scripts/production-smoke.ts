@@ -2,7 +2,7 @@ import "dotenv/config";
 
 const frontendUrl = process.env.POS_FRONTEND_URL || "https://general-pos-uiux.netlify.app";
 const apiUrl = process.env.POS_API_URL || "https://frontend-uiux-production.up.railway.app";
-const samples = 5;
+const samples = Number(process.env.POS_SMOKE_SAMPLES ?? 20);
 
 type Measurement = { label: string; url: string; status: number; milliseconds: number };
 
@@ -35,6 +35,9 @@ async function main(): Promise<void> {
   const api = new URL(apiUrl);
   if (frontend.protocol !== "https:" || api.protocol !== "https:") {
     throw new Error("Production smoke URLs must use HTTPS.");
+  }
+  if (!Number.isInteger(samples) || samples < 5 || samples > 100) {
+    throw new Error("POS_SMOKE_SAMPLES must be an integer between 5 and 100.");
   }
 
   const checks = [
