@@ -317,6 +317,27 @@ export default function PaymentPage() {
     });
     await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
   };
+  const openMobilePayment = useCallback((payment) => {
+    if (payment.kind === "sale") {
+      navigate(`/sale/${payment.apiId}`, { state: { from: "/payment" } });
+      return;
+    }
+    if (["supplier", "supplier-delivery"].includes(payment.kind)) {
+      navigate(
+        payment.kind === "supplier-delivery"
+          ? `/supplier-delivery/${payment.apiId}`
+          : `/suppliers/${payment.supplierId}`,
+        { state: { from: "/payment" } },
+      );
+      return;
+    }
+    setMobileDialog({ mode: "details", record: payment });
+  }, [navigate]);
+  const openMobilePaymentMenu = useCallback((event, payment) => {
+    event.stopPropagation();
+    setMenuAnchor(event.currentTarget);
+    setMenuPayment(payment);
+  }, []);
 
   const visiblePayments = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -465,27 +486,8 @@ export default function PaymentPage() {
             <PaymentCard
               key={payment.recordKey || payment.id}
               payment={payment}
-              onClick={() =>
-                payment.kind === "sale"
-                  ? navigate(`/sale/${payment.apiId}`, {
-                      state: { from: "/payment" },
-                    })
-                  : ["supplier", "supplier-delivery"].includes(payment.kind)
-                    ? navigate(
-                        payment.kind === "supplier-delivery"
-                          ? `/supplier-delivery/${payment.apiId}`
-                          : `/suppliers/${payment.supplierId}`,
-                        {
-                          state: { from: "/payment" },
-                        },
-                      )
-                    : setMobileDialog({ mode: "details", record: payment })
-              }
-              onMenu={(event) => {
-                event.stopPropagation();
-                setMenuAnchor(event.currentTarget);
-                setMenuPayment(payment);
-              }}
+              onClick={openMobilePayment}
+              onMenu={openMobilePaymentMenu}
             />
           ))}
           {!visiblePayments.length && (
@@ -1947,7 +1949,7 @@ function StatusButton({ label, active, onClick, icon, color }) {
   );
 }
 
-function PaymentCard({ payment, onClick, onMenu }) {
+const PaymentCard = memo(function PaymentCard({ payment, onClick, onMenu }) {
   const cancelled = ["Cancel", "Cancelled"].includes(payment.status);
   const paid = payment.status === "Paid";
   const tone =
@@ -1961,7 +1963,7 @@ function PaymentCard({ payment, onClick, onMenu }) {
   return (
     <Paper
       elevation={2}
-      onClick={onClick}
+      onClick={() => onClick(payment)}
       sx={{
         p: 1.5,
         borderRadius: 1.5,
@@ -2111,7 +2113,7 @@ function PaymentCard({ payment, onClick, onMenu }) {
       </Box>
       <IconButton
         aria-label={`More actions for ${payment.name}`}
-        onClick={onMenu}
+        onClick={(event) => onMenu(event, payment)}
         disabled={cancelled}
         size="small"
         sx={{ gridColumn: 3, gridRow: 2, justifySelf: "end", p: 0.25 }}
@@ -2120,7 +2122,7 @@ function PaymentCard({ payment, onClick, onMenu }) {
       </IconButton>
     </Paper>
   );
-}
+});
 
 function MobilePaymentDialog({
   dialog,
