@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -281,6 +281,17 @@ export default function SuppliersPage() {
     setFrom(value);
     setTo(value);
   };
+  const openRecord = useCallback((record) => {
+    navigate(
+      record.deliveryOnly ? `/supplier-delivery/${record.apiId}` : `/suppliers/${record.supplierId}`,
+      { state: { purchaseId: record.deliveryOnly ? undefined : record.apiId } },
+    );
+  }, [navigate]);
+  const openRecordMenu = useCallback((event, record) => {
+    event.stopPropagation();
+    setMenuAnchor(event.currentTarget);
+    setMenuRecord(record);
+  }, []);
 
   if (!isMobile)
     return <DesktopSuppliers records={apiRecords} openPaymentRecordId={location.state?.openPaymentRecordId || ""} />;
@@ -399,12 +410,8 @@ export default function SuppliersPage() {
             <SupplierCard
               key={record.id}
               record={record}
-              onClick={() => navigate(record.deliveryOnly ? `/supplier-delivery/${record.apiId}` : `/suppliers/${record.supplierId}`, { state: { purchaseId: record.deliveryOnly ? undefined : record.apiId } })}
-              onMenu={(event) => {
-                event.stopPropagation();
-                setMenuAnchor(event.currentTarget);
-                setMenuRecord(record);
-              }}
+              onClick={openRecord}
+              onMenu={openRecordMenu}
             />
           ))}
         </Stack>
@@ -1618,14 +1625,14 @@ function StatusButton({ label, active, onClick, icon, color }) {
   );
 }
 
-function SupplierCard({ record, onMenu, onClick }) {
+const SupplierCard = memo(function SupplierCard({ record, onMenu, onClick }) {
   const cancelled = record.status === "Cancel";
   const paid = record.status === "Paid";
   const dateColor = cancelled ? "#d14343" : paid ? "success.main" : "#ef6c00";
   return (
     <Paper
       elevation={2}
-      onClick={onClick}
+      onClick={() => onClick(record)}
       sx={{
         p: 1.5,
         borderRadius: 1.5,
@@ -1732,7 +1739,7 @@ function SupplierCard({ record, onMenu, onClick }) {
       </Stack>
       <IconButton
         aria-label={`More actions for ${record.name}`}
-        onClick={onMenu}
+        onClick={(event) => onMenu(event, record)}
         disabled={record.status === "Cancel"}
         size="small"
         sx={{ gridColumn: 3, gridRow: 2, justifySelf: "end", p: 0.25 }}
@@ -1741,7 +1748,7 @@ function SupplierCard({ record, onMenu, onClick }) {
       </IconButton>
     </Paper>
   );
-}
+});
 
 const searchSx = {
   "& .MuiOutlinedInput-root": {
