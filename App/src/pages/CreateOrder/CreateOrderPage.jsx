@@ -300,7 +300,6 @@ export default function CreateOrderPage() {
     refetch: refetchCatalog,
   } = useProductsQuery(
     { status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" },
-    { staleTime: 0, refetchOnMount: "always", refetchOnWindowFocus: "always" },
   );
   const catalog = useMemo(() => (catalogResponse?.products || []).map((product) => ({ ...product, price: Number(product.price || 0), stock: Number(product.currentStock || 0), color: "#1976d2", icon: <Inventory2RoundedIcon />, promotion: { type: "regular", text: "Regular price" } })), [catalogResponse]);
   const catalogError = catalogQueryError?.message || "";

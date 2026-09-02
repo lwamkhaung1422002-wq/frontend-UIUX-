@@ -7,6 +7,7 @@ export function normalizeBarcode(value) {
 export function createCameraBarcodeScanner() {
   let controls;
   let locked = false;
+  let stopped = false;
 
   return {
     isAvailable() {
@@ -14,6 +15,7 @@ export function createCameraBarcodeScanner() {
     },
     async start(videoElement, onDetected, constraints = {}) {
       if (!this.isAvailable()) throw new Error("Camera scanning is not supported by this browser.");
+      stopped = false;
       const { BrowserMultiFormatOneDReader } = await import("@zxing/browser");
       const reader = new BrowserMultiFormatOneDReader(undefined, { delayBetweenScanAttempts: 180 });
       locked = false;
@@ -30,9 +32,14 @@ export function createCameraBarcodeScanner() {
         locked = true;
         onDetected(normalizeBarcode(result.getText()));
       });
+      if (stopped) {
+        controls?.stop();
+        controls = undefined;
+      }
       return controls;
     },
     async stop() {
+      stopped = true;
       controls?.stop();
       controls = undefined;
       locked = false;
