@@ -245,7 +245,7 @@ paymentsRouter.post("/:shopId/orders/:orderId/payments", async (request, respons
       // Only an existing-credit settlement is all-or-nothing. Initial order
       // creation may record a partial collection and must not be compared to a
       // non-existent prior remaining balance.
-      if (input.scope !== "order-payment" && amount !== remainingAmount) {
+      if (input.scope === "credit-settlement" && amount !== remainingAmount) {
         throw badRequest("Payment amount must equal the remaining order balance.");
       }
 

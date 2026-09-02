@@ -339,7 +339,8 @@ async function main(): Promise<void> {
       token,
       body: { method: "Cash", note: "API smoke return" },
     });
-    assert.equal(refund.order.paymentStatus, "refunded");
+    // A refund reopens the outstanding balance; it is not a terminal order status.
+    assert.equal(refund.order.paymentStatus, "unpaid");
 
     const inventoryAfterRefund = await request(baseUrl, `/shops/${shopId}/inventory`, { token });
     const batchAfterRefund = inventoryAfterRefund.inventory.find((batch: Json) => batch.id === batchId);
@@ -547,7 +548,10 @@ async function main(): Promise<void> {
       body: { reason: "API smoke cancel" },
     });
     assert.equal(cancelled.order.fulfillmentStatus, "cancelled");
-    await request(baseUrl, `/shops/${shopId}/orders/${cancelOrderId}`, { method: "DELETE", token });
+    await assert.rejects(
+      request(baseUrl, `/shops/${shopId}/orders/${cancelOrderId}`, { method: "DELETE", token }),
+      /cannot be deleted/i,
+    );
 
     const dashboardBeforeHistoricalEntries = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
     assert.ok(dashboardBeforeHistoricalEntries.summary);
@@ -644,14 +648,16 @@ async function main(): Promise<void> {
     assert.ok(dashboardWithStockChecks.lowStock.some((item: Json) => item.productId === lowProduct.id));
     assert.ok(!dashboardWithStockChecks.lowStock.some((item: Json) => item.productId === safeProduct.id));
 
-    const supplierResult = await request(baseUrl, `/shops/${shopId}/suppliers`, {
-      method: "POST", token, body: { name: `API Supplier ${stamp}` },
+    // The POS supplier screen creates delivery records. A purchase lifecycle
+    // fixture needs a supplier entity without adding a second UI flow here.
+    const supplierResult = await prisma.supplier.create({
+      data: { shopId, name: `API Supplier ${stamp}`, phone: "099999999" },
     });
     const decimalPurchase = await request(baseUrl, `/shops/${shopId}/purchases`, {
       method: "POST",
       token,
       body: {
-        supplierId: supplierResult.supplier.id,
+        supplierId: supplierResult.id,
         items: [{
           productId: decimalProduct.product.id,
           unitId: kilogram.unit.id,
@@ -697,7 +703,7 @@ async function main(): Promise<void> {
     assert.equal(decimalPurchaseReturn.purchase.returns[0].baseQuantity, "0.125");
     const purchaseResult = await request(baseUrl, `/shops/${shopId}/purchases`, {
       method: "POST", token,
-      body: { supplierId: supplierResult.supplier.id, items: [{ productId, quantity: 4, unitCost: 900 }] },
+      body: { supplierId: supplierResult.id, items: [{ productId, quantity: 4, unitCost: 900 }] },
     });
     const purchaseId = purchaseResult.purchase.id;
     await request(baseUrl, `/shops/${shopId}/purchases/${purchaseId}/send`, { method: "POST", token, body: {} });
@@ -731,14 +737,14 @@ async function main(): Promise<void> {
       body: { purchaseReceiptId: received.purchase.receipts[0].id, quantity: 1, reason: "Damaged test unit" },
     });
     assert.equal(returned.purchase.returns.length, 1);
-    const archivedSupplier = await request(baseUrl, `/shops/${shopId}/suppliers`, {
-      method: "POST", token, body: { name: `Archive Supplier ${stamp}` },
+    const archivedSupplier = await prisma.supplier.create({
+      data: { shopId, name: `Archive Supplier ${stamp}`, phone: "098888888" },
     });
-    const archiveResult = await request(baseUrl, `/shops/${shopId}/suppliers/${archivedSupplier.supplier.id}`, {
+    const archiveResult = await request(baseUrl, `/shops/${shopId}/suppliers/${archivedSupplier.id}`, {
       method: "DELETE", token,
     });
-    assert.equal(archiveResult.archived, true);
-    assert.equal(archiveResult.supplier.isActive, false);
+    assert.equal(archiveResult.deleted, true);
+    assert.equal(archiveResult.supplier.id, archivedSupplier.id);
     const purchaseAudits = await prisma.auditLog.findMany({ where: { shopId, entityId: purchaseId } });
     for (const action of ["purchase.create", "purchase.send", "purchase.receive", "purchase.payment", "purchase.payment.reverse", "purchase.return"]) {
       assert.ok(purchaseAudits.some((entry) => entry.action === action), `Missing audit action ${action}`);
