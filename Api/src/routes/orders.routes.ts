@@ -1080,7 +1080,10 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
         include: {
           items: {
             include: {
-              allocations: true,
+              // Cancellation needs the batch's current reserved quantity. Load
+              // it with the order instead of issuing one extra query per
+              // allocation inside the lifecycle transaction.
+              allocations: { include: { inventoryBatch: true } },
               serialAllocations: true,
               modifierSelections: true,
               product: { include: { recipe: { include: { components: true } } } },
@@ -1112,9 +1115,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
           });
         }
         for (const allocation of item.allocations) {
-          const batch = await tx.inventoryBatch.findUnique({
-            where: { id: allocation.inventoryBatchId },
-          });
+          const batch = allocation.inventoryBatch;
 
           if (!batch) continue;
 
