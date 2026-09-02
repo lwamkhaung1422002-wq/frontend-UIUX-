@@ -122,10 +122,10 @@ pricingRouter.get("/:shopId/barcode-lookup/:value", async (request, response, ne
       response.json({ known: false, normalizedValue, inactive: Boolean(inactiveBarcode?.product && !inactiveBarcode.product.isActive) });
       return;
     }
-    const pricing = await prisma.$transaction((tx) => resolvePrice(tx, shopId, {
+    const pricing = await resolvePrice(prisma, shopId, {
       productId: barcode.productId, variantId: barcode.variantId, productUnitId: barcode.productUnitId,
-      quantity: new Prisma.Decimal(barcode.packageQuantity ?? 1), channel: String(request.query.channel ?? "ALL"),
-    }));
+      quantity: new Prisma.Decimal(barcode.packageQuantity ?? 1), channel: String(request.query.channel ?? "ALL"), activateDueEntries: false,
+    });
     response.json({ known: true, normalizedValue, barcode, product: barcode.product, variant: barcode.variant, productUnit: barcode.productUnit, packageQuantity: barcode.packageQuantity, pricing });
   } catch (error) { next(error); }
 });
@@ -442,7 +442,7 @@ pricingRouter.post("/:shopId/prices/bulk", async (request, response, next) => {
 pricingRouter.post("/:shopId/pricing/resolve", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const input = resolveInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
-    response.json({ pricing: await prisma.$transaction((tx) => resolvePrice(tx, shopId, { ...input, quantity: new Prisma.Decimal(input.quantity) })) });
+    response.json({ pricing: await resolvePrice(prisma, shopId, { ...input, quantity: new Prisma.Decimal(input.quantity), activateDueEntries: false }) });
   } catch (error) { next(error); }
 });
 

@@ -1,6 +1,10 @@
-import { Prisma } from "../generated/prisma/client.js";
+import { Prisma, PrismaClient } from "../generated/prisma/client.js";
 
-type DbClient = Prisma.TransactionClient;
+// Price lookup endpoints are read-only.  Accepting the root client lets their
+// independent lookup queries use the connection pool instead of being
+// serialized on one interactive-transaction connection.  Write flows keep
+// passing their transaction client and retain their existing atomic behavior.
+type DbClient = Prisma.TransactionClient | PrismaClient;
 
 export function priceTargetKey(productId: string, variantId?: string | null, productUnitId?: string | null): string {
   return `${productId}:${variantId ?? "*"}:${productUnitId ?? "*"}`;
@@ -119,9 +123,16 @@ export async function resolvePrice(
     channel?: string | undefined;
     manualDiscount?: number | undefined;
     at?: Date | undefined;
+    activateDueEntries?: boolean | undefined;
   },
 ) {
-  await activateDuePriceEntries(tx, shopId, input.at ?? new Date());
+  // Scheduled entries are already included by the effective-date query below.
+  // Interactive order writes keep the existing materialization side effect;
+  // read-only pricing lookups opt out so scanning and catalog selection do not
+  // perform unrelated shop-wide writes before returning a price.
+  if (input.activateDueEntries !== false) {
+    await activateDuePriceEntries(tx, shopId, input.at ?? new Date());
+  }
   const { product, variant, productUnit } = await assertPricingTarget(tx, shopId, input);
   const at = input.at ?? new Date();
   const targetKeys = [
@@ -130,6 +141,14 @@ export async function resolvePrice(
     priceTargetKey(product.id, null, productUnit?.id),
     priceTargetKey(product.id, null, null),
   ];
+  const channel = input.channel ?? "ALL";
+  const promotionKeys = promotionTargetKeys({
+    productId: product.id,
+    variantId: variant?.id,
+    productUnitId: productUnit?.id,
+    priceGroupId: input.priceGroupId,
+    channel,
+  });
   const entry = await tx.priceEntry.findFirst({
     where: {
       shopId,
@@ -165,14 +184,6 @@ export async function resolvePrice(
   })[0] ?? null;
   const tierUnitPrice = tier?.unitPrice ?? null;
   const promotionBaseDefault = tierUnitPrice ?? regularUnitPrice;
-  const channel = input.channel ?? "ALL";
-  const promotionKeys = promotionTargetKeys({
-    productId: product.id,
-    variantId: variant?.id,
-    productUnitId: productUnit?.id,
-    priceGroupId: input.priceGroupId,
-    channel,
-  });
   const promotions = await tx.promotion.findMany({
     where: {
       shopId,
