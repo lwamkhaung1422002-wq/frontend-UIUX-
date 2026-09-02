@@ -28,12 +28,19 @@ export type MovementInput = {
 };
 
 export async function ensureInventoryDefaults(tx: Tx, shopId: string) {
-  const location = await tx.inventoryLocation.upsert({
+  // New shops create these records during template setup.  Inventory writes are
+  // on the checkout critical path, so avoid a write-style upsert when they are
+  // already present; retain the same upsert fallback for older shops.
+  const location = await tx.inventoryLocation.findUnique({
+    where: { shopId_name: { shopId, name: "Main" } },
+  }) ?? await tx.inventoryLocation.upsert({
     where: { shopId_name: { shopId, name: "Main" } },
     update: {},
     create: { shopId, name: "Main", type: "SELLABLE" },
   });
-  const unit = await tx.unitOfMeasure.upsert({
+  const unit = await tx.unitOfMeasure.findUnique({
+    where: { shopId_name: { shopId, name: "Piece" } },
+  }) ?? await tx.unitOfMeasure.upsert({
     where: { shopId_name: { shopId, name: "Piece" } },
     update: {},
     create: { shopId, name: "Piece", symbol: "pc", precision: 0 },

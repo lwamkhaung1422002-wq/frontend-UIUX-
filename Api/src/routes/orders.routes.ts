@@ -439,6 +439,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       if (!customer) throw notFound("Customer not found.");
     }
 
+    const transactionStartedAt = Date.now();
     const order = await prisma.$transaction(async (tx) => {
       const preparedItems = [];
       let customerId = input.customerId;
@@ -845,6 +846,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       return fullOrder;
     }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
+    request.log.info({ operation: "create", transactionDurationMs: Date.now() - transactionStartedAt }, "Order lifecycle transaction completed");
     response.status(201).json({ order });
   } catch (error) {
     next(error);
@@ -859,6 +861,7 @@ ordersRouter.post("/:shopId/orders/:orderId/fulfill", async (request, response, 
 
     await assertUserOwnsShop(authUser.id, shopId);
 
+    const transactionStartedAt = Date.now();
     const order = await prisma.$transaction(async (tx) => {
       const fulfilledOrder = await reserveOrderInventory(tx, shopId, orderId);
       await writeAuditLog(tx, {
@@ -871,6 +874,7 @@ ordersRouter.post("/:shopId/orders/:orderId/fulfill", async (request, response, 
       return fulfilledOrder;
     }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
+    request.log.info({ operation: "fulfill", transactionDurationMs: Date.now() - transactionStartedAt }, "Order lifecycle transaction completed");
     response.status(200).json({ order });
   } catch (error) {
     next(error);
@@ -905,6 +909,7 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
       throw badRequest(`Invalid order transition: ${existingOrder.fulfillmentStatus} → ${input.fulfillmentStatus}.`);
     }
 
+    const transactionStartedAt = Date.now();
     const order = await prisma.$transaction(async (tx) => {
       const operationalOrder = await tx.order.findFirstOrThrow({
         where: { id: orderId, shopId },
@@ -1029,6 +1034,7 @@ ordersRouter.patch("/:shopId/orders/:orderId/status", async (request, response, 
       return updatedOrder;
     }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
+    request.log.info({ operation: "status-update", transactionDurationMs: Date.now() - transactionStartedAt }, "Order lifecycle transaction completed");
     response.status(200).json({ order });
   } catch (error) {
     next(error);
@@ -1044,6 +1050,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
 
     await assertUserOwnsShop(authUser.id, shopId);
 
+    const transactionStartedAt = Date.now();
     const order = await prisma.$transaction(async (tx) => {
       const existingOrder = await tx.order.findFirst({
         where: { id: orderId, shopId },
@@ -1164,6 +1171,7 @@ ordersRouter.post("/:shopId/orders/:orderId/cancel", async (request, response, n
       return cancelledOrder;
     }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
 
+    request.log.info({ operation: "cancel", transactionDurationMs: Date.now() - transactionStartedAt }, "Order lifecycle transaction completed");
     response.status(200).json({ order });
   } catch (error) {
     next(error);
@@ -1177,6 +1185,7 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
     const orderId = z.string().min(1).parse(request.params.orderId);
     const input = productReturnSchema.parse(request.body);
     await assertUserOwnsShop(authUser.id, shopId);
+    const transactionStartedAt = Date.now();
     const result = await prisma.$transaction(async (tx) => {
       const order = await tx.order.findFirst({
         where: { id: orderId, shopId, fulfillmentStatus: "completed" },
@@ -1304,6 +1313,7 @@ ordersRouter.post("/:shopId/orders/:orderId/product-returns", async (request, re
       }
       return { returns: created, duplicate: false };
     }, ORDER_LIFECYCLE_TRANSACTION_OPTIONS);
+    request.log.info({ operation: "product-return", transactionDurationMs: Date.now() - transactionStartedAt }, "Order lifecycle transaction completed");
     response.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) { next(error); }
 });
