@@ -118,6 +118,9 @@ export async function effectiveStoreConfiguration(prisma: PrismaClient, shopId: 
   const releaseReady = [...new Set([...CORE_RELEASED, ...releaseRows.filter((row) => row.enabled).map((row) => row.key)])];
   const effectiveCapabilities = [...requested].filter((key) => CORE_RELEASED.has(key) || released.get(key)?.enabled);
   const publicCapabilities = effectiveCapabilities.filter((key) => CORE_RELEASED.has(key) || released.get(key)?.public);
+  const formatPreferences = shop.setting as {
+    currencyCode: string; dateFormat: string; locale: string; timeZone: string;
+  } | null;
   return {
     templateKey,
     template,
@@ -130,11 +133,11 @@ export async function effectiveStoreConfiguration(prisma: PrismaClient, shopId: 
     inventoryReadMode: shop.inventoryReadMode,
     ledgerEnabled: shop.ledgerEnabled,
     ledgerCutoverAt: shop.ledgerCutoverAt,
-    formatPreferences: shop.setting ? {
-      currencyCode: shop.setting.currencyCode,
-      dateFormat: shop.setting.dateFormat,
-      locale: shop.setting.locale,
-      timeZone: shop.setting.timeZone,
+    formatPreferences: formatPreferences ? {
+      currencyCode: formatPreferences.currencyCode,
+      dateFormat: formatPreferences.dateFormat,
+      locale: formatPreferences.locale,
+      timeZone: formatPreferences.timeZone,
     } : null,
   };
 }

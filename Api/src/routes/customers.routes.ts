@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
 
-import type { Prisma } from "../generated/prisma/client.js";
 import { assertUserOwnsShop } from "../lib/shop-access.js";
 import { prisma } from "../lib/prisma.js";
 import { getAuthUser, requireAuth } from "../middleware/auth.middleware.js";
@@ -68,7 +67,7 @@ customersRouter.post("/:shopId/customers", async (request, response, next) => {
 
     await assertUserOwnsShop(authUser.id, shopId);
 
-    const data: Prisma.CustomerUncheckedCreateInput = {
+    const data = {
       name: input.name,
       shopId,
       ...(input.phone !== undefined ? { phone: input.phone } : {}),
@@ -108,7 +107,7 @@ customersRouter.patch("/:shopId/customers/:customerId", async (request, response
       throw error;
     }
 
-    const data: Prisma.CustomerUncheckedUpdateInput = {
+    const data = {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.phone !== undefined ? { phone: input.phone } : {}),
       ...(input.email !== undefined ? { email: input.email } : {}),

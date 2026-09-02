@@ -60,6 +60,24 @@ type ReportPayment = {
   paidAt: Date;
 };
 
+type DashboardOrder = {
+  id: string; orderNumber: string | null; total: number; fulfillmentStatus: string; paymentStatus: string;
+  completedAt: Date | null; createdAt: Date;
+  customer: { name: string } | null;
+  items: Array<{ quantity: number; unitCost: number; recognizedAt: Date | null }>;
+};
+type DashboardPayment = ReportPayment;
+type DashboardExpense = { amount: number };
+type DashboardPurchase = {
+  id: string; total: number; paidAmount: number; status: string; expectedAt: Date; purchaseNumber: string;
+  supplier: { name: string };
+  payments: Array<{ amount: number; paidAt: Date; reversedAt: Date | null }>;
+};
+type DashboardBalance = {
+  productId: string; onHand: unknown; reserved: unknown;
+  product: { sku: string | null; name: string; minimumStock: number; cost: number | null };
+};
+
 function yangonDateKey(value: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: yangonTimeZone,
@@ -250,7 +268,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     const recognitionRange = dateRange(query) ?? todayRange;
     const expenseSpentAt = dateRange(query) ?? todayRange;
 
-    const [orders, payments, expenses, customersCount, productsCount, categoriesCount, purchases, balances] = await Promise.all([
+    const [rawOrders, rawPayments, rawExpenses, customersCount, productsCount, categoriesCount, rawPurchases, rawBalances] = await Promise.all([
       prisma.order.findMany({
         where: { shopId },
         include: {
@@ -275,7 +293,12 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
         orderBy: { expectedAt: "asc" },
       }),
       prisma.inventoryBalance.findMany({ where: { shopId }, include: { product: true } }),
-    ]);
+    ] as const);
+    const orders = rawOrders as DashboardOrder[];
+    const payments = rawPayments as DashboardPayment[];
+    const expenses = rawExpenses as DashboardExpense[];
+    const purchases = rawPurchases as DashboardPurchase[];
+    const balances = rawBalances as DashboardBalance[];
 
     const recognizedOrders = orders.filter((order) =>
       isRecognizedSale(order) && isInRange(recognizedAt(order), recognitionRange),
@@ -421,7 +444,7 @@ export async function salesReportHandler(request: Parameters<typeof dashboardRou
 
     const range = selectedReportRange(query);
 
-    const [orders, payments] = await Promise.all([
+    const [rawOrders, rawPayments] = await Promise.all([
       prisma.order.findMany({
       where: { shopId },
       include: {
@@ -434,7 +457,9 @@ export async function salesReportHandler(request: Parameters<typeof dashboardRou
       orderBy: { createdAt: "desc" },
       }),
       prisma.payment.findMany({ where: { shopId } }),
-    ]);
+    ] as const);
+    const orders = rawOrders as SalesOrder[];
+    const payments = rawPayments as ReportPayment[];
 
     const completedOrders = orders.filter((order) => isRecognizedSale(order));
     const completedOrderIds = new Set(completedOrders.map((order) => order.id));

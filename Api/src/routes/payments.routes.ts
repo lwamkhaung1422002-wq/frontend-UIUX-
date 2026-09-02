@@ -318,7 +318,8 @@ paymentsRouter.post("/:shopId/payments/cod-settlements", async (request, respons
         if (order.fulfillmentStatus === "cancelled") {
           throw badRequest("Cancelled orders cannot be settled.");
         }
-        if (allocation.phone && order.customer?.phone && allocation.phone !== order.customer.phone) {
+        const customerPhone = (order.customer as { phone?: string | null } | null)?.phone;
+        if (allocation.phone && customerPhone && allocation.phone !== customerPhone) {
           throw badRequest("COD settlement phone does not match the order customer.");
         }
 
