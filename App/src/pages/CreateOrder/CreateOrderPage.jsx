@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
@@ -72,6 +72,8 @@ function escapeHtml(value) {
 }
 void printReceipt;
 
+const toPricedCartItem = (product, quantity, pricing) => ({ ...product, price: Number(pricing.regularUnitPrice ?? product.price ?? 0), quantity, promotion: pricing.promotionId ? { type: "discount", value: Number(pricing.promotionDiscount || 0) * quantity, text: `Promotion${pricing.promotionName ? `: ${pricing.promotionName}` : ""}` } : { type: "regular", text: "Regular price" } });
+
 const formatMoney = (amount) =>
   `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
 
@@ -133,7 +135,7 @@ function QuantityButton({ item, change, onQuantityChange, children, ...props }) 
   );
 }
 
-function ProductCard({ item, onQuantityChange }) {
+const ProductCard = memo(function ProductCard({ item, onQuantityChange }) {
   const lineTotal = item.price * item.quantity;
   const promotionText =
     item.promotion.type === "discount"
@@ -268,7 +270,7 @@ function ProductCard({ item, onQuantityChange }) {
       </CardContent>
     </Card>
   );
-}
+});
 
 export default function CreateOrderPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
@@ -278,6 +280,8 @@ export default function CreateOrderPage() {
   const queryClient = useQueryClient();
   const [items, setItems] = useState(initialItems);
   const itemsRef = useRef(initialItems);
+  const pricingRevisionRef = useRef(new Map());
+  const pendingQuantityRef = useRef(new Map());
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [otherAnchor, setOtherAnchor] = useState(null);
   const [otherPayment, setOtherPayment] = useState("unpaid");
@@ -307,6 +311,16 @@ export default function CreateOrderPage() {
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  const commitItems = useCallback((nextItems) => {
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+  }, []);
+  const nextPricingRevision = useCallback((productId) => {
+    const revision = (pricingRevisionRef.current.get(productId) || 0) + 1;
+    pricingRevisionRef.current.set(productId, revision);
+    return revision;
+  }, []);
 
   useEffect(() => {
     const refreshCatalog = () => {
@@ -459,7 +473,9 @@ export default function CreateOrderPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.reports(shop?.id, "products") }),
       ]);
       setCreatedOrder(completed.order || completed);
-      setItems([]);
+      pricingRevisionRef.current.clear();
+      pendingQuantityRef.current.clear();
+      commitItems([]);
       setProductSearch("");
       setBuyerName("");
       setNote("");
@@ -475,20 +491,20 @@ export default function CreateOrderPage() {
     }
   };
 
-  const toPricedCartItem = (product, quantity, pricing) => ({ ...product, price: Number(pricing.regularUnitPrice ?? product.price ?? 0), quantity, promotion: pricing.promotionId ? { type: "discount", value: Number(pricing.promotionDiscount || 0) * quantity, text: `Promotion${pricing.promotionName ? `: ${pricing.promotionName}` : ""}` } : { type: "regular", text: "Regular price" } });
-  const priceCartItem = async (product, quantity) => {
+  const priceCartItem = useCallback(async (product, quantity) => {
     const resolved = await api.pricing.resolve({ productId: product.id, quantity });
     return toPricedCartItem(product, quantity, resolved.pricing);
-  };
-  const changeQuantity = (id, change) => {
+  }, [api]);
+  const changeQuantity = useCallback((id, change) => {
     const item = itemsRef.current.find((current) => current.id === id);
     if (!item) return;
     const quantity = item.quantity + change;
 
     if (quantity <= 0) {
       const nextItems = itemsRef.current.filter((entry) => entry.id !== id);
-      itemsRef.current = nextItems;
-      setItems(nextItems);
+      nextPricingRevision(id);
+      pendingQuantityRef.current.delete(id);
+      commitItems(nextItems);
       return;
     }
     if (quantity > item.stock) return;
@@ -496,23 +512,26 @@ export default function CreateOrderPage() {
     const nextItems = itemsRef.current.map((entry) =>
       entry.id === id ? { ...entry, quantity } : entry,
     );
-    itemsRef.current = nextItems;
-    setItems(nextItems);
+    const revision = nextPricingRevision(id);
+    pendingQuantityRef.current.delete(id);
+    commitItems(nextItems);
     void priceCartItem(item, quantity)
       .then((priced) => {
         // A delayed pricing response must not overwrite a later hold-to-repeat change.
-        if (itemsRef.current.find((entry) => entry.id === id)?.quantity !== quantity)
+        if (
+          pricingRevisionRef.current.get(id) !== revision ||
+          itemsRef.current.find((entry) => entry.id === id)?.quantity !== quantity
+        )
           return;
         const pricedItems = itemsRef.current.map((entry) =>
           entry.id === id ? priced : entry,
         );
-        itemsRef.current = pricedItems;
-        setItems(pricedItems);
+        commitItems(pricedItems);
       })
       .catch((error) =>
         setOrderError(error.message || "Promotion price could not be refreshed."),
       );
-  };
+  }, [commitItems, nextPricingRevision, priceCartItem]);
 
   const selectOtherPayment = (value) => {
     setPaymentMethod("other");
@@ -522,15 +541,32 @@ export default function CreateOrderPage() {
 
   const addProductFromPicker = async (product, initialPricing) => {
     if (product.stock <= 0) return;
-    const existing = items.find((item) => item.id === product.id);
-    const quantity = existing ? Math.min(product.stock, existing.quantity + 1) : 1;
+    const existing = itemsRef.current.find((item) => item.id === product.id);
+    const requestedQuantity = pendingQuantityRef.current.get(product.id) ?? existing?.quantity ?? 0;
+    const quantity = Math.min(product.stock, requestedQuantity + 1);
+    const revision = nextPricingRevision(product.id);
     try {
-      const priced = !existing && quantity === 1 && initialPricing
-        ? toPricedCartItem(product, quantity, initialPricing)
-        : await priceCartItem(product, quantity);
-      setItems((current) => existing ? current.map((item) => item.id === product.id ? priced : item) : [...current, priced]);
+      if (!existing && quantity === 1 && initialPricing) {
+        pendingQuantityRef.current.delete(product.id);
+        commitItems([...itemsRef.current, toPricedCartItem(product, quantity, initialPricing)]);
+        setOrderError("");
+        return;
+      }
+      pendingQuantityRef.current.set(product.id, quantity);
+      const priced = await priceCartItem(product, quantity);
+      if (pricingRevisionRef.current.get(product.id) !== revision) return;
+      const current = itemsRef.current;
+      const currentItem = current.find((item) => item.id === product.id);
+      if (currentItem && currentItem.quantity !== quantity) return;
+      pendingQuantityRef.current.delete(product.id);
+      commitItems(currentItem ? current.map((item) => item.id === product.id ? priced : item) : [...current, priced]);
       setOrderError("");
-    } catch (error) { setOrderError(error.message || "Promotion price could not be loaded."); }
+    } catch (error) {
+      if (pricingRevisionRef.current.get(product.id) === revision) {
+        pendingQuantityRef.current.delete(product.id);
+        setOrderError(error.message || "Promotion price could not be loaded.");
+      }
+    }
     setProductPickerOpen(false);
     setProductSearch("");
   };

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../context/AuthContext";
 import { queryKeys } from "../lib/queryKeys";
 import { usePosApi } from "./useApiResource";
+import { mapPaymentWorklistRecords } from "../lib/paymentWorklist";
 
 const catalogOptions = { staleTime: 5 * 60_000 };
 
@@ -92,6 +93,19 @@ export const usePurchasesQuery = (query = {}) => {
 export const useSupplierDeliveriesQuery = (query = {}) => {
   const api = usePosApi();
   return useShopQuery((shopId) => queryKeys.supplierDeliveries(shopId, query), () => api.suppliers.deliveryRecords(query));
+};
+export const useSuppliersQuery = (query = {}) => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.suppliers(shopId, query), () => api.suppliers.list(query), catalogOptions);
+};
+export const usePaymentWorklistQuery = () => {
+  const api = usePosApi();
+  const query = { view: "worklist" };
+  return useShopQuery(
+    (shopId) => queryKeys.payments(shopId, query),
+    async () => mapPaymentWorklistRecords(await api.payments.history(query)),
+    catalogOptions,
+  );
 };
 
 export function useShopMutation(mutationFn, invalidate = []) {

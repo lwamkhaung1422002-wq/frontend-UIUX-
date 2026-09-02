@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   Alert,
@@ -34,6 +34,10 @@ import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import { DesktopSupplierHistory } from "../Suppliers/SuppliersPage";
 import { usePosApi } from "../../hooks/useApiResource";
+import { usePaymentWorklistQuery, useShopSettingsQuery } from "../../hooks/usePosQueries";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../context/AuthContext";
+import { queryKeys } from "../../lib/queryKeys";
 
 const payments = [
   {
@@ -246,37 +250,44 @@ void desktopPayments;
 
 const money = (value) => `${new Intl.NumberFormat("en-US").format(value)} ကျပ်`;
 
-async function loadPaymentRecords(api) {
-  const result = await api.payments.history({ view: "worklist" });
-  return (result.records || []).map((record) => {
-    const date = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Yangon",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    })
-      .format(new Date(record.occurredAt))
-      .replace(/\//g, "-");
-    return {
-      ...record,
-      method: record.method || "",
-      date,
-      isoDate: date,
-      dateLabel:
-        record.status === "Paid"
-          ? "Paid"
-          : record.status === "Partial"
-            ? "Partial"
-            : "Due",
-      sortAt: new Date(record.occurredAt).getTime(),
-    };
-  });
-}
+const invalidatePaymentData = (queryClient, shopId, queryKeysToRefresh) =>
+  Promise.all(
+    queryKeysToRefresh.map((queryKey) =>
+      queryClient.invalidateQueries({ queryKey }),
+    ),
+  );
+
+const paymentRefreshKeys = {
+  expense: (shopId) => [
+    queryKeys.payments(shopId),
+    queryKeys.dashboard(shopId),
+    ["shops", shopId, "reports"],
+  ],
+  order: (shopId) => [
+    queryKeys.payments(shopId),
+    queryKeys.orders(shopId),
+    queryKeys.inventory(shopId),
+    queryKeys.movements(shopId),
+    queryKeys.dashboard(shopId),
+    ["shops", shopId, "reports"],
+  ],
+  supplier: (shopId) => [
+    queryKeys.payments(shopId),
+    ["shops", shopId, "purchases"],
+    queryKeys.supplierDeliveries(shopId),
+    queryKeys.dashboard(shopId),
+    ["shops", shopId, "reports"],
+  ],
+};
 
 export default function PaymentPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
+  const queryClient = useQueryClient();
+  const { shop } = useAuth();
+  const { data: paymentRecords = [] } = usePaymentWorklistQuery();
+  const { data: settingsResult } = useShopSettingsQuery();
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -286,45 +297,16 @@ export default function PaymentPage() {
   const [to, setTo] = useState("");
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuPayment, setMenuPayment] = useState(null);
-  const [paymentRecords, setPaymentRecords] = useState([]);
   const [mobileDialog, setMobileDialog] = useState(null);
   const [paymentError, setPaymentError] = useState("");
   const [savingPayment, setSavingPayment] = useState(false);
-  const [paymentMethods, setPaymentMethods] = useState(["Cash"]);
-  const reloadPayments = useCallback(async () => {
-    setPaymentRecords(await loadPaymentRecords(api));
-  }, [api]);
-  useEffect(() => {
-    let active = true;
-    loadPaymentRecords(api)
-      .then((records) => {
-        if (active) setPaymentRecords(records);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [api]);
-  useEffect(() => {
-    let active = true;
-    api.shop
-      .getSettings()
-      .then(({ settings }) => {
-        if (!active) return;
-        const configured = (settings.paymentMethods || [])
-          .filter((item) => item.active !== false)
-          .map((item) => item.name)
-          .filter(Boolean);
-        setPaymentMethods([
-          "Cash",
-          ...configured.filter((item) => item !== "Cash"),
-        ]);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [api]);
+  const paymentMethods = useMemo(() => {
+    const configured = (settingsResult?.settings?.paymentMethods || [])
+      .filter((item) => item.active !== false)
+      .map((item) => item.name)
+      .filter(Boolean);
+    return ["Cash", ...configured.filter((item) => item !== "Cash")];
+  }, [settingsResult]);
   const saveExpense = async (entry) => {
     await api.expenses.create({
       title: entry.name,
@@ -333,7 +315,7 @@ export default function PaymentPage() {
       method: entry.method === "KBZPay" ? "KBZ Pay" : entry.method,
       note: entry.remark || undefined,
     });
-    await reloadPayments();
+    await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
   };
 
   const visiblePayments = useMemo(() => {
@@ -738,7 +720,7 @@ export default function PaymentPage() {
           </MenuItem>
         )}
         {menuPayment?.kind === "supplier-delivery" && menuPayment?.allowedActions?.cancelInvoice && (
-          <MenuItem onClick={async () => { const reason = window.prompt("Cancel invoice reason (required):")?.trim(); if (!reason) return; try { await api.suppliers.cancelDeliveryRecord(menuPayment.apiId, { reason }); await reloadPayments(); } catch (error) { setPaymentError(error.message || "Invoice could not be cancelled."); } finally { closeMenu(); } }} sx={{ ...menuItemSx, color: "error.main" }}>
+          <MenuItem onClick={async () => { const reason = window.prompt("Cancel invoice reason (required):")?.trim(); if (!reason) return; try { await api.suppliers.cancelDeliveryRecord(menuPayment.apiId, { reason }); await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.supplier(shop?.id)); } catch (error) { setPaymentError(error.message || "Invoice could not be cancelled."); } finally { closeMenu(); } }} sx={{ ...menuItemSx, color: "error.main" }}>
             <DeleteOutlineRoundedIcon sx={{ fontSize: 15, color: "error.main" }} />
             Cancel Invoice
           </MenuItem>
@@ -819,7 +801,7 @@ export default function PaymentPage() {
           setPaymentError("");
           try {
             await api.expenses.remove(record.apiId);
-            await reloadPayments();
+            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Payment could not be deleted.");
@@ -833,7 +815,7 @@ export default function PaymentPage() {
           setPaymentError("");
           try {
             await api.payments.addToOrder(record.apiId, payment);
-            await reloadPayments();
+            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.order(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(
@@ -870,7 +852,7 @@ export default function PaymentPage() {
               );
             if (order.fulfillmentStatus !== "cancelled")
               await api.orders.cancel(order.id, { reason });
-            await reloadPayments();
+            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.order(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Order could not be deleted.");
@@ -918,7 +900,7 @@ export default function PaymentPage() {
               originalPaymentId: selectedPayment.id,
               note: reason,
             });
-            await reloadPayments();
+            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.order(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Payment could not be cancelled.");
@@ -931,7 +913,7 @@ export default function PaymentPage() {
           setPaymentError("");
           try {
             await api.suppliers.reverseDeliveryPayment(record.apiId, paymentId, { reason });
-            await reloadPayments();
+            await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.supplier(shop?.id));
             setMobileDialog(null);
           } catch (error) {
             setPaymentError(error.message || "Payment could not be cancelled.");
@@ -947,7 +929,9 @@ export default function PaymentPage() {
 function DesktopPaymentsPage() {
   const api = usePosApi();
   const navigate = useNavigate();
-  const [records, setRecords] = useState([]);
+  const queryClient = useQueryClient();
+  const { shop } = useAuth();
+  const { data: records = [] } = usePaymentWorklistQuery();
   const [status, setStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [dateMode, setDateMode] = useState("all");
@@ -955,18 +939,7 @@ function DesktopPaymentsPage() {
   const [to, setTo] = useState("");
   const [dialog, setDialog] = useState(null);
   const [menu, setMenu] = useState(null);
-  useEffect(() => {
-    let active = true;
-    loadPaymentRecords(api)
-      .then((nextRecords) => {
-        if (active) setRecords(nextRecords);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [api]);
-  const visible = records.filter((record) => {
+  const visible = useMemo(() => records.filter((record) => {
     const date = record.date;
     return (
       (status === "All" ||
@@ -985,14 +958,27 @@ function DesktopPaymentsPage() {
       (dateMode !== "custom" ||
         ((!from || date >= from) && (!to || date <= to)))
     );
-  });
-  const total = visible.reduce((sum, record) => sum + record.amount, 0);
+  }), [dateMode, from, records, search, status, to]);
+  const total = useMemo(() => visible.reduce((sum, record) => sum + record.amount, 0), [visible]);
   const close = () => setDialog(null);
+  const showDetails = useCallback((record) => setDialog({ mode: "details", record }), []);
+  const payRecord = useCallback((record) => {
+    if (record.kind === "supplier") {
+      navigate(`/suppliers/${record.supplierId}/pay`, {
+        state: { purchaseId: record.apiId, from: "/payment" },
+      });
+      return;
+    }
+    setDialog({ mode: "pay", record });
+  }, [navigate]);
+  const openRecordMenu = useCallback((event, record) => {
+    setMenu({ anchor: event.currentTarget, record });
+  }, []);
   const deleteRecord = async (record) => {
     if (record.kind !== "expense")
       throw new Error("Only expense records can be deleted.");
     await api.expenses.remove(record.apiId);
-    setRecords(await loadPaymentRecords(api));
+    await invalidatePaymentData(queryClient, shop?.id, paymentRefreshKeys.expense(shop?.id));
     close();
   };
   return (
@@ -1085,15 +1071,9 @@ function DesktopPaymentsPage() {
           <DesktopPaymentCard
             key={record.recordKey || record.id}
             payment={record}
-            onDetails={() => setDialog({ mode: "details", record })}
-            onPay={() =>
-              record.kind === "supplier"
-                ? navigate(`/suppliers/${record.supplierId}/pay`, {
-                    state: { purchaseId: record.apiId, from: "/payment" },
-                  })
-                : setDialog({ mode: "pay", record })
-            }
-            onMenu={(event) => setMenu({ anchor: event.currentTarget, record })}
+            onDetails={showDetails}
+            onPay={payRecord}
+            onMenu={openRecordMenu}
           />
         ))}
       </Box>
@@ -1178,7 +1158,7 @@ function DesktopPaymentFilter({
   );
 }
 
-function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
+const DesktopPaymentCard = memo(function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
   const cancelled = ["Cancel", "Cancelled"].includes(payment.status);
   const paid = payment.status === "Paid";
   const payDue = ["sale", "supplier"].includes(payment.kind)
@@ -1192,7 +1172,7 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
   return (
     <Paper
       variant="outlined"
-      onClick={onDetails}
+      onClick={() => onDetails(payment)}
       sx={{
         p: 1.5,
         minHeight: 156,
@@ -1231,7 +1211,7 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
           aria-label={`Pay ${payment.name}`}
           onClick={(event) => {
             event.stopPropagation();
-            onPay();
+            onPay(payment);
           }}
           sx={{
             gridColumn: 2,
@@ -1260,7 +1240,7 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
         aria-label={`More actions for ${payment.name}`}
         onClick={(event) => {
           event.stopPropagation();
-          onMenu(event);
+          onMenu(event, payment);
         }}
         size="small"
         disabled={cancelled}
@@ -1333,7 +1313,7 @@ function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
       </Box>
     </Paper>
   );
-}
+});
 
 function DesktopPaymentDialog({
   dialog,

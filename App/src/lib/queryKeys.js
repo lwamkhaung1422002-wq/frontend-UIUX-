@@ -12,5 +12,7 @@ export const queryKeys = {
   pricing: (shopId, query = {}) => ["shops", shopId, "pricing", query],
   promotionCampaigns: (shopId) => ["shops", shopId, "promotion-campaigns"],
   supplierDeliveries: (shopId, query = {}) => ["shops", shopId, "supplier-deliveries", query],
+  suppliers: (shopId, query = {}) => ["shops", shopId, "suppliers", query],
+  payments: (shopId, query = {}) => ["shops", shopId, "payments", query],
   reports: (shopId, name, query = {}) => ["shops", shopId, "reports", name, query],
 };
