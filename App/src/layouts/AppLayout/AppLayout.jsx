@@ -15,6 +15,8 @@ export default function AppLayout() {
   const isFullscreenMobilePage = pathname.startsWith("/sale/") || pathname.startsWith("/stock/") || pathname === "/suppliers" || pathname.startsWith("/suppliers/") || pathname.startsWith("/supplier-delivery/") || pathname === "/payment" || pathname.startsWith("/payment/") || pathname === "/price" || pathname.startsWith("/price/") || pathname.startsWith("/settings/") || pathname.startsWith("/report/");
 
   useEffect(() => {
+    const connection = navigator.connection;
+    if (connection?.saveData || connection?.effectiveType === "slow-2g" || connection?.effectiveType === "2g") return undefined;
     const schedule = window.requestIdleCallback
       ? window.requestIdleCallback(() => { void prefetchCommonRouteChunks(); }, { timeout: 2_000 })
       : window.setTimeout(() => { void prefetchCommonRouteChunks(); }, 500);
