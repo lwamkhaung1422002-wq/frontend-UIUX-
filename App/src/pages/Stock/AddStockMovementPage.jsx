@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
@@ -31,6 +31,7 @@ import RemoveCircleOutlineRoundedIcon from "@mui/icons-material/RemoveCircleOutl
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useAllActiveProductsQuery, useInventoryQuery } from "../../hooks/usePosQueries";
 import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
 import { queryKeys } from "../../lib/queryKeys";
 import { useAuth } from "../../context/AuthContext";
@@ -61,41 +62,15 @@ export default function AddStockMovementPage() {
   const [notes, setNotes] = useState("");
   const [adjustedBy, setAdjustedBy] = useState("");
   const [errors, setErrors] = useState({});
-  const [products, setProducts] = useState([]); const [batches, setBatches] = useState([]); const [scannerOpen, setScannerOpen] = useState(false);
-  const [productsLoading, setProductsLoading] = useState(true);
-  const [productsError, setProductsError] = useState("");
-
-  useEffect(() => {
-    let active = true;
-    const loadAllActiveProducts = async () => {
-      const firstPage = await api.products.list({ page: 1, pageSize: 100, status: "active" });
-      const totalCount = firstPage.totalCount || (firstPage.products || []).length;
-      const remainingPages = Array.from({ length: Math.max(0, Math.ceil(totalCount / 100) - 1) }, (_, index) =>
-        api.products.list({ page: index + 2, pageSize: 100, status: "active" }),
-      );
-      const pages = await Promise.all(remainingPages);
-      return { ...firstPage, products: [firstPage, ...pages].flatMap((page) => page.products || []) };
-    };
-    setProductsLoading(true); setProductsError("");
-    loadAllActiveProducts()
-      .then((productResult) => {
-        if (!active) return;
-        setProducts((productResult.products || []).map((item) => {
-          const barcodeValues = (item.barcodes || []).map((barcode) => barcode.value).filter(Boolean);
-          return { ...item, stock: Number(item.currentStock ?? 0), cost: item.cost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
-        }));
-      })
-      .catch((error) => active && setProductsError(error.message || "Unable to load products. Please try again."))
-      .finally(() => active && setProductsLoading(false));
-    api.inventory.list()
-      .then((inventoryResult) => {
-        if (!active) return;
-        const inventory = inventoryResult.inventory || [];
-        setBatches(inventory);
-      })
-      .catch(() => { if (active) setBatches([]); });
-    return () => { active = false; };
-  }, [api]);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const { data: productResult, isLoading: productsLoading, error: productQueryError } = useAllActiveProductsQuery();
+  const { data: inventoryResult } = useInventoryQuery();
+  const productsError = productQueryError?.message || "";
+  const products = useMemo(() => (productResult?.products || []).map((item) => {
+    const barcodeValues = (item.barcodes || []).map((barcode) => barcode.value).filter(Boolean);
+    return { ...item, stock: Number(item.currentStock ?? 0), cost: item.cost ?? 0, barcode: barcodeValues[0] || "", barcodeValues, icon: <Inventory2RoundedIcon />, color: "#1976d2" };
+  }), [productResult]);
+  const batches = useMemo(() => inventoryResult?.inventory || [], [inventoryResult]);
 
   const filteredProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();

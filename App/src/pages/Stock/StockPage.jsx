@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import {
   Box,
@@ -30,6 +31,9 @@ import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { Alert } from "@mui/material";
 import { usePosApi } from "../../hooks/useApiResource";
+import { useAllActiveProductsQuery, useCategoriesQuery, useInventoryQuery } from "../../hooks/usePosQueries";
+import { queryKeys } from "../../lib/queryKeys";
+import { useAuth } from "../../context/AuthContext";
 import BarcodeManagerDialog from "../../components/Barcode/BarcodeManagerDialog";
 import BarcodeScannerDialog from "../../components/BarcodeScanner/BarcodeScannerDialog";
 
@@ -39,7 +43,11 @@ export default function StockPage() {
   const isMobile = useMediaQuery("(max-width:768px)");
   const navigate = useNavigate();
   const api = usePosApi();
-  const [inventoryProducts, setInventoryProducts] = useState([]);
+  const { shop } = useAuth();
+  const queryClient = useQueryClient();
+  const { data: productResult, error: productsError } = useAllActiveProductsQuery();
+  const { data: categoryResult, error: categoriesError } = useCategoriesQuery();
+  const { data: inventoryResult, error: inventoryError, refetch: refetchInventory } = useInventoryQuery();
   const [apiError, setApiError] = useState(null);
   const [search, setSearch] = useState("");
   const [lowStockOnly, setLowStockOnly] = useState(false);
@@ -49,7 +57,16 @@ export default function StockPage() {
   const [barcodeGeneratorOpen, setBarcodeGeneratorOpen] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanNotice, setScanNotice] = useState(null);
-  const [reloadVersion, setReloadVersion] = useState(0);
+  const inventoryProducts = useMemo(() => {
+    const categoryNames = new Map((categoryResult?.categories || []).map((category) => [category.id, category.name]));
+    const totals = new Map();
+    (inventoryResult?.inventory || []).forEach((batch) => totals.set(batch.productId, (totals.get(batch.productId) || 0) + Number(batch.quantity || 0)));
+    return (productResult?.products || []).map((product) => ({
+      id: product.id, name: product.name, sku: product.sku || "", barcodeValues: (product.barcodes || []).map((barcode) => barcode.value).filter(Boolean),
+      category: product.category?.name || categoryNames.get(product.categoryId) || "Uncategorized", price: Number(product.price || 0), cost: Number(product.cost || 0),
+      stock: Number(product.currentStock ?? totals.get(product.id) ?? 0), hasSaleHistory: Boolean(product.hasSaleHistory), icon: <Inventory2RoundedIcon />, color: "#1976d2",
+    }));
+  }, [categoryResult, inventoryResult, productResult]);
 
   useEffect(() => {
     const updateSort = (event) => setSort(event.detail);
@@ -58,49 +75,10 @@ export default function StockPage() {
   }, []);
 
   useEffect(() => {
-    const refreshInventory = () => setReloadVersion((value) => value + 1);
+    const refreshInventory = () => { void refetchInventory(); };
     window.addEventListener("inventory-updated", refreshInventory);
     return () => window.removeEventListener("inventory-updated", refreshInventory);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    const loadAllActiveProducts = async () => {
-      const firstPage = await api.products.list({ page: 1, pageSize: 100, status: "active" });
-      const totalCount = firstPage.totalCount || (firstPage.products || []).length;
-      const remainingPages = Array.from({ length: Math.max(0, Math.ceil(totalCount / 100) - 1) }, (_, index) =>
-        api.products.list({ page: index + 2, pageSize: 100, status: "active" }),
-      );
-      const pages = await Promise.all(remainingPages);
-      return { ...firstPage, products: [firstPage, ...pages].flatMap((page) => page.products || []) };
-    };
-    Promise.all([loadAllActiveProducts(), api.categories.list(), api.inventory.list()])
-      .then(([productResult, categoryResult, inventoryResult]) => {
-        if (!active) return;
-        const categoryNames = new Map((categoryResult.categories || []).map((category) => [category.id, category.name]));
-        const totals = new Map();
-        (inventoryResult.inventory || []).forEach((batch) => {
-          const current = totals.get(batch.productId) || 0;
-          totals.set(batch.productId, current + Number(batch.quantity || 0));
-        });
-        setInventoryProducts((productResult.products || []).map((product) => ({
-          id: product.id,
-          name: product.name,
-          sku: product.sku || "",
-          barcodeValues: (product.barcodes || []).map((barcode) => barcode.value).filter(Boolean),
-          category: product.category?.name || categoryNames.get(product.categoryId) || "Uncategorized",
-          price: Number(product.price || 0),
-          cost: Number(product.cost || 0),
-          stock: Number(product.currentStock ?? totals.get(product.id) ?? 0),
-          hasSaleHistory: Boolean(product.hasSaleHistory),
-          icon: <Inventory2RoundedIcon />,
-          color: "#1976d2",
-        })));
-        setApiError(null);
-      })
-      .catch((error) => { if (active) setApiError(error); });
-    return () => { active = false; };
-  }, [api, reloadVersion]);
+  }, [refetchInventory]);
 
   const visibleProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -123,7 +101,7 @@ export default function StockPage() {
 
   const deleteProduct = async (id) => {
     await api.products.remove(id);
-    setInventoryProducts((current) => current.filter((product) => product.id !== id));
+    await queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) });
   };
   const removeProduct = () => {
     deleteProduct(menuProduct?.id).catch((error) => setApiError(error));
@@ -145,7 +123,8 @@ export default function StockPage() {
     }
   };
 
-  if (!isMobile) return <><DesktopInventoryPage products={visibleProducts} search={search} setSearch={setSearch} summary={inventorySummary} lowStockOnly={lowStockOnly} setLowStockOnly={setLowStockOnly} navigate={navigate} onDelete={(id) => deleteProduct(id).catch((error) => setApiError(error))} onGenerateBarcodes={() => setBarcodeGeneratorOpen(true)} /><BarcodeManagerDialog open={barcodeGeneratorOpen} onClose={() => setBarcodeGeneratorOpen(false)} api={api} standalone />{apiError && <Alert severity="warning" sx={{ mt: 1.5 }}>{apiError.message || "Inventory request failed."}</Alert>}</>;
+  const requestError = apiError || productsError || categoriesError || inventoryError;
+  if (!isMobile) return <><DesktopInventoryPage products={visibleProducts} search={search} setSearch={setSearch} summary={inventorySummary} lowStockOnly={lowStockOnly} setLowStockOnly={setLowStockOnly} navigate={navigate} onDelete={(id) => deleteProduct(id).catch((error) => setApiError(error))} onGenerateBarcodes={() => setBarcodeGeneratorOpen(true)} /><BarcodeManagerDialog open={barcodeGeneratorOpen} onClose={() => setBarcodeGeneratorOpen(false)} api={api} standalone />{requestError && <Alert severity="warning" sx={{ mt: 1.5 }}>{requestError.message || "Inventory request failed."}</Alert>}</>;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", px: 3, pt: 2, pb: "174px" }}>
@@ -188,7 +167,7 @@ export default function StockPage() {
 
       <Stack spacing={1.25}>
         {scanNotice && <Alert severity={scanNotice.severity} onClose={() => setScanNotice(null)}>{scanNotice.text}</Alert>}
-        {apiError && <Alert severity="warning">{apiError.message || "Inventory request failed."}</Alert>}
+        {requestError && <Alert severity="warning">{requestError.message || "Inventory request failed."}</Alert>}
         {visibleProducts.map((product) => (
           <Card key={product.id} onClick={() => navigate(`/stock/${product.id}`)} sx={{ minHeight: 112, borderRadius: 2.5, bgcolor: "background.paper", boxShadow: "0 2px 7px rgba(15,23,42,0.16)", cursor: "pointer" }}>
             <CardContent sx={{ height: "100%", boxSizing: "border-box", p: 1.5, "&:last-child": { pb: 1.5 } }}>

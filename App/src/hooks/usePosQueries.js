@@ -24,6 +24,19 @@ export const useProductsQuery = (query = {}, options = {}) => {
   const api = usePosApi();
   return useShopQuery((shopId) => queryKeys.products(shopId, query), () => api.products.list(query), { ...catalogOptions, ...options });
 };
+export const useAllActiveProductsQuery = () => {
+  const api = usePosApi();
+  const query = { status: "active", all: true };
+  return useShopQuery((shopId) => queryKeys.products(shopId, query), async () => {
+    const firstPage = await api.products.list({ page: 1, pageSize: 100, status: "active" });
+    const totalCount = firstPage.totalCount || (firstPage.products || []).length;
+    const pages = await Promise.all(Array.from(
+      { length: Math.max(0, Math.ceil(totalCount / 100) - 1) },
+      (_, index) => api.products.list({ page: index + 2, pageSize: 100, status: "active" }),
+    ));
+    return { ...firstPage, products: [firstPage, ...pages].flatMap((page) => page.products || []) };
+  }, catalogOptions);
+};
 export const useProductQuery = (productId) => {
   const api = usePosApi();
   return useShopQuery((shopId) => queryKeys.product(shopId, productId), () => api.products.get(productId), { enabled: Boolean(productId) });

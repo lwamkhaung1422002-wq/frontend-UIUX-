@@ -19,6 +19,8 @@ import Inventory2OutlinedIcon from "@mui/icons-material/Inventory2Outlined";
 import { useCategoriesQuery, useProductsQuery, usePromotionCampaignsQuery } from "../../hooks/usePosQueries";
 import { usePosApi } from "../../hooks/useApiResource";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../context/AuthContext";
+import { queryKeys } from "../../lib/queryKeys";
 const yangonDateKey = (value = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Yangon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
   const part = (type) => parts.find((item) => item.type === type)?.value || "";
@@ -41,6 +43,7 @@ export default function PricePage() {
   const [endingPromotionId, setEndingPromotionId] = useState("");
   const [promotionActionError, setPromotionActionError] = useState("");
   const api = usePosApi();
+  const { shop } = useAuth();
   const queryClient = useQueryClient();
   const { data: productResult } = useProductsQuery({ status: "active", page: 1, pageSize: 100, sort: "name", direction: "asc" });
   const { data: categoryResult } = useCategoriesQuery();
@@ -52,7 +55,10 @@ export default function PricePage() {
     setEndingPromotionId(campaign.id); setPromotionActionError("");
     try {
       await api.pricing.updatePromotionCampaign(campaign.id, { expectedVersion: Number(campaign.version), state: "CANCELLED" });
-      await queryClient.invalidateQueries({ queryKey: ["shops"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.promotionCampaigns(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) }),
+      ]);
     } catch (error) { setPromotionActionError(error.message || "Promotion could not be ended. Please try again."); }
     finally { setEndingPromotionId(""); }
   };
@@ -173,6 +179,7 @@ function DesktopDateChoice({ label, active, onClick }) { return <Button onClick=
 
 function DesktopPriceForm({ products, categories, promotion, onClose, onPromotionSaved }) {
   const api = usePosApi();
+  const { shop } = useAuth();
   const queryClient = useQueryClient();
   const [scope, setScope] = useState("all");
   const [category, setCategory] = useState("");
@@ -207,7 +214,11 @@ function DesktopPriceForm({ products, categories, promotion, onClose, onPromotio
       } else {
         await api.pricing.bulkPrices({ scope: scope.toUpperCase(), ...(scope === "category" ? { categoryId: category } : {}), marginPercent: Number(percentage), reason: reason.trim() });
       }
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.products(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shop?.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.promotionCampaigns(shop?.id) }),
+      ]);
       if (promotion) onPromotionSaved(); else onClose();
     } catch (error) { setSubmitError(error.message || "Unable to save pricing."); } finally { setSaving(false); }
   };
