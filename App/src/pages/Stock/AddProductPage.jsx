@@ -518,6 +518,8 @@ async function invalidateProductData(queryClient, shopId) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.products(shopId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.inventory(shopId) }),
+  ]);
+  void Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.movements(shopId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.pricing(shopId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shopId) }),

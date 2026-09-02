@@ -44,6 +44,22 @@ import { useAuth } from "../../context/AuthContext";
 import { queryKeys } from "../../lib/queryKeys";
 import { SupplierDetailsCards } from "./SupplierDetailsPage";
 
+async function refreshSupplierRecords(queryClient, shopId, { includeSuppliers = false } = {}) {
+  const critical = [
+    queryClient.invalidateQueries({ queryKey: ["shops", shopId, "purchases"] }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shopId) }),
+    ...(includeSuppliers
+      ? [queryClient.invalidateQueries({ queryKey: queryKeys.suppliers(shopId) })]
+      : []),
+  ];
+  await Promise.all(critical);
+  void Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.payments(shopId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shopId) }),
+    queryClient.invalidateQueries({ queryKey: ["shops", shopId, "reports"] }),
+  ]);
+}
+
 const supplierRecords = [
   {
     id: "125978",
@@ -250,14 +266,7 @@ export default function SuppliersPage() {
         if (!archiveReason.trim()) { setArchiveError("Cancellation reason is required."); return; }
         await api.suppliers.cancelDeliveryRecord(archiveTarget.apiId, { reason: archiveReason.trim() });
       } else await api.suppliers.remove(archiveTarget.supplierId);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.suppliers(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "purchases"] }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.payments(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] }),
-      ]);
+      await refreshSupplierRecords(queryClient, shop?.id, { includeSuppliers: true });
       setArchiveTarget(null); setArchiveReason("");
     } catch (error) {
       setArchiveError(error.message || "Unable to delete supplier.");
@@ -670,14 +679,7 @@ function DesktopSuppliers({ records, openPaymentRecordId }) {
       if (!record.supplierId) return;
       await api.suppliers.remove(record.supplierId);
     }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.suppliers(shop?.id) }),
-      queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "purchases"] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.payments(shop?.id) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }),
-      queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] }),
-    ]);
+    await refreshSupplierRecords(queryClient, shop?.id, { includeSuppliers: true });
     close();
   };
   const openPayment = async (record) => {
@@ -1269,13 +1271,7 @@ function DesktopPaymentFields({ record, onSaved }) {
       const paymentBody = { amount: numericAmount, method: configuredMethod?.name || "Cash", payerName: isCash ? cashName.trim() : mobileName.trim(), payerPhone: isCash ? cashPhone.trim() : mobileNumber.trim(), mobileAccountName: isCash ? undefined : mobileName.trim(), reference: isCash ? undefined : transactionId.trim(), signatureDataUrl: isCash ? signatureRef.current?.toDataURL() : undefined, notes: dueDate ? `Due date: ${dueDate}` : undefined };
       if (record.deliveryOnly) await api.suppliers.payDeliveryRecord(record.apiId, paymentBody);
       else await api.purchases.pay(record.apiId, paymentBody);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "purchases"] }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.supplierDeliveries(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.payments(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(shop?.id) }),
-        queryClient.invalidateQueries({ queryKey: ["shops", shop?.id, "reports"] }),
-      ]);
+      await refreshSupplierRecords(queryClient, shop?.id);
       onSaved();
     } catch (nextError) { setError(nextError.message || "Unable to record payment."); } finally { setSaving(false); }
   };
