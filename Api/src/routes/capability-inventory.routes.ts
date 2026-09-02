@@ -12,6 +12,8 @@ export const capabilityInventoryRouter = Router();
 capabilityInventoryRouter.use(requireAuth);
 
 const params = z.object({ shopId: z.string().min(1) });
+// Lot, serial, and location operations are atomic inventory mutations in production.
+const INVENTORY_OPERATION_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 const listQuery = z.object({
   search: z.string().trim().optional(),
   status: z.string().trim().optional(),
@@ -258,7 +260,7 @@ capabilityInventoryRouter.post("/:shopId/inventory-operations/receive", async (r
       });
       if (lotId && movement) await tx.inventoryMovement.update({ where: { id: movement.id }, data: { lotId } });
       return { movement, batch, duplicate: false };
-    });
+    }, INVENTORY_OPERATION_TRANSACTION_OPTIONS);
     response.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) { next(error); }
 });
@@ -372,7 +374,7 @@ capabilityInventoryRouter.post("/:shopId/inventory-operations/adjust", async (re
       });
       const refreshed = await tx.inventoryBalance.findUniqueOrThrow({ where: { id: balance.id } });
       return { movement, balance: refreshed, duplicate: false };
-    });
+    }, INVENTORY_OPERATION_TRANSACTION_OPTIONS);
     response.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) { next(error); }
 });
@@ -445,7 +447,7 @@ capabilityInventoryRouter.post("/:shopId/inventory-operations/transfer", async (
         },
       });
       return { outMovement, inMovement, sourceBalance, targetBalance, duplicate: false };
-    });
+    }, INVENTORY_OPERATION_TRANSACTION_OPTIONS);
     response.status(result.duplicate ? 200 : 201).json(result);
   } catch (error) { next(error); }
 });

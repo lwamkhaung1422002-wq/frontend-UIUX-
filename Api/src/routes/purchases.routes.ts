@@ -13,6 +13,8 @@ purchasesRouter.use(requireAuth);
 
 const params = z.object({ shopId: z.string().min(1) });
 const money = z.coerce.number().int().nonnegative();
+// Receiving, cancelling, or returning purchases can update inventory and financial records atomically.
+const PURCHASE_LIFECYCLE_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 const supplierInput = z.object({
   name: z.string().trim().min(1),
   contactPerson: z.string().trim().optional(),
@@ -752,7 +754,7 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/receive", async (request, r
         metadata: { items: input.items, note: input.note, receivedAt: input.receivedAt },
       });
       return tx.purchase.update({ where: { id: purchase.id }, data: { status, total, ...(status === "received" ? { receivedAt: input.receivedAt ?? new Date() } : {}) }, include: purchaseInclude });
-    });
+    }, PURCHASE_LIFECYCLE_TRANSACTION_OPTIONS);
     response.json({ purchase: updated, duplicate: false });
   } catch (error) { next(error); }
 });
@@ -843,7 +845,7 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/cancel", async (request, re
       });
       await writeAuditLog(tx, { shopId, actorId: auth.id, action: "purchase.cancel", entity: "Purchase", entityId: purchase.id, metadata: input });
       return result;
-    });
+    }, PURCHASE_LIFECYCLE_TRANSACTION_OPTIONS);
     response.json({ purchase: updated });
   } catch (error) { next(error); }
 });
@@ -939,7 +941,7 @@ purchasesRouter.post("/:shopId/purchases/:purchaseId/returns", async (request, r
       await refreshProductWeightedCost(tx, shopId, receipt.purchaseItem.productId);
       await writeAuditLog(tx, { shopId, actorId: auth.id, action: "purchase.return", entity: "Purchase", entityId: purchase.id, metadata: { quantity: returnQuantity.toString(), amount, reason: input.reason } });
       return tx.purchase.update({ where: { id: purchase.id }, data: { total: { decrement: amount }, status: "partially_returned" }, include: purchaseInclude });
-    });
+    }, PURCHASE_LIFECYCLE_TRANSACTION_OPTIONS);
     response.status(201).json({ purchase: updated });
   } catch (error) { next(error); }
 });

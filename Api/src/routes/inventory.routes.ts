@@ -16,6 +16,8 @@ const paramsSchema = z.object({
 });
 
 const moneySchema = z.coerce.number().int().positive();
+// Inventory mutations can touch batches, movements, balances, and audit records together.
+const INVENTORY_MUTATION_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
 const createInventoryBatchSchema = z.object({
   productId: z.string().trim().min(1, "Product is required."),
@@ -226,7 +228,7 @@ inventoryRouter.post("/:shopId/inventory", async (request, response, next) => {
       }
 
       return createdBatch;
-    });
+    }, INVENTORY_MUTATION_TRANSACTION_OPTIONS);
 
     response.status(201).json({ inventoryBatch });
   } catch (error) {
@@ -277,7 +279,7 @@ inventoryRouter.patch("/:shopId/inventory/:inventoryBatchId", async (request, re
       });
 
       return updatedBatch;
-    });
+    }, INVENTORY_MUTATION_TRANSACTION_OPTIONS);
 
     response.status(200).json({ inventoryBatch });
   } catch (error) {
@@ -356,7 +358,7 @@ inventoryRouter.post("/:shopId/inventory/adjustments/by-cost", async (request, r
       const averageCost = await refreshProductWeightedCost(tx, shopId, input.productId);
       await Promise.all(movements.map((movement) => tx.inventoryMovement.update({ where: { id: movement.id }, data: { averageCostAfter: averageCost } })));
       return { adjustment, availableQuantity, allocations: deductions.map(({ batch, quantity }) => ({ inventoryBatchId: batch.id, quantity })) };
-    });
+    }, INVENTORY_MUTATION_TRANSACTION_OPTIONS);
     response.status(201).json(result);
   } catch (error) { next(error); }
 });
@@ -464,7 +466,7 @@ inventoryRouter.post(
         if (movement) await tx.inventoryMovement.update({ where: { id: movement.id }, data: { averageCostAfter: averageCost } });
 
         return { inventoryBatch, adjustment };
-      });
+      }, INVENTORY_MUTATION_TRANSACTION_OPTIONS);
 
       response.status(201).json(result);
     } catch (error) {
