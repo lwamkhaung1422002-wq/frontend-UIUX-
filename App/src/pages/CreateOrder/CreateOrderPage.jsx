@@ -475,10 +475,10 @@ export default function CreateOrderPage() {
     }
   };
 
+  const toPricedCartItem = (product, quantity, pricing) => ({ ...product, price: Number(pricing.regularUnitPrice ?? product.price ?? 0), quantity, promotion: pricing.promotionId ? { type: "discount", value: Number(pricing.promotionDiscount || 0) * quantity, text: `Promotion${pricing.promotionName ? `: ${pricing.promotionName}` : ""}` } : { type: "regular", text: "Regular price" } });
   const priceCartItem = async (product, quantity) => {
     const resolved = await api.pricing.resolve({ productId: product.id, quantity });
-    const pricing = resolved.pricing;
-    return { ...product, price: Number(pricing.regularUnitPrice ?? product.price ?? 0), quantity, promotion: pricing.promotionId ? { type: "discount", value: Number(pricing.promotionDiscount || 0) * quantity, text: `Promotion${pricing.promotionName ? `: ${pricing.promotionName}` : ""}` } : { type: "regular", text: "Regular price" } };
+    return toPricedCartItem(product, quantity, resolved.pricing);
   };
   const changeQuantity = (id, change) => {
     const item = itemsRef.current.find((current) => current.id === id);
@@ -520,12 +520,14 @@ export default function CreateOrderPage() {
     setOtherAnchor(null);
   };
 
-  const addProductFromPicker = async (product) => {
+  const addProductFromPicker = async (product, initialPricing) => {
     if (product.stock <= 0) return;
     const existing = items.find((item) => item.id === product.id);
     const quantity = existing ? Math.min(product.stock, existing.quantity + 1) : 1;
     try {
-      const priced = await priceCartItem(product, quantity);
+      const priced = !existing && quantity === 1 && initialPricing
+        ? toPricedCartItem(product, quantity, initialPricing)
+        : await priceCartItem(product, quantity);
       setItems((current) => existing ? current.map((item) => item.id === product.id ? priced : item) : [...current, priced]);
       setOrderError("");
     } catch (error) { setOrderError(error.message || "Promotion price could not be loaded."); }
@@ -567,7 +569,7 @@ export default function CreateOrderPage() {
           icon: <Inventory2RoundedIcon />,
           promotion: { type: "regular", text: "Regular price" },
         };
-        addProductFromPicker(product);
+        addProductFromPicker(product, result.pricing);
         return;
       }
     } catch {

@@ -840,7 +840,7 @@ ordersRouter.post("/:shopId/orders", async (request, response, next) => {
       });
 
       return fullOrder;
-    });
+    }, { maxWait: 10_000, timeout: 20_000 });
 
     response.status(201).json({ order });
   } catch (error) {
