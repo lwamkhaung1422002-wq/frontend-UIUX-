@@ -356,6 +356,15 @@ async function main(): Promise<void> {
     });
     assert.equal(finalPayment.order.paymentStatus, "paid");
 
+    // The Payment screen worklist must preserve its displayed payment status,
+    // amount and quantity while the endpoint uses a smaller database projection.
+    const paymentWorklist = await request(baseUrl, `/shops/${shopId}/payment-history?view=worklist`, { token });
+    const worklistSale = paymentWorklist.records.find((entry: Json) => entry.apiId === orderId);
+    assert.ok(worklistSale);
+    assert.equal(worklistSale.status, "Paid");
+    assert.equal(worklistSale.amount, finalPayment.order.total);
+    assert.equal(worklistSale.qty, 2);
+
     const refund = await request(baseUrl, `/shops/${shopId}/orders/${orderId}/refunds`, {
       method: "POST",
       token,
