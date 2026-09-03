@@ -60,9 +60,34 @@ workspaceAlertsRouter.get("/:shopId/payment-history", async (request, response, 
     response.json({ records }); return;
   }
   const [orders, deliveries, expenses] = await Promise.all([
-    prisma.order.findMany({ where: { shopId, paymentTracking: true }, include: { payments: true, customer: true, items: true } }),
-    prisma.supplierDeliveryRecord.findMany({ where: { shopId }, include: { supplier: true, payments: { include: { reversal: true } } } }),
-    prisma.expense.findMany({ where: { shopId } }),
+    // The worklist only serializes these fields. Avoid materializing order item,
+    // customer, and payment columns that never leave this endpoint.
+    prisma.order.findMany({
+      where: { shopId, paymentTracking: true },
+      select: {
+        id: true, orderNumber: true, fulfillmentStatus: true, total: true, createdAt: true,
+        customer: { select: { name: true } },
+        items: { select: { quantity: true } },
+        payments: { select: { id: true, amount: true, method: true, paidAt: true, createdAt: true, originalPaymentId: true } },
+      },
+    }),
+    prisma.supplierDeliveryRecord.findMany({
+      where: { shopId },
+      select: {
+        id: true, supplierId: true, supplierName: true, invoiceNumber: true, amount: true,
+        status: true, receivedAt: true, cancelledAt: true, cancelReason: true,
+        payments: {
+          select: {
+            id: true, amount: true, method: true, paidAt: true, reversedAt: true,
+            reversal: { select: { id: true } },
+          },
+        },
+      },
+    }),
+    prisma.expense.findMany({
+      where: { shopId },
+      select: { id: true, title: true, category: true, amount: true, method: true, spentAt: true, createdAt: true },
+    }),
   ]);
   const latest = <T extends { paidAt?: Date; createdAt?: Date }>(items: T[]) => [...items].sort((a, b) => Number(new Date(b.paidAt ?? b.createdAt ?? 0)) - Number(new Date(a.paidAt ?? a.createdAt ?? 0)))[0];
   const activeOrderPayments = (order: typeof orders[number]) => order.payments.filter((payment) => payment.amount > 0 && !order.payments.some((reversal) => reversal.amount < 0 && reversal.originalPaymentId === payment.id));
