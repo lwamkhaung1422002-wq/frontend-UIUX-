@@ -301,6 +301,17 @@ async function main(): Promise<void> {
     const expenses = await request(baseUrl, `/shops/${shopId}/expenses`, { token });
     assert.ok(expenses.expenses.some((expense: Json) => expense.category === "Stock Delivery" && expense.method === "Cash" && expense.amount === 1200));
 
+    // Create Order only needs searchable product fields, barcodes and current
+    // stock. Its catalog view must not load editing/detail-only relations.
+    const catalogResult = await request(baseUrl, `/shops/${shopId}/products?view=catalog&pageSize=25&sort=name&direction=asc`, { token });
+    const catalogProduct = catalogResult.products.find((entry: Json) => entry.id === productId);
+    assert.ok(catalogProduct);
+    assert.equal(catalogProduct.name, "API Smoke Product");
+    assert.equal(catalogProduct.currentStock, 5);
+    assert.equal(catalogProduct.variants, undefined);
+    assert.equal(catalogProduct.units, undefined);
+    assert.equal(catalogProduct.priceTiers, undefined);
+
     const orderResult = await request(baseUrl, `/shops/${shopId}/orders`, {
       method: "POST",
       token,

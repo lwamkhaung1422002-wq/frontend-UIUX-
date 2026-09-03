@@ -25,6 +25,7 @@ const listQuerySchema = z.object({
   direction: z.enum(["asc", "desc"]).default("desc"),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().refine((value) => [25, 50, 100].includes(value)).default(25),
+  view: z.enum(["full", "catalog"]).default("full"),
 });
 
 const moneySchema = z.coerce.number().int().nonnegative();
@@ -284,6 +285,46 @@ productsRouter.get("/:shopId/products", async (request, response, next) => {
         ] } } },
       ] } : {}),
     };
+    if (query.view === "catalog") {
+      const [products, total] = await prisma.$transaction([
+        prisma.product.findMany({
+          where,
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            sku: true,
+            price: true,
+            barcodes: {
+              where: { status: "ACTIVE" },
+              orderBy: { createdAt: "desc" },
+              select: { value: true },
+            },
+          },
+          orderBy: { [query.sort]: query.direction },
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+        }),
+        prisma.product.count({ where }),
+      ]);
+      const balances = products.length
+        ? await prisma.inventoryBalance.groupBy({
+          by: ["productId"],
+          where: { shopId, productId: { in: products.map((product) => product.id) } },
+          _sum: { onHand: true },
+        })
+        : [];
+      const stockByProductId = new Map(balances.map((balance) => [balance.productId, Number(balance._sum.onHand ?? 0)]));
+      response.status(200).json({
+        products: products.map((product) => ({
+          ...product,
+          currentStock: stockByProductId.get(product.id) ?? 0,
+        })),
+        totalCount: total,
+        pagination: { page: query.page, pageSize: query.pageSize, total },
+      });
+      return;
+    }
     const [products, total, balances] = await prisma.$transaction([prisma.product.findMany({
       where,
       include: {
