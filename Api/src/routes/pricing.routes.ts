@@ -466,6 +466,21 @@ pricingRouter.get("/:shopId/promotion-campaigns", async (request, response, next
   } catch (error) { next(error); }
 });
 
+pricingRouter.get("/:shopId/promotion-history", async (request, response, next) => {
+  try {
+    const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); await assertUserOwnsShop(auth.id, shopId);
+    const entries = await prisma.auditLog.findMany({
+      where: { shopId, action: { in: ["promotion.update", "promotion.campaign.update"] } },
+      select: { id: true, action: true, metadata: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    });
+    response.json({ entries: entries.filter((entry) => {
+      const metadata = entry.metadata as { previousValue?: unknown; nextValue?: unknown };
+      return metadata.previousValue !== undefined && metadata.nextValue !== undefined;
+    }) });
+  } catch (error) { next(error); }
+});
+
 pricingRouter.post("/:shopId/promotion-campaigns", async (request, response, next) => {
   try {
     const auth = getAuthUser(request); const { shopId } = shopParams.parse(request.params); const input = campaignInput.parse(request.body); await assertUserOwnsShop(auth.id, shopId);
@@ -507,7 +522,21 @@ pricingRouter.patch("/:shopId/promotion-campaigns/:id", async (request, response
         })));
       }
       const updated = await tx.promotionCampaign.update({ where: { id }, data: { state, ...(state === "CANCELLED" && existing.state !== "CANCELLED" ? { endedAt: new Date() } : {}), ...(input.name ? { name: input.name } : {}), version: { increment: 1 } } });
-      await writeAuditLog(tx, { shopId, actorId: auth.id, action: `promotion.campaign.${state.toLowerCase()}`, entity: "PromotionCampaign", entityId: id }); return updated;
+      const previousPromotion = existing.promotions[0];
+      await writeAuditLog(tx, {
+        shopId,
+        actorId: auth.id,
+        action: input.value !== undefined || input.type !== undefined ? "promotion.campaign.update" : `promotion.campaign.${state.toLowerCase()}`,
+        entity: "PromotionCampaign",
+        entityId: id,
+        metadata: {
+          name: existing.name,
+          type: input.type ?? previousPromotion?.type ?? null,
+          previousValue: previousPromotion ? Number(previousPromotion.value) : null,
+          nextValue: input.value ?? (previousPromotion ? Number(previousPromotion.value) : null),
+          reason: input.reason ?? previousPromotion?.reason ?? null,
+        },
+      }); return updated;
     }); response.json({ campaign });
   } catch (error) { next(error); }
 });
@@ -579,7 +608,22 @@ pricingRouter.patch("/:shopId/promotions/:id", async (request, response, next) =
         ...(input.note !== undefined ? { note: input.note } : {}),
         ...(input.reason !== undefined ? { reason: input.reason } : {}),
       } });
-      await writeAuditLog(tx, { shopId, actorId: auth.id, action: `promotion.${input.state?.toLowerCase() ?? "update"}`, entity: "Promotion", entityId: id, metadata: { previousState: existing.state, nextState: updated.state } });
+      await writeAuditLog(tx, {
+        shopId,
+        actorId: auth.id,
+        action: input.value !== undefined || input.type !== undefined ? "promotion.update" : `promotion.${input.state?.toLowerCase() ?? "update"}`,
+        entity: "Promotion",
+        entityId: id,
+        metadata: {
+          name: input.name ?? existing.name,
+          type: input.type ?? existing.type,
+          previousValue: Number(existing.value),
+          nextValue: input.value ?? Number(existing.value),
+          previousState: existing.state,
+          nextState: updated.state,
+          reason: input.reason ?? existing.reason ?? null,
+        },
+      });
       return updated;
     });
     response.json({ promotion: { ...promotion, effectiveState: effectivePromotionState(promotion) } });

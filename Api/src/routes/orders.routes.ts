@@ -369,7 +369,7 @@ ordersRouter.get("/:shopId/orders", async (request, response, next) => {
           paymentStatus: true,
           fulfillmentStatus: true,
           createdAt: true,
-          items: { select: { id: true, quantity: true } },
+          items: { select: { id: true, quantity: true, productName: true } },
           payments: {
             select: { id: true, amount: true, method: true, paidAt: true, createdAt: true, originalPaymentId: true },
           },

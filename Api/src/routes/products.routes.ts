@@ -388,21 +388,33 @@ productsRouter.get("/:shopId/products/:productId/cost-history", async (request, 
     await assertUserOwnsShop(authUser.id, shopId);
     await assertProductBelongsToShop(productId, shopId);
 
-    const movements = await prisma.inventoryMovement.findMany({
-      where: { shopId, productId, unitCost: { not: null }, OR: [{ direction: "IN" }, { type: "ADJUSTMENT_OUT" }] },
-      select: { id: true, type: true, direction: true, enteredQuantity: true, unitCost: true, averageCostAfter: true, sourceType: true, occurredAt: true },
-      orderBy: { occurredAt: "desc" },
+    const [movements, costEdits] = await Promise.all([
+      prisma.inventoryMovement.findMany({
+        where: { shopId, productId, unitCost: { not: null }, OR: [{ direction: "IN" }, { type: "ADJUSTMENT_OUT" }] },
+        select: { id: true, type: true, direction: true, enteredQuantity: true, unitCost: true, averageCostAfter: true, sourceType: true, occurredAt: true },
+        orderBy: { occurredAt: "desc" },
+      }),
+      prisma.auditLog.findMany({
+        where: { shopId, entity: "Product", entityId: productId, action: "product.cost.revalue" },
+        select: { id: true, metadata: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+    const movementHistory = movements.map((movement) => ({
+      id: movement.id,
+      date: movement.occurredAt,
+      stockIn: movement.enteredQuantity,
+      direction: movement.direction,
+      unitCost: movement.unitCost,
+      averageCost: movement.averageCostAfter,
+      source: movement.type === "PURCHASE_RECEIPT" ? "Purchase Receipt" : movement.type === "OPENING" ? "Stock In" : movement.type === "ADJUSTMENT_IN" ? "Adjustment In" : movement.type === "ADJUSTMENT_OUT" ? "Adjustment Out" : movement.sourceType,
+    }));
+    const editHistory = costEdits.map((entry) => {
+      const metadata = entry.metadata as { newCost?: number; resultingCost?: number };
+      return { id: entry.id, date: entry.createdAt, stockIn: null, direction: "NONE", unitCost: metadata.newCost ?? null, averageCost: metadata.resultingCost ?? null, source: "Cost Price Edit", kind: "COST_EDIT" };
     });
     response.json({
-      history: movements.map((movement) => ({
-        id: movement.id,
-        date: movement.occurredAt,
-        stockIn: movement.enteredQuantity,
-        direction: movement.direction,
-        unitCost: movement.unitCost,
-        averageCost: movement.averageCostAfter,
-        source: movement.type === "PURCHASE_RECEIPT" ? "Purchase Receipt" : movement.type === "OPENING" ? "Stock In" : movement.type === "ADJUSTMENT_IN" ? "Adjustment In" : movement.type === "ADJUSTMENT_OUT" ? "Adjustment Out" : movement.sourceType,
-      })),
+      history: [...movementHistory, ...editHistory].sort((left, right) => right.date.getTime() - left.date.getTime()),
     });
   } catch (error) {
     next(error);
@@ -590,6 +602,15 @@ productsRouter.patch("/:shopId/products/:productId", async (request, response, n
     };
 
     const product = await prisma.$transaction(async (tx) => {
+      const costChanged = input.cost !== undefined && input.cost !== currentProduct?.cost;
+      if (costChanged) {
+        // Product edits are blocked after a sale. Revalue only current, unsold
+        // inventory so historical order COGS remains immutable.
+        await tx.inventoryBatch.updateMany({
+          where: { shopId, productId, quantity: { gt: 0 } },
+          data: { unitCost: input.cost! },
+        });
+      }
       const updatedProduct = await tx.product.update({
         where: { id: productId },
         data,
@@ -630,6 +651,20 @@ productsRouter.patch("/:shopId/products/:productId", async (request, response, n
         entity: "Product",
         entityId: productId,
       });
+      if (costChanged) {
+        await writeAuditLog(tx, {
+          shopId,
+          actorId: authUser.id,
+          action: "product.cost.revalue",
+          entity: "Product",
+          entityId: productId,
+          metadata: {
+            previousCost: currentProduct?.cost ?? null,
+            newCost: input.cost!,
+            resultingCost: finalProduct.cost ?? input.cost!,
+          },
+        });
+      }
       return finalProduct;
     });
 

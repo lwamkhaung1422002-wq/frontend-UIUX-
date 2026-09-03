@@ -7,7 +7,7 @@ import CalendarTodayOutlinedIcon from "@mui/icons-material/CalendarTodayOutlined
 import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import LocalOfferRoundedIcon from "@mui/icons-material/LocalOfferRounded";
 import TrendingUpRoundedIcon from "@mui/icons-material/TrendingUpRounded";
-import { usePriceHistoryQuery, usePromotionCampaignsQuery } from "../../hooks/usePosQueries";
+import { usePriceHistoryQuery, usePromotionCampaignsQuery, usePromotionHistoryQuery } from "../../hooks/usePosQueries";
 
 const legacyRecords = [
   { type: "Price", name: "Nivea Roll On", oldPrice: 6000, newPrice: 6500, date: "11/08/2026", time: "11:20 PM", reason: "Market price increased" },
@@ -21,6 +21,7 @@ export default function PriceHistoryPage() {
   const [filter] = useState("All");
   const { data: priceResult } = usePriceHistoryQuery({ page: 1, pageSize: 100 });
   const { data: campaignResult } = usePromotionCampaignsQuery();
+  const { data: promotionHistoryResult } = usePromotionHistoryQuery();
   const records = useMemo(() => {
     void legacyRecords;
     const prices = (priceResult?.entries || []).filter((entry) => entry.status !== "SCHEDULED" && entry.status !== "CANCELLED").map((entry) => {
@@ -34,8 +35,13 @@ export default function PriceHistoryPage() {
       const endAt = new Date(campaign.endedAt || first.endsAt || campaign.updatedAt || campaign.createdAt);
       return [created, { ...created, promotionStatus: "ended", action: campaign.effectiveState === "ENDED" ? "Promotion ended automatically" : "Promotion ended", date: endAt.toLocaleDateString("en-GB"), time: endAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), timestamp: endAt.valueOf() }];
     });
-    return [...prices, ...promotions].sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0));
-  }, [campaignResult, priceResult]);
+    const promotionEdits = (promotionHistoryResult?.entries || []).map((entry) => {
+      const metadata = entry.metadata || {}; const at = new Date(entry.createdAt);
+      const suffix = metadata.type === "PERCENTAGE" ? "% off" : "fixed price";
+      return { type: "Promotion", promotionStatus: "edited", name: metadata.name || "Promotion", promotionName: metadata.name || "Promotion", action: `Promotion edited: ${metadata.previousValue} → ${metadata.nextValue} ${suffix}`, date: at.toLocaleDateString("en-GB"), time: at.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), reason: metadata.reason || "", timestamp: at.valueOf() };
+    });
+    return [...prices, ...promotions, ...promotionEdits].sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0));
+  }, [campaignResult, priceResult, promotionHistoryResult]);
   return <Box sx={{ minHeight: "100dvh", bgcolor: "#f8fafc", fontFamily: "Inter, Roboto, 'Noto Sans Myanmar', sans-serif" }}>
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: "primary.main" }}><Toolbar sx={{ minHeight: 64, display: "grid", gridTemplateColumns: "1fr auto 1fr" }}><IconButton aria-label="Back to price and promotion" onClick={() => navigate("/price")} sx={{ justifySelf: "start", color: "common.white" }}><ArrowBackRoundedIcon /></IconButton><Typography fontWeight={700}>Price History</Typography><Box /></Toolbar></AppBar>
     <Box sx={{ p: { xs: 2, sm: 2.5 }, maxWidth: 720, mx: "auto" }}><Typography color="text.secondary" sx={{ mb: 2, fontSize: 14 }}>{filter} price and promotion activity</Typography><Stack spacing={1.75}>{records.map((record) => <HistoryCard key={`${record.type}-${record.name}-${record.timestamp || record.date}`} record={record} />)}</Stack></Box>
@@ -45,8 +51,9 @@ export default function PriceHistoryPage() {
 function HistoryCard({ record }) {
   const promotion = record.type === "Promotion";
   const promotionEnded = record.promotionStatus === "ended";
+  const promotionEdited = record.promotionStatus === "edited";
   return <Paper elevation={1} sx={{ p: { xs: 1.75, sm: 2.25 }, borderRadius: 2.25, boxShadow: "0 2px 9px rgba(15,23,42,0.11)" }}>
-    <Chip label={promotion ? (promotionEnded ? "Promotion Ended" : "Promotion Created") : "Price"} size="small" sx={{ height: 30, mb: 1.25, borderRadius: 1.1, bgcolor: promotion ? (promotionEnded ? "#d14343" : "#168437") : "#2459d6", color: "common.white", fontSize: 13, fontWeight: 700 }} />
+    <Chip label={promotion ? (promotionEnded ? "Promotion Ended" : promotionEdited ? "Promotion Edited" : "Promotion Created") : "Price"} size="small" sx={{ height: 30, mb: 1.25, borderRadius: 1.1, bgcolor: promotion ? (promotionEnded ? "#d14343" : "#168437") : "#2459d6", color: "common.white", fontSize: 13, fontWeight: 700 }} />
     <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.45fr) 1px minmax(104px, 0.78fr)", columnGap: { xs: 1.5, sm: 2.5 }, alignItems: "stretch" }}>
       <Box sx={{ minWidth: 0 }}><Typography noWrap sx={{ fontSize: { xs: 17, sm: 19 }, fontWeight: 700 }}>{record.name}</Typography>{promotion ? <PromotionDetail record={record} /> : <PriceDetail record={record} />}</Box>
       <Box sx={{ bgcolor: "#e4e7ec" }} />

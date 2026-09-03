@@ -266,6 +266,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     const todayKey = yangonDateKey(new Date());
     const todayRange = { gte: yangonStart(todayKey), lte: yangonEnd(todayKey) };
     const recognitionRange = dateRange(query) ?? todayRange;
+    const orderCreatedRange = dateRange(query) ?? todayRange;
     const expenseSpentAt = dateRange(query) ?? todayRange;
 
     const [rawOrders, rawPayments, rawExpenses, customersCount, productsCount, categoriesCount, rawPurchases, rawBalances] = await Promise.all([
@@ -303,6 +304,10 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     const recognizedOrders = orders.filter((order) =>
       isRecognizedSale(order) && isInRange(recognizedAt(order), recognitionRange),
     );
+    const todaySalesOrders = orders.filter((order) =>
+      order.fulfillmentStatus !== "cancelled" && isInRange(order.createdAt, orderCreatedRange),
+    );
+    const todaySales = todaySalesOrders.reduce((sum, order) => sum + order.total, 0);
     const periodPayments = payments.filter((payment) => isInRange(payment.paidAt, recognitionRange));
     // Refund payments are stored as negative cash movements. Dashboard totals
     // expose refunds as a positive deduction so they reduce revenue/profit and
@@ -372,8 +377,8 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
       })
       .sort((a, b) => b.paidAt.getTime() - a.paidAt.getTime())[0]?.method ?? "ငွေသား";
 
-    const recentSales = recognizedOrders
-      .sort((a, b) => (recognizedAt(b)?.getTime() ?? 0) - (recognizedAt(a)?.getTime() ?? 0))
+    const recentSales = todaySalesOrders
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, 10)
       .map((order) => ({
         id: order.id,
@@ -383,7 +388,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
         paymentStatus: order.paymentStatus,
         paymentMethod: paymentMethodForOrder(order.id),
         itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
-        completedAt: recognizedAt(order),
+        completedAt: recognizedAt(order) ?? order.createdAt,
       }));
 
     const upcomingPayables = purchases
@@ -400,6 +405,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     response.status(200).json({
       summary: {
         revenue,
+        todaySales,
         costOfGoods,
         grossProfit,
         operatingExpenses,

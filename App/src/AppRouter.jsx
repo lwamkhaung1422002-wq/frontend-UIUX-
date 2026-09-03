@@ -7,7 +7,7 @@ import App from "./App";
 import Home from "./pages/Home/HomePage";
 import {
   loadAddPricePage, loadAddProductPage, loadAddPromotionPage, loadAddStockMovementPage,
-  loadAuthPage, loadCategoryManagementPage, loadCreateOrderPage, loadNotePage,
+  loadAuthPage, loadCategoryManagementPage, loadCreateOrderPage, loadNotePage, loadPaymentMethodManagementPage,
   loadOrderDetailsPage, loadPaymentPage, loadPriceHistoryPage,
   loadPricePage, loadProductDetailsPage, loadProductReportPage, loadRecordSupplierPaymentPage,
   loadReportPage, loadSalePage, loadSaleRecordPage, loadSalesReportPage, loadSettingsPage,
@@ -39,6 +39,7 @@ const SupplierDetails = lazy(loadSupplierDetailsPage);
 const SupplierHistory = lazy(loadSupplierHistoryPage);
 const Settings = lazy(loadSettingsPage);
 const CategoryManagement = lazy(loadCategoryManagementPage);
+const PaymentMethodManagement = lazy(loadPaymentMethodManagementPage);
 const ShopDetailsPage = lazy(loadShopDetailsPage);
 const CreateOrder = lazy(loadCreateOrderPage);
 const OrderDetails = lazy(loadOrderDetailsPage);
@@ -99,6 +100,7 @@ const router = createBrowserRouter([
       { path: "suppliers/:supplierId", element: <RouteContent><SupplierDetails /></RouteContent> },
       { path: "settings", element: <RouteContent><Settings /></RouteContent> },
       { path: "settings/categories", element: <RouteContent><CategoryManagement /></RouteContent> },
+      { path: "settings/payment-methods", element: <RouteContent><PaymentMethodManagement /></RouteContent> },
       { path: "settings/shop-details", element: <RouteContent><ShopDetailsPage /></RouteContent> },
     ],
   },

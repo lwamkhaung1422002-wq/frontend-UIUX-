@@ -252,7 +252,7 @@ export default function SuppliersPage() {
       }),
     [apiRecords, from, search, status, to],
   );
-  const total = visibleRecords.reduce((sum, record) => sum + record.amount, 0);
+  const total = visibleRecords.reduce((sum, record) => sum + (record.status === "Cancel" ? 0 : record.amount), 0);
   const clearDateFilter = () => {
     setFrom("");
     setTo("");
@@ -600,6 +600,7 @@ export default function SuppliersPage() {
           <VisibilityOutlinedIcon sx={{ fontSize: 15, color: "primary.main" }} />
           Details
         </MenuItem> : menuRecord?.status !== "Cancel" && <MenuItem
+          disabled={menuRecord?.deliveryOnly && menuRecord?.allowedActions?.edit === false}
           onClick={() => {
             navigate(`/suppliers/add?edit=${menuRecord?.deliveryOnly ? menuRecord.apiId : menuRecord?.supplierId}`);
             setMenuAnchor(null);
@@ -669,7 +670,7 @@ function DesktopSuppliers({ records, openPaymentRecordId }) {
       (!to || record.receiveDate <= to)
     );
   }), [dateRange, from, records, search, status, to]);
-  const total = useMemo(() => visibleRecords.reduce((sum, record) => sum + record.amount, 0), [visibleRecords]);
+  const total = useMemo(() => visibleRecords.reduce((sum, record) => sum + (record.status === "Cancel" ? 0 : record.amount), 0), [visibleRecords]);
   const open = (mode, record = null) => setDialog({ mode, record });
   const close = () => setDialog(null);
   const handleDelete = async (record, reason) => {
@@ -919,6 +920,7 @@ function DesktopSuppliers({ records, openPaymentRecordId }) {
                   <PaymentsOutlinedIcon fontSize="small" />
                 </IconButton><IconButton
                 aria-label={`Edit ${record.name}`}
+                disabled={record.deliveryOnly && record.allowedActions?.edit === false}
                 onClick={() => navigate(`/suppliers/add?edit=${record.deliveryOnly ? record.apiId : record.supplierId}`)}
                 sx={desktopActionIconSx}
               >

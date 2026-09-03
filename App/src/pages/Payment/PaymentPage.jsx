@@ -707,7 +707,7 @@ export default function PaymentPage() {
             onClick={() => {
               navigate(
                 menuPayment.kind === "supplier-delivery"
-                  ? `/supplier-delivery/${menuPayment.apiId}`
+                  ? `/suppliers/add?edit=${menuPayment.apiId}`
                   : `/suppliers/add?edit=${menuPayment?.supplierId}`,
               );
               closeMenu();
@@ -1166,7 +1166,7 @@ function DesktopPaymentFilter({
 const DesktopPaymentCard = memo(function DesktopPaymentCard({ payment, onDetails, onPay, onMenu }) {
   const cancelled = ["Cancel", "Cancelled"].includes(payment.status);
   const paid = payment.status === "Paid";
-  const payDue = ["sale", "supplier"].includes(payment.kind)
+  const payDue = ["sale", "supplier", "supplier-delivery"].includes(payment.kind)
     ? !cancelled && Number(payment.remainingAmount || 0) > 0
     : payment.status === "Unpaid";
   const tone = cancelled ? "#d14343" : paid
@@ -1301,7 +1301,7 @@ const DesktopPaymentCard = memo(function DesktopPaymentCard({ payment, onDetails
               {payment.method}
             </Typography>
           )}
-          {!cancelled && ["sale", "supplier"].includes(payment.kind) &&
+          {!cancelled && ["sale", "supplier", "supplier-delivery"].includes(payment.kind) &&
             Number(payment.remainingAmount || 0) > 0 && (
               <Typography
                 sx={{ color: "#ef6c00", fontSize: 12, fontWeight: 700 }}
@@ -2035,7 +2035,7 @@ const PaymentCard = memo(function PaymentCard({ payment, onClick, onMenu }) {
             {payment.method}
           </Typography>
         )}
-          {!cancelled && ["sale", "supplier"].includes(payment.kind) &&
+          {!cancelled && ["sale", "supplier", "supplier-delivery"].includes(payment.kind) &&
             Number(payment.remainingAmount || 0) > 0 && (
             <Typography
               sx={{

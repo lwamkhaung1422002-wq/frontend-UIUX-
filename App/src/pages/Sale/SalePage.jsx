@@ -158,15 +158,14 @@ export default function SalePage() {
 
     return orders.filter((order) => {
       const normalizedSearch = search.trim().toLowerCase();
-      const matchesSearch = !normalizedSearch || [order.displayId, order.id, order.paymentMethod]
+      const matchesSearch = !normalizedSearch || [order.displayId, order.id, order.paymentMethod, ...(order.items || []).map((item) => item.productName)]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedSearch));
-      const matchesOrderStatus =
-        filters.orderStatus === "all" ||
-        order.status.toLowerCase() === filters.orderStatus;
+      const matchesOrderStatus = filters.orderStatus === "all" ||
+        (filters.orderStatus === "cancelled" ? order.status === "Cancel" : order.status.toLowerCase() === filters.orderStatus);
       const matchesPaymentStatus =
         filters.paymentStatus === "all" ||
-        order.paymentStatus.toLowerCase() === filters.paymentStatus;
+        (order.status !== "Cancel" && order.paymentStatus.toLowerCase() === filters.paymentStatus);
       const matchesFrom = !filters.from || order.date >= filters.from;
       const matchesTo = !filters.to || order.date <= filters.to;
       const matchesRange = matchesDateRange(
@@ -227,7 +226,7 @@ export default function SalePage() {
         fullWidth
         value={search}
         onChange={(event) => setSearch(event.target.value)}
-        placeholder="Search by order number or payment method"
+        placeholder="Search by order number, product, or payment method"
         InputProps={{
           startAdornment: (
             <InputAdornment position="start">
@@ -431,7 +430,7 @@ function DesktopOrdersPage({ orders, search, setSearch, totalAmount, filters, se
   return <Box sx={{ width: "100%" }}>
     <Card sx={desktopOrdersPanelSx}><CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
       <Box sx={{ display: "grid", gridTemplateColumns: "minmax(250px, 1fr) 145px 166px 190px auto auto", gap: 1, alignItems: "center" }}>
-        <TextField value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by order number or payment method" InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ "& .MuiOutlinedInput-root": { minHeight: 44, borderRadius: 1.5 } }} />
+        <TextField value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by order number, product, or payment method" InputProps={{ startAdornment: <InputAdornment position="start"><SearchRoundedIcon /></InputAdornment> }} sx={{ "& .MuiOutlinedInput-root": { minHeight: 44, borderRadius: 1.5 } }} />
         <TextField select value={filters.orderStatus} onChange={(event) => updateFilter("orderStatus", event.target.value)} size="small" sx={desktopFilterSx}><MenuItem value="all">All status</MenuItem><MenuItem value="done">Done</MenuItem><MenuItem value="cancelled">Cancel</MenuItem></TextField>
         <TextField select value={filters.paymentStatus} onChange={(event) => updateFilter("paymentStatus", event.target.value)} size="small" sx={desktopFilterSx}><MenuItem value="all">All payment</MenuItem><MenuItem value="paid">Paid</MenuItem><MenuItem value="unpaid">Unpaid</MenuItem><MenuItem value="partial">Partial</MenuItem></TextField>
         <Button onClick={(event) => setDateFilterAnchor(event.currentTarget)} startIcon={<CalendarMonthRoundedIcon />} variant="outlined" sx={{ ...desktopDateFilterSx, justifyContent: "flex-start" }}>Date and time</Button>

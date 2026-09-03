@@ -78,6 +78,10 @@ export const usePromotionCampaignsQuery = () => {
   const api = usePosApi();
   return useShopQuery(queryKeys.promotionCampaigns, () => api.pricing.promotionCampaigns());
 };
+export const usePromotionHistoryQuery = () => {
+  const api = usePosApi();
+  return useShopQuery((shopId) => queryKeys.pricing(shopId, { promotionHistory: true }), () => api.pricing.promotionHistory());
+};
 export const usePriceHistoryQuery = (query = {}) => {
   const api = usePosApi();
   return useShopQuery((shopId) => queryKeys.pricing(shopId, { history: true, ...query }), () => api.pricing.prices(query));

@@ -105,7 +105,7 @@ export default function HomePage() {
   );
   const [greeting, setGreeting] = useState(() => greetingForHour(new Date().getHours()));
   const summary = dashboard ? {
-    todaySales: Number(dashboard.summary?.revenue || 0),
+    todaySales: Number(dashboard.summary?.todaySales || 0),
     todayExpense: Number(dashboard.summary?.operatingExpenses || 0),
     todayProfit: Number(dashboard.summary?.netProfit || 0),
     lowStockItems: dashboard.lowStock?.length || 0,
@@ -119,7 +119,7 @@ export default function HomePage() {
     id: order.invoiceNumber || order.id,
     amount: Number(order.amount || 0),
     quantity: Number(order.itemCount || 0),
-    paymentMethod: order.paymentMethod === "KBZ Pay" ? "KPay" : order.paymentMethod || "Cash",
+    paymentMethod: order.paymentStatus === "unpaid" ? "Unpaid" : order.paymentStatus === "partial" ? "Partial" : order.paymentMethod === "KBZ Pay" ? "KPay" : order.paymentMethod || "Cash",
   })) : [];
 
   useEffect(() => {
