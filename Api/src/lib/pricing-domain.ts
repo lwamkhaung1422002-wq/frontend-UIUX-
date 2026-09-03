@@ -149,7 +149,7 @@ export async function resolvePrice(
     priceGroupId: input.priceGroupId,
     channel,
   });
-  const entry = await tx.priceEntry.findFirst({
+  const entryQuery = tx.priceEntry.findFirst({
     where: {
       shopId,
       targetKey: { in: targetKeys },
@@ -159,13 +159,7 @@ export async function resolvePrice(
     },
     orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
   });
-  const conversionFactor = productUnit?.conversionFactor ?? new Prisma.Decimal(1);
-  const entryIsUnitSpecific = Boolean(entry?.productUnitId);
-  const baseRegularPrice = entry?.unitPrice ?? variant?.price ?? product.price;
-  const regularUnitPrice = entryIsUnitSpecific || !productUnit
-    ? baseRegularPrice
-    : roundMoney(new Prisma.Decimal(baseRegularPrice).mul(conversionFactor));
-  const tiers = await tx.priceTier.findMany({
+  const tiersQuery = tx.priceTier.findMany({
     where: {
       productId: product.id,
       OR: [{ variantId: variant?.id ?? null }, { variantId: null }],
@@ -176,15 +170,7 @@ export async function resolvePrice(
       ],
     },
   });
-  const tier = tiers.sort((a, b) => {
-    const specificityA = Number(Boolean(a.variantId)) + Number(Boolean(a.productUnitId)) + Number(Boolean(a.priceGroupId));
-    const specificityB = Number(Boolean(b.variantId)) + Number(Boolean(b.productUnitId)) + Number(Boolean(b.priceGroupId));
-    if (specificityA !== specificityB) return specificityB - specificityA;
-    return Number(b.minimumQuantity.minus(a.minimumQuantity).toString());
-  })[0] ?? null;
-  const tierUnitPrice = tier?.unitPrice ?? null;
-  const promotionBaseDefault = tierUnitPrice ?? regularUnitPrice;
-  const promotions = await tx.promotion.findMany({
+  const promotionsQuery = tx.promotion.findMany({
     where: {
       shopId,
       targetKey: { in: promotionKeys },
@@ -195,6 +181,26 @@ export async function resolvePrice(
     },
     orderBy: [{ priority: "desc" }, { startsAt: "desc" }],
   });
+  // Public pricing reads use the root Prisma client, so these independent
+  // lookups can use separate pooled connections. Write transactions retain
+  // their current sequential execution on the transaction connection.
+  const [entry, tiers, promotions] = "$transaction" in tx
+    ? [await entryQuery, await tiersQuery, await promotionsQuery]
+    : await Promise.all([entryQuery, tiersQuery, promotionsQuery]);
+  const conversionFactor = productUnit?.conversionFactor ?? new Prisma.Decimal(1);
+  const entryIsUnitSpecific = Boolean(entry?.productUnitId);
+  const baseRegularPrice = entry?.unitPrice ?? variant?.price ?? product.price;
+  const regularUnitPrice = entryIsUnitSpecific || !productUnit
+    ? baseRegularPrice
+    : roundMoney(new Prisma.Decimal(baseRegularPrice).mul(conversionFactor));
+  const tier = tiers.sort((a, b) => {
+    const specificityA = Number(Boolean(a.variantId)) + Number(Boolean(a.productUnitId)) + Number(Boolean(a.priceGroupId));
+    const specificityB = Number(Boolean(b.variantId)) + Number(Boolean(b.productUnitId)) + Number(Boolean(b.priceGroupId));
+    if (specificityA !== specificityB) return specificityB - specificityA;
+    return Number(b.minimumQuantity.minus(a.minimumQuantity).toString());
+  })[0] ?? null;
+  const tierUnitPrice = tier?.unitPrice ?? null;
+  const promotionBaseDefault = tierUnitPrice ?? regularUnitPrice;
   const promotion = promotions[0] ?? null;
   const promotionBase = promotion?.discountBase === "REGULAR_PRICE" ? regularUnitPrice : promotionBaseDefault;
   let promotionDiscount = 0;
