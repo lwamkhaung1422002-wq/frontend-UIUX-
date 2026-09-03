@@ -64,7 +64,18 @@ function forbidden(message: string): Error {
 
 app.use(helmet());
 app.use(requestContext);
-app.use(pinoHttp());
+app.use(
+  pinoHttp({
+    // Railway retains request logs. Keep timing and routing evidence while never
+    // persisting credentials or provider proxy tokens in those logs.
+    redact: [
+      "req.headers.authorization",
+      "req.headers.cookie",
+      "req.headers['x-nf-netlify-proxy']",
+      "res.headers['set-cookie']",
+    ],
+  }),
+);
 app.use(compression());
 app.use(
   cors({
