@@ -152,6 +152,10 @@ capabilityInventoryRouter.get("/:shopId/inventory-movements", async (request, re
       .filter((movement) => movement.sourceType === "OrderItemAllocation")
       .map((movement) => movement.sourceId?.split(":")[0])
       .filter((value): value is string => Boolean(value));
+    const cancelledOrderIds = movements
+      .filter((movement) => movement.type === "SALE_REVERSAL" && movement.sourceType === "OrderCancellation")
+      .map((movement) => movement.sourceId?.split(":")[0])
+      .filter((value): value is string => Boolean(value));
     const allocations = allocationIds.length
       ? await prisma.orderItemAllocation.findMany({ where: { id: { in: allocationIds } } })
       : [];
@@ -161,9 +165,10 @@ capabilityInventoryRouter.get("/:shopId/inventory-movements", async (request, re
           select: { id: true, orderId: true },
         })
       : [];
-    const orders = orderItems.length
+    const orderIds = [...new Set([...orderItems.map((item) => item.orderId), ...cancelledOrderIds])];
+    const orders = orderIds.length
       ? await prisma.order.findMany({
-          where: { id: { in: orderItems.map((item) => item.orderId) } },
+          where: { id: { in: orderIds } },
           select: { id: true, orderNumber: true },
         })
       : [];
@@ -174,12 +179,15 @@ capabilityInventoryRouter.get("/:shopId/inventory-movements", async (request, re
       invoiceByOrderId.get(orderIdByItemId.get(allocation.orderItemId) || ""),
     ]));
     response.json({
-      movements: movements.map((movement) => ({
-        ...movement,
-        invoiceNumber: movement.sourceType === "OrderItemAllocation" && movement.sourceId
+      movements: movements.map((movement) => {
+        const isCancelledOrderReturn = movement.type === "SALE_REVERSAL" && movement.sourceType === "OrderCancellation";
+        const invoiceNumber = movement.sourceType === "OrderItemAllocation" && movement.sourceId
           ? invoiceByAllocationId.get(movement.sourceId.split(":")[0] ?? "") ?? null
-          : null,
-      })),
+          : isCancelledOrderReturn && movement.sourceId
+            ? invoiceByOrderId.get(movement.sourceId.split(":")[0] ?? "") ?? null
+            : null;
+        return { ...movement, invoiceNumber, sourceId: isCancelledOrderReturn && invoiceNumber ? `RETURN:${invoiceNumber}` : movement.sourceId };
+      }),
       totalCount,
     });
   } catch (error) { next(error); }
