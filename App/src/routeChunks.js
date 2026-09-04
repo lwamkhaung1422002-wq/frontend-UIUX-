@@ -40,3 +40,13 @@ export function prefetchCommonRouteChunks() {
     loadSuppliersPage(),
   ]);
 }
+
+export function prefetchSettingsRouteChunks() {
+  return Promise.allSettled([
+    loadSuppliersPage(),
+    loadPaymentPage(),
+    loadPricePage(),
+    loadReportPage(),
+    loadSalesReportPage(),
+  ]);
+}

@@ -142,15 +142,28 @@ inventoryRouter.get("/:shopId/inventory-movements", async (request, response, ne
       .filter((movement) => movement.sourceType === "OrderItemAllocation")
       .map((movement) => movement.sourceId?.split(":")[0])
       .filter((value): value is string => Boolean(value));
+    const cancelledOrderIds = movements
+      .filter((movement) => movement.type === "SALE_REVERSAL" && movement.sourceType === "OrderCancellation")
+      .map((movement) => movement.sourceId?.split(":")[0])
+      .filter((value): value is string => Boolean(value));
     const allocations = allocationIds.length ? await prisma.orderItemAllocation.findMany({
       where: { id: { in: allocationIds } },
     }) : [];
     const orderItems = allocations.length ? await prisma.orderItem.findMany({ where: { id: { in: allocations.map((allocation) => allocation.orderItemId) } }, select: { id: true, orderId: true } }) : [];
-    const orders = orderItems.length ? await prisma.order.findMany({ where: { id: { in: orderItems.map((item) => item.orderId) } }, select: { id: true, orderNumber: true } }) : [];
+    const orderIds = [...new Set([...orderItems.map((item) => item.orderId), ...cancelledOrderIds])];
+    const orders = orderIds.length ? await prisma.order.findMany({ where: { id: { in: orderIds } }, select: { id: true, orderNumber: true } }) : [];
     const orderIdByItemId = new Map(orderItems.map((item) => [item.id, item.orderId]));
     const invoiceByOrderId = new Map(orders.map((order) => [order.id, order.orderNumber || order.id]));
     const invoiceByAllocationId = new Map(allocations.map((allocation) => [allocation.id, invoiceByOrderId.get(orderIdByItemId.get(allocation.orderItemId) || "")]));
-    response.status(200).json({ movements: movements.map((movement) => ({ ...movement, invoiceNumber: movement.sourceType === "OrderItemAllocation" && movement.sourceId ? invoiceByAllocationId.get(movement.sourceId.split(":")[0] ?? "") ?? null : null })) });
+    response.status(200).json({ movements: movements.map((movement) => {
+      const isCancelledOrderReturn = movement.type === "SALE_REVERSAL" && movement.sourceType === "OrderCancellation";
+      const invoiceNumber = movement.sourceType === "OrderItemAllocation" && movement.sourceId
+        ? invoiceByAllocationId.get(movement.sourceId.split(":")[0] ?? "") ?? null
+        : isCancelledOrderReturn && movement.sourceId
+          ? invoiceByOrderId.get(movement.sourceId.split(":")[0] ?? "") ?? null
+          : null;
+      return { ...movement, invoiceNumber, sourceId: isCancelledOrderReturn && invoiceNumber ? `RETURN:${invoiceNumber}` : movement.sourceId };
+    }) });
   } catch (error) {
     next(error);
   }

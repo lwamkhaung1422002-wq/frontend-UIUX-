@@ -19,7 +19,7 @@ import ShareRoundedIcon from "@mui/icons-material/ShareRounded";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { useTheme } from "@mui/material/styles";
 import { usePosApi } from "../../hooks/useApiResource";
-import { useOrderQuery } from "../../hooks/usePosQueries";
+import { useOrderCancelMutation, useOrderQuery } from "../../hooks/usePosQueries";
 
 const formatKyat = (amount) =>
   `${new Intl.NumberFormat("en-US").format(amount)} ကျပ်`;
@@ -29,6 +29,7 @@ export default function OrderDetailsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const api = usePosApi();
+  const cancelOrder = useOrderCancelMutation();
   const {
     data: orderResult,
     error: orderError,
@@ -485,7 +486,7 @@ export default function OrderDetailsPage() {
     setDeleting(true);
     try {
       if (record.fulfillmentStatus !== "cancelled")
-        await api.orders.cancel(record.id, { reason: reason.trim() });
+        await cancelOrder.mutateAsync({ id: record.id, reason: reason.trim() });
       navigate("/sale");
     } catch (error) {
       setLoadError(error.message || "This order cannot be deleted.");

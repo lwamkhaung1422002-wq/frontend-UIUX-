@@ -133,11 +133,15 @@ export function useShopMutation(mutationFn, { critical = [], background = [] } =
 
 export function useOrderCancelMutation() {
   const api = usePosApi();
-  return useShopMutation(
-    ({ id, reason }) => api.orders.cancel(id, { reason }),
-    {
-      critical: [queryKeys.orders],
-      background: [queryKeys.inventory, queryKeys.movements, queryKeys.dashboard],
+  const { shop } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }) => api.orders.cancel(id, { reason }),
+    onSuccess: () => {
+      if (!shop?.id) return;
+      void Promise.all(["orders", "products", "inventory", "movements", "dashboard"].map((resource) =>
+        queryClient.invalidateQueries({ queryKey: ["shops", shop.id, resource] }),
+      ));
     },
-  );
+  });
 }

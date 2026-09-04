@@ -159,6 +159,7 @@ const desktopHistoryRowSx = { display: "grid", gridTemplateColumns: desktopHisto
 function HistoryCard({ record }) {
   const isDeleted = record.reason === "Product deleted";
   const isIn = record.kind === "in";
+  const returnInvoice = String(record.reference || "").startsWith("RETURN:") ? String(record.reference).slice("RETURN:".length) : null;
   const statusColor = isDeleted ? "error.main" : isIn ? "success.main" : "error.main";
 
   return (
@@ -177,9 +178,9 @@ function HistoryCard({ record }) {
               </Box>
               <Typography color="text.primary" sx={{ fontSize: 19, fontWeight: 500, whiteSpace: "nowrap" }}>{record.amount}</Typography>
             </Box>
-            <Typography color="text.secondary" sx={{ mt: 3, fontSize: 18, lineHeight: 1.35 }}>{record.reason}{record.staffName ? ` • Staff: ${record.staffName}` : ""}</Typography>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mt: 3 }}><Typography color="text.secondary" sx={{ fontSize: 18, lineHeight: 1.35 }}>{record.reason}{record.staffName ? ` • Staff: ${record.staffName}` : ""}</Typography>{returnInvoice && <Chip label="RETURN" variant="outlined" sx={{ height: 42, flexShrink: 0, borderRadius: 999, borderColor: statusColor, color: statusColor, bgcolor: "background.paper", fontWeight: 700, "& .MuiChip-label": { px: 1.5, fontSize: 16 } }} />}</Box>
           </Box>
-          <Chip label={isDeleted ? "Product Deleted" : record.type} variant="outlined" sx={{ mt: 0.25, height: 42, borderRadius: 999, borderColor: statusColor, color: statusColor, bgcolor: "background.paper", fontWeight: 700, "& .MuiChip-label": { px: 1.5, fontSize: 16 } }} />
+          <Chip label={isDeleted ? "Product Deleted" : returnInvoice || record.type} variant="outlined" sx={{ mt: 0.25, height: 42, borderRadius: 999, borderColor: statusColor, color: statusColor, bgcolor: "background.paper", fontWeight: 700, "& .MuiChip-label": { px: 1.5, fontSize: 16 } }} />
         </Box>
 
         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1.5, mt: 3.5, color: "text.secondary" }}>
