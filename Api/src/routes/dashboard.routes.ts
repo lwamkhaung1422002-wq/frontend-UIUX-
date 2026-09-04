@@ -308,6 +308,19 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
       order.fulfillmentStatus !== "cancelled" && isInRange(order.createdAt, orderCreatedRange),
     );
     const todaySales = todaySalesOrders.reduce((sum, order) => sum + order.total, 0);
+    // Home's Today Sales is based on orders created during the Yangon business
+    // day. Keep Today Profit on that identical order scope, so cancelling an
+    // order removes both its revenue and COGS from the two Home metrics.
+    // Financial recognition metrics below intentionally retain their existing
+    // completed-order/payment scope for reports and other consumers.
+    const todayCostOfGoods = todaySalesOrders.reduce(
+      (sum, order) =>
+        sum + order.items.reduce(
+          (itemSum, item) => itemSum + item.unitCost * item.quantity,
+          0,
+        ),
+      0,
+    );
     const periodPayments = payments.filter((payment) => isInRange(payment.paidAt, recognitionRange));
     // Refund payments are stored as negative cash movements. Dashboard totals
     // expose refunds as a positive deduction so they reduce revenue/profit and
@@ -328,6 +341,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
     const grossProfit = revenue - costOfGoods;
     const operatingExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
     const netProfit = grossProfit - operatingExpenses;
+    const todayProfit = todaySales - todayCostOfGoods - operatingExpenses;
     const unpaidTotal = orders
       .filter((order) => isRecognizedSale(order))
       .reduce((sum, order) => sum + Math.max(0, order.total - paidAmountForOrder(order.id, payments)), 0);
@@ -406,6 +420,7 @@ dashboardRouter.get("/:shopId/dashboard", requireAuth, async (request, response,
       summary: {
         revenue,
         todaySales,
+        todayProfit,
         costOfGoods,
         grossProfit,
         operatingExpenses,

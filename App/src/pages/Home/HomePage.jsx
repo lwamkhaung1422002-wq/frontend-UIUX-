@@ -107,7 +107,7 @@ export default function HomePage() {
   const summary = dashboard ? {
     todaySales: Number(dashboard.summary?.todaySales || 0),
     todayExpense: Number(dashboard.summary?.operatingExpenses || 0),
-    todayProfit: Number(dashboard.summary?.netProfit || 0),
+    todayProfit: Number(dashboard.summary?.todayProfit || 0),
     lowStockItems: dashboard.lowStock?.length || 0,
   } : {
     todaySales: 0,

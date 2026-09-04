@@ -620,6 +620,39 @@ async function main(): Promise<void> {
     assert.equal(dashboard.summary.operatingExpenses, dashboardBeforeHistoricalEntries.summary.operatingExpenses);
     assert.equal(dashboard.summary.netProfit, dashboardBeforeHistoricalEntries.summary.netProfit);
 
+    // Home metrics use every non-cancelled order created today, independent of
+    // payment status. A cancellation must remove the same revenue and COGS
+    // from both Today Sales and Today Profit.
+    const todayMetricOrders = await Promise.all(["unpaid", "partial", "paid"].map((paymentStatus) =>
+      prisma.order.create({
+        data: {
+          shopId,
+          orderNumber: `TODAY-METRIC-${paymentStatus}-${stamp}`,
+          fulfillmentStatus: "reserved",
+          paymentStatus,
+          subtotal: 1_000,
+          total: 1_000,
+          items: {
+            create: {
+              productId,
+              productName: `Today metric ${paymentStatus}`,
+              quantity: 1,
+              unitPrice: 1_000,
+              unitCost: 400,
+              lineTotal: 1_000,
+            },
+          },
+        },
+      })
+    ));
+    const dashboardWithTodayMetricOrders = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
+    assert.equal(dashboardWithTodayMetricOrders.summary.todaySales, dashboard.summary.todaySales + 3_000);
+    assert.equal(dashboardWithTodayMetricOrders.summary.todayProfit, dashboard.summary.todayProfit + 1_800);
+    await prisma.order.update({ where: { id: todayMetricOrders[0].id }, data: { fulfillmentStatus: "cancelled" } });
+    const dashboardWithCancelledTodayMetricOrder = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
+    assert.equal(dashboardWithCancelledTodayMetricOrder.summary.todaySales, dashboardWithTodayMetricOrders.summary.todaySales - 1_000);
+    assert.equal(dashboardWithCancelledTodayMetricOrder.summary.todayProfit, dashboardWithTodayMetricOrders.summary.todayProfit - 600);
+
     const dashboardBeforeRefund = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
     const refundTestOrder = await prisma.order.create({
       data: {
@@ -642,6 +675,7 @@ async function main(): Promise<void> {
         },
       },
     });
+    const dashboardBeforeRefundPayment = await request(baseUrl, `/shops/${shopId}/dashboard`, { token });
     await prisma.payment.create({
       data: {
         shopId,
@@ -657,6 +691,8 @@ async function main(): Promise<void> {
     assert.equal(dashboardWithRefund.summary.revenue, dashboardBeforeRefund.summary.revenue + 750);
     assert.equal(dashboardWithRefund.summary.costOfGoods, dashboardBeforeRefund.summary.costOfGoods + 400);
     assert.equal(dashboardWithRefund.summary.netProfit, dashboardBeforeRefund.summary.netProfit + 350);
+    assert.equal(dashboardWithRefund.summary.todaySales, dashboardBeforeRefundPayment.summary.todaySales);
+    assert.equal(dashboardWithRefund.summary.todayProfit, dashboardBeforeRefundPayment.summary.todayProfit);
 
     const lowProduct = await prisma.product.create({
       data: { shopId, name: `Dashboard Low Stock ${stamp}`, sku: `DLOW-${stamp}`, price: 2_000, cost: 1_000, minimumStock: 10 },
